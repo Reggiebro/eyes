@@ -1,0 +1,13 @@
+{
+  "name": "@eyes/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@eyes/core": "workspace:*",
+    "@insforge/sdk": "1.5.2",
+    "postgres": "3.4.9"
+  }
+}

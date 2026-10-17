@@ -1,0 +1,25 @@
+name: live-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      EYES_PROVIDERS: live
+      EYES_PUBLIC_API_URL: ${{ vars.EYES_PUBLIC_API_URL }}
+      EYES_SMOKE_API_KEY: ${{ secrets.EYES_SMOKE_API_KEY }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      INKBOX_API_KEY: ${{ secrets.INKBOX_API_KEY }}
+      PRIMITIVE_API_KEY: ${{ secrets.PRIMITIVE_API_KEY }}
+      INSFORGE_BASE_URL: ${{ secrets.INSFORGE_BASE_URL }}
+      INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm run --if-present smoke:live
