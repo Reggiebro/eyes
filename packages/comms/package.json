@@ -1,0 +1,14 @@
+{
+  "name": "@eyes/comms",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@eyes/core": "workspace:*",
+    "@inkbox/sdk": "0.7.19",
+    "@primitivedotdev/sdk": "2.4.0",
+    "hono": "4.13.13"
+  }
+}

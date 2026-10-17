@@ -1,0 +1,12 @@
+{
+  "name": "@eyes/engine",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@eyes/core": "workspace:*",
+    "@eyes/db": "workspace:*"
+  }
+}

@@ -1,0 +1,750 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`tool schemas > match the committed snapshot 1`] = `
+{
+  "ask_eyes": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "bounty_usd": {
+          "default": 3,
+          "maximum": 50,
+          "minimum": 1,
+          "type": "number",
+        },
+        "deadline_minutes": {
+          "default": 30,
+          "maximum": 240,
+          "minimum": 5,
+          "type": "integer",
+        },
+        "idempotency_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string",
+        },
+        "location": {
+          "anyOf": [
+            {
+              "properties": {
+                "lat": {
+                  "description": "Latitude in decimal degrees, e.g. 37.7825",
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number",
+                },
+                "lng": {
+                  "description": "Longitude in decimal degrees, e.g. -122.4078",
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number",
+                },
+              },
+              "required": [
+                "lat",
+                "lng",
+              ],
+              "type": "object",
+            },
+            {
+              "description": "Address or "place name, city", e.g. "Blue Bottle Coffee, Mint Plaza, San Francisco"",
+              "maxLength": 200,
+              "minLength": 2,
+              "type": "string",
+            },
+          ],
+          "description": "Where to look. Either {lat, lng} or a string address / "place name, city".",
+        },
+        "question": {
+          "maxLength": 500,
+          "minLength": 5,
+          "type": "string",
+        },
+        "require_photo": {
+          "default": true,
+          "type": "boolean",
+        },
+        "task_type": {
+          "enum": [
+            "is_open",
+            "line_length",
+            "in_stock",
+            "photo_of_place",
+            "price_check",
+            "crowd_level",
+            "other_public",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "question",
+        "location",
+        "task_type",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "deadline_at": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string",
+        },
+        "escrowed_usd": {
+          "type": "number",
+        },
+        "next_step": {
+          "type": "string",
+        },
+        "status": {
+          "const": "dispatched",
+          "type": "string",
+        },
+        "task_id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+        "workers_notified": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+      },
+      "required": [
+        "task_id",
+        "status",
+        "workers_notified",
+        "escrowed_usd",
+        "deadline_at",
+        "next_step",
+      ],
+      "type": "object",
+    },
+  },
+  "await_answer": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "task_id": {
+          "description": "The task_id returned by ask_eyes.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+        "timeout_seconds": {
+          "default": 50,
+          "maximum": 55,
+          "minimum": 1,
+          "type": "integer",
+        },
+      },
+      "required": [
+        "task_id",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "answer_bool": {
+                  "type": [
+                    "boolean",
+                    "null",
+                  ],
+                },
+                "answer_text": {
+                  "type": "string",
+                },
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string",
+                },
+                "confidence": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number",
+                },
+                "cost_usd": {
+                  "type": "number",
+                },
+                "photo_url": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "task_id": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                  "type": "string",
+                },
+                "verification": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fresh_ok": {
+                      "type": "boolean",
+                    },
+                    "gps_ok": {
+                      "type": "boolean",
+                    },
+                    "vision_ok": {
+                      "type": "boolean",
+                    },
+                    "vision_reason": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "gps_ok",
+                    "fresh_ok",
+                    "vision_ok",
+                    "vision_reason",
+                  ],
+                  "type": "object",
+                },
+                "worker_distance_m": {
+                  "type": "number",
+                },
+                "worker_rating": {
+                  "type": "number",
+                },
+              },
+              "required": [
+                "task_id",
+                "answer_text",
+                "answer_bool",
+                "photo_url",
+                "captured_at",
+                "worker_distance_m",
+                "verification",
+                "confidence",
+                "worker_rating",
+                "cost_usd",
+              ],
+              "type": "object",
+            },
+            {
+              "type": "null",
+            },
+          ],
+        },
+        "answered": {
+          "type": "boolean",
+        },
+        "next_step": {
+          "type": "string",
+        },
+        "status": {
+          "enum": [
+            "dispatched",
+            "claimed",
+            "submitted",
+            "verified",
+            "paid",
+            "expired",
+            "refunded",
+            "disputed",
+            "needs_review",
+          ],
+          "type": "string",
+        },
+        "task_id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+        "status",
+        "answered",
+        "answer",
+        "next_step",
+      ],
+      "type": "object",
+    },
+  },
+  "cancel_task": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "task_id": {
+          "description": "The task_id returned by ask_eyes.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "refunded_usd": {
+          "type": "number",
+        },
+        "status": {
+          "const": "refunded",
+          "type": "string",
+        },
+        "task_id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+        "status",
+        "refunded_usd",
+      ],
+      "type": "object",
+    },
+  },
+  "dispute_answer": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "reason": {
+          "maxLength": 1000,
+          "minLength": 5,
+          "type": "string",
+        },
+        "task_id": {
+          "description": "The task_id returned by ask_eyes.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+        "reason",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "next_step": {
+          "type": "string",
+        },
+        "status": {
+          "const": "disputed",
+          "type": "string",
+        },
+        "task_id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+        "status",
+        "next_step",
+      ],
+      "type": "object",
+    },
+  },
+  "get_balance": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "balance_usd": {
+          "type": "number",
+        },
+        "escrowed_usd": {
+          "type": "number",
+        },
+        "top_up_url": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+      },
+      "required": [
+        "balance_usd",
+        "escrowed_usd",
+        "top_up_url",
+      ],
+      "type": "object",
+    },
+  },
+  "get_spend_policy": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_task_types": {
+          "items": {
+            "enum": [
+              "is_open",
+              "line_length",
+              "in_stock",
+              "photo_of_place",
+              "price_check",
+              "crowd_level",
+              "other_public",
+            ],
+            "type": "string",
+          },
+          "type": "array",
+        },
+        "daily_cap_usd": {
+          "type": "number",
+        },
+        "max_bounty_usd": {
+          "type": "number",
+        },
+        "remaining_today_usd": {
+          "type": "number",
+        },
+        "spent_today_usd": {
+          "type": "number",
+        },
+      },
+      "required": [
+        "max_bounty_usd",
+        "daily_cap_usd",
+        "spent_today_usd",
+        "remaining_today_usd",
+        "allowed_task_types",
+      ],
+      "type": "object",
+    },
+  },
+  "get_task": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "task_id": {
+          "description": "The task_id returned by ask_eyes.",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "answer_bool": {
+                  "type": [
+                    "boolean",
+                    "null",
+                  ],
+                },
+                "answer_text": {
+                  "type": "string",
+                },
+                "captured_at": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string",
+                },
+                "confidence": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number",
+                },
+                "cost_usd": {
+                  "type": "number",
+                },
+                "photo_url": {
+                  "type": [
+                    "string",
+                    "null",
+                  ],
+                },
+                "task_id": {
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                  "type": "string",
+                },
+                "verification": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fresh_ok": {
+                      "type": "boolean",
+                    },
+                    "gps_ok": {
+                      "type": "boolean",
+                    },
+                    "vision_ok": {
+                      "type": "boolean",
+                    },
+                    "vision_reason": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "gps_ok",
+                    "fresh_ok",
+                    "vision_ok",
+                    "vision_reason",
+                  ],
+                  "type": "object",
+                },
+                "worker_distance_m": {
+                  "type": "number",
+                },
+                "worker_rating": {
+                  "type": "number",
+                },
+              },
+              "required": [
+                "task_id",
+                "answer_text",
+                "answer_bool",
+                "photo_url",
+                "captured_at",
+                "worker_distance_m",
+                "verification",
+                "confidence",
+                "worker_rating",
+                "cost_usd",
+              ],
+              "type": "object",
+            },
+            {
+              "type": "null",
+            },
+          ],
+        },
+        "bounty_usd": {
+          "type": "number",
+        },
+        "claimed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string",
+            },
+            {
+              "type": "null",
+            },
+          ],
+        },
+        "created_at": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string",
+        },
+        "deadline_at": {
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+          "type": "string",
+        },
+        "fee_usd": {
+          "type": "number",
+        },
+        "place_label": {
+          "type": "string",
+        },
+        "question": {
+          "type": "string",
+        },
+        "status": {
+          "enum": [
+            "dispatched",
+            "claimed",
+            "submitted",
+            "verified",
+            "paid",
+            "expired",
+            "refunded",
+            "disputed",
+            "needs_review",
+          ],
+          "type": "string",
+        },
+        "task_id": {
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "type": "string",
+        },
+        "task_type": {
+          "enum": [
+            "is_open",
+            "line_length",
+            "in_stock",
+            "photo_of_place",
+            "price_check",
+            "crowd_level",
+            "other_public",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "task_id",
+        "status",
+        "question",
+        "task_type",
+        "place_label",
+        "bounty_usd",
+        "fee_usd",
+        "deadline_at",
+        "created_at",
+        "claimed_at",
+        "answer",
+      ],
+      "type": "object",
+    },
+  },
+  "quote_task": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "location": {
+          "anyOf": [
+            {
+              "properties": {
+                "lat": {
+                  "description": "Latitude in decimal degrees, e.g. 37.7825",
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number",
+                },
+                "lng": {
+                  "description": "Longitude in decimal degrees, e.g. -122.4078",
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number",
+                },
+              },
+              "required": [
+                "lat",
+                "lng",
+              ],
+              "type": "object",
+            },
+            {
+              "description": "Address or "place name, city", e.g. "Blue Bottle Coffee, Mint Plaza, San Francisco"",
+              "maxLength": 200,
+              "minLength": 2,
+              "type": "string",
+            },
+          ],
+          "description": "Where to look. Either {lat, lng} or a string address / "place name, city".",
+        },
+        "task_type": {
+          "enum": [
+            "is_open",
+            "line_length",
+            "in_stock",
+            "photo_of_place",
+            "price_check",
+            "crowd_level",
+            "other_public",
+          ],
+          "type": "string",
+        },
+      },
+      "required": [
+        "location",
+        "task_type",
+      ],
+      "type": "object",
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "type": "boolean",
+        },
+        "est_minutes_to_answer": {
+          "type": [
+            "number",
+            "null",
+          ],
+        },
+        "reason_if_not": {
+          "type": [
+            "string",
+            "null",
+          ],
+        },
+        "resolved_location": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string",
+            },
+            "lat": {
+              "type": "number",
+            },
+            "lng": {
+              "type": "number",
+            },
+          },
+          "required": [
+            "lat",
+            "lng",
+            "label",
+          ],
+          "type": "object",
+        },
+        "suggested_bounty_usd": {
+          "type": "number",
+        },
+        "workers_nearby": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+      },
+      "required": [
+        "workers_nearby",
+        "est_minutes_to_answer",
+        "suggested_bounty_usd",
+        "allowed",
+        "reason_if_not",
+        "resolved_location",
+      ],
+      "type": "object",
+    },
+  },
+}
+`;

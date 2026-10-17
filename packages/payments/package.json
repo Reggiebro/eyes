@@ -1,0 +1,13 @@
+{
+  "name": "@eyes/payments",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@eyes/core": "workspace:*",
+    "hono": "4.13.13",
+    "stripe": "23.0.0"
+  }
+}
