@@ -232,26 +232,26 @@ describe("createAssessTask with clef", () => {
   });
 
   it("blocks with the most likely category when clef is sure it is unsafe", async () => {
-    fetchMock.mockResolvedValueOnce(clefReply(0.1));
+    fetchMock.mockResolvedValueOnce(clefReply(0.01));
     expect(await createAssessTask(CLEF_ENV)(facePhoto)).toEqual(block("identifiable_people", "classifier"));
   });
 
-  it("escalates an unsure task to Claude", async () => {
-    fetchMock
-      .mockResolvedValueOnce(clefReply(0.6))
-      .mockResolvedValueOnce(reply('{"allowed":true,"category":null,"reason":null,"fix":null}'));
+  it("allows an unsure task without escalating to Claude", async () => {
+    fetchMock.mockResolvedValueOnce(clefReply(0.6));
     const verdict = await createAssessTask({ ...CLEF_ENV, ANTHROPIC_API_KEY: "sk-test" })(benign);
     expect(verdict.allowed).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses an unsure task when Claude is not configured", async () => {
-    fetchMock.mockResolvedValueOnce(clefReply(0.6));
-    expect(await createAssessTask(CLEF_ENV)(benign)).toMatchObject({
-      allowed: false,
-      category: "other",
-      reason: expect.stringContaining("could not decide"),
-    });
+  it("allows the YC hackathon question when no blocked category reaches the default", async () => {
+    fetchMock.mockResolvedValueOnce(clefReply(0.1));
+    expect(
+      await createAssessTask(CLEF_ENV)({
+        question: "Is the hackathon on going?",
+        task_type: "other_public",
+        place_label: "YC 580 20th Street",
+      }),
+    ).toMatchObject({ allowed: true, layer: "classifier" });
   });
 
   it("fails closed when clef errors and Claude is not configured", async () => {
@@ -306,4 +306,62 @@ describe("createAssessTask with clef", () => {
       "[safety] classifier failed, failing closed: socket hang up",
     );
   });
+
+  it.each([
+    ["0.5", 0.5, false],
+    ["0.95", 0.95, false],
+    ["0.95", 0.949, true],
+    ["1", 0.999, true],
+    ["1", 1, false],
+  ])("threshold %s and blocked confidence %s yields allowed=%s", async (threshold, confidence, allowed) => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json({
+        result: { answers: { verdict: { probabilities: { allowed: 0, vehicle: confidence } } } },
+      }),
+    );
+    expect(
+      (await createAssessTask({ ...CLEF_ENV, EYES_CLASSIFIER_BLOCK_MIN: threshold })(benign)).allowed,
+    ).toBe(allowed);
+  });
+
+  it.each(["", "no", "NaN", "Infinity", "0.49", "1.01"])("rejects invalid env threshold %j", (value) => {
+    expect(() => createAssessTask({ ...CLEF_ENV, EYES_CLASSIFIER_BLOCK_MIN: value })).toThrow(
+      "between 0.5 and 1",
+    );
+  });
+
+  it("reads the async threshold each assessment and preserves rules before the getter", async () => {
+    const get = vi.fn().mockResolvedValueOnce(0.95).mockResolvedValueOnce(0.5);
+    const assess = createAssessTask(CLEF_ENV, get);
+    fetchMock.mockImplementation(async () => clefReply(0.1));
+    expect((await assess(benign)).allowed).toBe(true);
+    expect((await assess(benign)).allowed).toBe(false);
+    expect(await assess({ ...benign, question: "What is the license plate of that car outside?" })).toEqual(
+      block("vehicle", "rules"),
+    );
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([NaN, Infinity, 0.4, 1.1])("fails closed on invalid dynamic threshold %s", async (value) => {
+    expect(await createAssessTask(CLEF_ENV, async () => value)(benign)).toEqual(failClosed);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the getter fails", async () => {
+    expect(
+      await createAssessTask(CLEF_ENV, async () => {
+        throw new Error("settings unavailable");
+      })(benign),
+    ).toEqual(failClosed);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([{ allowed: 2 }, { allowed: 0.8, vehicle: -1 }, { allowed: 0.8, unknown: 0.2 }])(
+    "fails closed on malformed probabilities %j",
+    async (probabilities) => {
+      fetchMock.mockResolvedValueOnce(Response.json({ result: { answers: { verdict: { probabilities } } } }));
+      expect(await createAssessTask(CLEF_ENV)(benign)).toEqual(failClosed);
+    },
+  );
 });
