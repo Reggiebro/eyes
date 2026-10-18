@@ -144,6 +144,192 @@ describe("api worker routing", () => {
     expect(res).toBe(upstream);
   });
 
+  it("undoes the gateway's host rewrite in protected-resource metadata and WWW-Authenticate", async () => {
+    const env = fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" });
+    const metadata = {
+      resource: "https://eyes.run.mcp-use.com/mcp",
+      authorization_servers: ["https://api.eyes.pictures"],
+      _original_resource: "https://api.eyes.pictures/mcp",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(metadata)),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"),
+      env,
+    );
+    expect(await res.json()).toEqual({
+      resource: "https://api.eyes.pictures/mcp",
+      authorization_servers: ["https://api.eyes.pictures"],
+    });
+
+    const { _original_resource, ...plain } = metadata;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(plain)),
+    );
+    const unchanged = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource"),
+      env,
+    );
+    expect(await unchanged.json()).toEqual({ ...plain, resource: "https://api.eyes.pictures/mcp" });
+
+    const auth =
+      'Bearer resource_metadata="https://eyes.run.mcp-use.com/.well-known/oauth-protected-resource/mcp"';
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("no", {
+            status: 401,
+            statusText: "Unauthorized",
+            headers: { "www-authenticate": auth },
+          }),
+      ),
+    );
+    const denied = await worker.fetch(new Request("https://api.eyes.pictures/mcp", { method: "POST" }), env);
+    expect(denied.status).toBe(401);
+    expect(denied.statusText).toBe("Unauthorized");
+    expect(await denied.text()).toBe("no");
+    expect(denied.headers.get("www-authenticate")).toBe(
+      'Bearer resource_metadata="https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  it.each(["https://evil.example/mcp", null, 42])(
+    "does not trust _original_resource %s",
+    async (original) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            resource: "https://eyes.run.mcp-use.com",
+            _original_resource: original,
+            authorization_servers: ["https://api.eyes.pictures"],
+          }),
+        ),
+      );
+      const res = await worker.fetch(
+        new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource"),
+        fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+      );
+      expect(await res.json()).toEqual({
+        resource: "https://api.eyes.pictures/mcp",
+        authorization_servers: ["https://api.eyes.pictures"],
+      });
+    },
+  );
+
+  it("clears stale encoding and validators only when rewriting metadata", async () => {
+    const upstream = Response.json({ resource: "https://eyes.run.mcp-use.com" });
+    for (const name of [
+      "content-length",
+      "content-encoding",
+      "etag",
+      "content-md5",
+      "content-digest",
+      "repr-digest",
+    ])
+      upstream.headers.set(name, "stale");
+    upstream.headers.set("x-preserved", "yes");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(await res.json()).toEqual({ resource: "https://api.eyes.pictures/mcp" });
+    for (const name of [
+      "content-length",
+      "content-encoding",
+      "etag",
+      "content-md5",
+      "content-digest",
+      "repr-digest",
+    ])
+      expect(res.headers.has(name)).toBe(false);
+    expect(res.headers.get("x-preserved")).toBe("yes");
+  });
+
+  it.each([
+    [200, "{", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "null", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "[]", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "{}", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "plain", "text/plain", "/.well-known/oauth-protected-resource"],
+    [500, "{}", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "{}", "application/json", "/.well-known/oauth-protected-resource/other"],
+  ])("preserves unexpected metadata response %s %s %s %s", async (status, body, contentType, path) => {
+    const upstream = new Response(body, {
+      status: Number(status),
+      headers: { "content-type": String(contentType) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request(`https://api.eyes.pictures${path}`),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(res).toBe(upstream);
+    expect(await res.text()).toBe(body);
+  });
+
+  it.each([
+    "https://eyes.run.mcp-use.com.evil.example/.well-known/oauth-protected-resource",
+    "https://evil.example/.well-known/oauth-protected-resource",
+    "https://eyes.run.mcp-use.com/other",
+    "not a URL",
+  ])("does not rewrite unrelated challenge URL %s", async (value) => {
+    const upstream = new Response("denied", {
+      status: 401,
+      headers: { "www-authenticate": `Bearer resource_metadata="${value}"` },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    expect(
+      await worker.fetch(
+        new Request("https://api.eyes.pictures/mcp"),
+        fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+      ),
+    ).toBe(upstream);
+  });
+
+  it("preserves body and encoding when rewriting only an authentication header", async () => {
+    const bytes = new Uint8Array([31, 139, 8, 0]);
+    const upstream = new Response(bytes, {
+      status: 401,
+      headers: {
+        "content-encoding": "gzip",
+        "content-length": "4",
+        etag: "original",
+        "www-authenticate":
+          'Bearer resource_metadata="https://eyes.run.mcp-use.com/.well-known/oauth-protected-resource"',
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    expect(res.headers.get("content-length")).toBe("4");
+    expect(res.headers.get("etag")).toBe("original");
+    expect(res.headers.get("www-authenticate")).toBe(
+      'Bearer resource_metadata="https://api.eyes.pictures/.well-known/oauth-protected-resource"',
+    );
+  });
+
   it("sends an empty edge secret when EDGE_SECRET is unset, overriding a client-sent one", async () => {
     const stub = fakeStub();
     const req = new Request("https://api.eyes.pictures/v1/agents", {

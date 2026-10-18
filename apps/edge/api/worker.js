@@ -109,6 +109,64 @@ function server(env) {
   return env.EYES.get(env.EYES.idFromName("main"));
 }
 
+// Manufact's gateway rewrites OAuth discovery to name its own host: the protected-resource
+// metadata's `resource` (keeping ours as `_original_resource`) and the 401's WWW-Authenticate
+// resource_metadata URL. MCP clients reject a resource that differs from the URL they connected
+// to, so put the public host back.
+async function fromOrigin(response, url, origin) {
+  const originUrl = new URL(origin);
+  const auth = response.headers.get("www-authenticate") ?? "";
+  const publicAuth = auth.replace(/resource_metadata="([^"]+)"/g, (match, value) => {
+    try {
+      const metadataUrl = new URL(value);
+      return metadataUrl.origin === originUrl.origin &&
+        ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"].includes(
+          metadataUrl.pathname,
+        )
+        ? `resource_metadata="${url.origin}${metadataUrl.pathname}${metadataUrl.search}"`
+        : match;
+    } catch {
+      return match;
+    }
+  });
+  const isMetadata = [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+  ].includes(url.pathname);
+  const headers = new Headers(response.headers);
+  if (publicAuth) headers.set("www-authenticate", publicAuth);
+  let body = response.body;
+  let rewritten = false;
+  if (isMetadata && response.ok && headers.get("content-type")?.includes("application/json")) {
+    const metadata = await response
+      .clone()
+      .json()
+      .catch(() => null);
+    if (metadata && !Array.isArray(metadata) && typeof metadata.resource === "string") {
+      metadata.resource = `${url.origin}/mcp`;
+      delete metadata._original_resource;
+      body = JSON.stringify(metadata);
+      rewritten = true;
+      for (const header of [
+        "content-length",
+        "content-encoding",
+        "etag",
+        "content-md5",
+        "content-digest",
+        "repr-digest",
+      ])
+        headers.delete(header);
+    }
+  }
+  if (!rewritten && publicAuth === auth) return response;
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    encodeBody: rewritten ? "automatic" : "manual",
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -125,7 +183,8 @@ export default {
     headers.set("x-eyes-host", url.host);
     headers.set("x-eyes-edge-secret", env.EDGE_SECRET ?? "");
     const init = { method: request.method, headers, body: request.body, redirect: "manual" };
-    if (env.ORIGIN) return fetch(new URL(url.pathname + url.search, env.ORIGIN), init);
+    if (env.ORIGIN)
+      return fromOrigin(await fetch(new URL(url.pathname + url.search, env.ORIGIN), init), url, env.ORIGIN);
     return server(env).fetch(new Request(`http://eyes${url.pathname}${url.search}`, init));
   },
 
