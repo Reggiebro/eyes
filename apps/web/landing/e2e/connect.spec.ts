@@ -25,9 +25,11 @@ for (const viewport of [
       const opener = page.getByRole("button", { name: "Connect your agent", exact: true });
       await opener.focus();
       await page.keyboard.press("Enter");
-      const dialog = page.getByRole("dialog", { name: "Connect Eyes to ChatGPT" });
+      const dialog = page.getByRole("dialog", { name: "Connect Eyes", exact: true });
       await expect(dialog).toBeVisible();
       await expect(page.locator("#connect-title")).toBeFocused();
+      await expect(dialog.getByRole("region", { name: "ChatGPT setup" })).toBeVisible();
+      await expect(dialog.getByRole("region", { name: "Claude setup" })).toBeHidden();
       const url = dialog.getByLabel("MCP server URL");
       await expect(url).toHaveValue(serverURL);
       await expect(url).toHaveAttribute("readonly", "");
@@ -43,11 +45,30 @@ for (const viewport of [
       await expect(dialog).toContainText("existing Eyes API key");
       await expect(dialog).toContainText("does not automatically create a key or charge a card");
       expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-      await page.screenshot({ path: test.info().outputPath("connect.png") });
+      await page.screenshot({ path: test.info().outputPath("chatgpt.png") });
       await dialog.getByText("Account requirements & public listing", { exact: true }).click();
       await expect(dialog).toContainText("does not require Developer Mode");
       await expect(dialog).toContainText("Free and Plus access is not guaranteed");
       await expect(dialog).toContainText("OpenAI review, approval, and publishing");
+      await dialog.getByLabel("Choose your app").selectOption("claude");
+      expect(await dialog.evaluate((element) => element.scrollTop)).toBe(0);
+      await expect(dialog.getByRole("region", { name: "ChatGPT setup" })).toBeHidden();
+      const claude = dialog.getByRole("region", { name: "Claude setup" });
+      await expect(claude).toBeVisible();
+      await expect(claude.getByRole("link", { name: "Open Claude" })).toHaveAttribute(
+        "href",
+        "https://claude.ai/customize/connectors",
+      );
+      await expect(claude).toContainText("Add custom connector");
+      await expect(claude).toContainText("Register automatically");
+      await expect(claude).toContainText("existing Eyes API key");
+      await dialog.getByRole("button", { name: "Copy server URL" }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(serverURL);
+      await page.screenshot({ path: test.info().outputPath("claude.png") });
+      await claude.getByText("Claude account requirements", { exact: true }).click();
+      await expect(claude).toContainText("Free is limited to one custom connector");
+      await expect(claude).toContainText("Owner or Primary Owner");
+      await expect(claude).toContainText("not a one-click install");
 
       // Chromium may move focus to browser chrome (reported as body), never to background controls.
       for (const key of ["Tab", "Shift+Tab"]) {
@@ -64,9 +85,9 @@ for (const viewport of [
       await page.keyboard.press("Escape");
       await expect(dialog).not.toBeVisible();
       await expect(opener).toBeFocused();
-      await page.getByRole("button", { name: "Connect to ChatGPT", exact: true }).click();
+      await page.getByRole("button", { name: "Choose ChatGPT or Claude", exact: true }).click();
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Connect to ChatGPT", exact: true })).toBeFocused();
+      await expect(page.getByRole("button", { name: "Choose ChatGPT or Claude", exact: true })).toBeFocused();
     });
   }
 }
@@ -83,6 +104,7 @@ test("clipboard denial selects the URL without false success", async ({ page }) 
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Connect your agent", exact: true }).click();
+  await page.getByLabel("Choose your app").selectOption("claude");
   await page.getByRole("button", { name: "Copy server URL" }).click();
   await expect(page.getByRole("status")).toHaveText(
     "Copy unavailable. Select the server URL and copy it manually.",

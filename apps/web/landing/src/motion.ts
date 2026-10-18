@@ -12,7 +12,7 @@ export type Clickable = {
 export type TextNode = { textContent: string | null };
 
 /** Clipboard feedback for the browser-based connection flow. */
-export const COPIED_HINT = "Copied. Paste this server URL into ChatGPT.";
+export const COPIED_HINT = "Copied. Paste this server URL into your app.";
 export function wireCopy(
   button: Clickable | null,
   source: (TextNode & { value?: string; focus?: () => void; select?: () => void }) | null,
