@@ -230,7 +230,9 @@ describe("EyesServer", () => {
   });
 
   describe("fetch() across a boot or a rollout restart", () => {
-    const REFUSED = "the container is not listening";
+    // Texts the runtime returned during a live rollout, plus the one @cloudflare/containers matches.
+    const REFUSED = "The container is not listening in the TCP address 10.0.0.1:3000";
+    const NOT_RUNNING = "The container is not running, consider calling start()";
     const NO_INSTANCE = "there is no container instance that can be provided to this durable object";
 
     beforeEach(() => {
@@ -298,7 +300,7 @@ describe("EyesServer", () => {
       // SIGTERM: the old server stops listening, then exits; the new image answers.
       port.fetch.mockRejectedValueOnce(new Error(REFUSED)).mockImplementationOnce(async () => {
         container.running = false;
-        throw new Error(NO_INSTANCE);
+        throw new Error(NOT_RUNNING);
       });
       const pending = dob.fetch(
         new Request("http://eyes/mcp", { method: "POST", body: "{}", headers: { "content-length": "2" } }),
