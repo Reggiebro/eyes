@@ -1,6 +1,8 @@
 # STATUS
 
-Updated: 2026-10-17 16:01 PT by orchestrator. 64 PRs merged in total, open: #92. Live now: Cloudflare Containers behind the `eyes-api` Worker (api.eyes.pictures; ops dashboard at internal.eyes.pictures; mcp-use framework with the Manufact CLI connect path; Manufact Cloud was the earlier host). At 16:01 PT the live stack was Manufact at main 2eca969 (EYES_PROVIDERS=live: Inkbox texting, Claude vision + classifier, InsForge storage, geo, Stripe test-mode payments; email simulated; show_task card held via EYES_VIEWS_MANIFEST), Sites ca4391f9 (JOIN open, shared line, simulated-pay copy) + InsForge (DB 001-014, Sites) + ops dashboard. Two security sweeps and two fresh-eyes audits done. What is left needs vendor keys, a person, or a product decision: docs/PLAN.md §4 and 'Needs from humans'.
+Updated hosting state (2026-10-18): the actual MCP/API server is hosted on **Manufact Cloud**, `eyes-prod`, origin `https://warm-spark-aocdd.run.mcp-use.com` (deployment `ef011ffa-b963-4d71-85e3-1841779dd1db`). Public MCP remains `https://api.eyes.pictures/mcp`; Cloudflare `eyes-api` is a thin forwarder for `api.eyes.pictures` and `internal.eyes.pictures`. Static `eyes.pictures` and `app.eyes.pictures` remain on Cloudflare. The `dark-steel-ofaoa` Manufact gateway is optional, not the server host. OAuth protected-resource metadata normalization and the permanent Manufact deploy path are still pending verification; API auto-deploy is paused while the hosting worker completes them.
+
+Historical snapshot (2026-10-17 16:01 PT): 64 PRs merged in total, open: #92. The live stack was Manufact at main 2eca969 (EYES_PROVIDERS=live: Inkbox texting, Claude vision + classifier, InsForge storage, geo, Stripe test-mode payments; email simulated; show_task card held via EYES_VIEWS_MANIFEST), Sites ca4391f9 (JOIN open, shared line, simulated-pay copy) + InsForge (DB 001-014, Sites) + ops dashboard. Two security sweeps and two fresh-eyes audits done. Remaining needs were vendor keys, a person, or a product decision: docs/PLAN.md §4 and 'Needs from humans'.
 
 ## Task board
 
@@ -18,7 +20,7 @@ Updated: 2026-10-17 16:01 PT by orchestrator. 64 PRs merged in total, open: #92.
 | G1 golden path e2e | integration builder | **merged** #16 | [#16](https://github.com/ayaangazali/eyes/pull/16) | integration PASS (3/3 fresh DBs, mutations killed) | unsafe_task test skipped until T1.5 |
 | T2.1 Stripe | payments-builder | **merged** | [#5](https://github.com/ayaangazali/eyes/pull/5) | r1 security PASS, spec+intent PASS, test FAIL; r2 PASS | live-verified: no |
 | T2.2 verification | verification-builder | **merged** #4, #8 | [#4](https://github.com/ayaangazali/eyes/pull/4) | all PASS | live-verified: no |
-| T2.3 deploy | orchestrator | **live**: MCP/REST/docs on Cloudflare Containers at api.eyes.pictures (mcp-use framework; Manufact Cloud was the earlier host), InsForge (DB 001-007, storage, Sites) | | smoke:live 13/13 | vendor keys |
+| T2.3 deploy | orchestrator | **live**: MCP/REST/docs on Manufact Cloud (`eyes-prod`); public api.eyes.pictures through the Cloudflare forwarder; InsForge DB/storage; static app on Cloudflare | | current hosting confirmed; earlier smoke:live 13/13 is historical, not a post-cutover claim | OAuth metadata normalization and permanent Manufact deploy path pending |
 | T2.4 MCP wiring + hardening | mcp-builder | **merged** #14 (human decision B) | [#14](https://github.com/ayaangazali/eyes/pull/14) | escalated after r3; deferred #21-#23 | live-verified: no |
 | T3.1 Primitive | comms-builder | **merged** #11 (human decision B) | [#11](https://github.com/ayaangazali/eyes/pull/11) | escalated after r3; deferred #17-#20 | live-verified: no |
 | T3.2 AX docs + CLI | ax-builder | **merged** #9, docs served live | [#9](https://github.com/ayaangazali/eyes/pull/9) | r5 FAIL, r6 PASS; deferred #42 | none |
@@ -65,12 +67,12 @@ Updated: 2026-10-17 16:01 PT by orchestrator. 64 PRs merged in total, open: #92.
 
 ## Sponsor coverage (update at every gate)
 
-Live verification order once keys land: Inkbox (G1; set up in person at the event) -> container deploy (Cloudflare) -> InsForge -> Stripe -> Primitive -> Armature. Supabase: not used unless the humans confirm its track brief.
+Live verification order once keys land: Inkbox (G1; set up in person at the event) -> server deploy (Manufact Cloud) -> InsForge -> Stripe -> Primitive -> Armature. Supabase: not used unless the humans confirm its track brief.
 
 | Sponsor | What we use | PR(s) | live-verified | What the demo shows |
 |---|---|---|---|---|
-| Manufact (mcp-use) | Manufact: mcp-use framework + Manufact CLI connect path; hosting moved to Cloudflare Containers (`eyes-api` Worker, api.eyes.pictures). MCP server on mcp-use 2.10: 9 tools with LLM-first descriptions, bearer auth, REST mirror, worker API, byte-safe Node adapter; built from the repo Dockerfile | #2, #14, T2.3 | partial (routing, MCP, real Claude agent round trip with a stand-in worker; Stripe and Primitive simulated) | Claude calls quote_task -> ask_eyes -> await_answer against https://api.eyes.pictures/mcp; the Manufact dashboard shows sessions and gateway requests once Eyes is connected there (registration in progress) |
-| InsForge | Postgres (escrow ledger, race-safe claim, expiry as plpgsql over RPC; RLS on every table), photo storage (`photos` bucket), Sites hosting for the worker capture page (https://7t6779x4.insforge.site) | #6, #12, #14, #15, T2.3 | **yes** (DB, storage incl. face-photo deletion, Sites) | capture page served from *.insforge.site; photo URL from InsForge storage; dashboard reads `eyes_dashboard_feed` |
+| Manufact (mcp-use) | Actual server hosting on Manufact Cloud (`eyes-prod`, `https://warm-spark-aocdd.run.mcp-use.com`), mcp-use framework and CLI; public MCP `https://api.eyes.pictures/mcp` through Cloudflare; optional `dark-steel-ofaoa` gateway | #2, #14, T2.3 | hosting confirmed 2026-10-18; OAuth metadata and permanent deploy path pending | Claude calls quote_task -> ask_eyes -> await_answer against the public MCP URL; gateway analytics are separate from server hosting |
+| InsForge | Postgres (escrow ledger, race-safe claim, expiry as plpgsql over RPC; RLS on every table), photo storage (`photos` bucket); earlier worker-page hosting on InsForge Sites | #6, #12, #14, #15, T2.3 | **yes** (DB, storage incl. face-photo deletion; Sites verified historically) | capture page now served from https://app.eyes.pictures on Cloudflare; photo URL from InsForge storage; dashboard reads `eyes_dashboard_feed` |
 | Stripe | Checkout top-ups (card only), per-key spend policy, Connect Express onboarding minted on click, $3 transfer on a verified answer, signed webhooks, refund on expiry/cancel | #5, #6 | no | top-up in Checkout, the worker's connected account, the transfer in the Stripe dashboard; get_spend_policy limits; refund path |
 | Inkbox | iMessage line (chosen for cost): offer, capture link and paid texts; signed `imessage.received` webhook for START/YES | #1, #10, #24, #74 | partly (signed webhook live, sign-up open on the shared line; no text to a real phone yet) | worker iPhone gets the offer, replies YES, gets the capture link and the paid text |
 | Primitive | Capability email address per agent (ADR-007); inbound email -> ask_eyes; threaded answer with the photo attached; DMARC-verified senders only | #11 | no | an agent emails its Eyes address and gets a threaded reply with the photo |
@@ -93,20 +95,20 @@ Live verification order once keys land: Inkbox (G1; set up in person at the even
 | Stripe-refused transfer blocked ~24 h under reused key | PR #45 | [#46](https://github.com/ayaangazali/eyes/issues/46) |
 | Payout batch starvation; opted-out capture-page line | PR #45 r2 | [#52](https://github.com/ayaangazali/eyes/issues/52) |
 | Owner link payer scope, masked owner email, agent name in signup email | PR #53 | [#54](https://github.com/ayaangazali/eyes/issues/54) |
-| Global capture upload cap stalls all workers | security sweep | [#55](https://github.com/ayaangazali/eyes/issues/55) (T4.15 building) |
+| Global capture upload cap stalls all workers | security sweep | [#55](https://github.com/ayaangazali/eyes/issues/55) (fixed by #64; T4.15 shipped) |
 | Released claims: re-offer; orphaned photo on NO-vs-capture race | PR #61 | [#62](https://github.com/ayaangazali/eyes/issues/62) (fixed by #66) |
 | POST /w/join timing side channel | PR #70 | [#71](https://github.com/ayaangazali/eyes/issues/71) |
 | Money/dispatch failures only in console logs | coverage ledger | [#30](https://github.com/ayaangazali/eyes/issues/30) |
 | Expiry runs in-process only | coverage ledger | [#31](https://github.com/ayaangazali/eyes/issues/31) |
-| Dashboard loopback-only | coverage ledger | [#32](https://github.com/ayaangazali/eyes/issues/32) |
-| No worker earnings page | coverage ledger | [#33](https://github.com/ayaangazali/eyes/issues/33) |
+| Dashboard loopback-only | coverage ledger | [#32](https://github.com/ayaangazali/eyes/issues/32) (shipped in #67; current dashboard at https://internal.eyes.pictures) |
+| No worker earnings page | coverage ledger | [#33](https://github.com/ayaangazali/eyes/issues/33) (fixed by #65; T4.17 shipped) |
 | Worker task report (SPEC §12 stretch) | coverage ledger | [#34](https://github.com/ayaangazali/eyes/issues/34) |
 
 Earlier verifier minors (non-blocking by severity) are in each task's intent Known gaps.
 
 ## Manufact usage (whole lifecycle)
 
-History, not current state: the rows below record the Manufact Cloud era (2026-10-17). Production now runs on Cloudflare Containers behind the `eyes-api` Worker at api.eyes.pictures.
+History, not current state: the rows below record the 2026-10-17 Manufact deployment and verification sessions. Current production is again hosted on Manufact Cloud (`eyes-prod`), through the Cloudflare `eyes-api` forwarder; see the current hosting state above.
 
 Checked 11:56 PT on 2026-10-17. Plan: Manufact **Hobby** since ~13:20 PT (credits from the Manufact CEO: 3,000 granted; previews, Public Chat, submission pack). Updated 13:51 PT. "live-verified" means seen working on Manufact, with the evidence named; nothing here blocks the golden path or another sponsor.
 
