@@ -423,6 +423,16 @@ export function createServer(
   const { service, config, env } = deps;
   const log = deps.events?.log ?? (() => {});
   const sandbox = env.EYES_SANDBOX === "1";
+  const publicBase = new URL(config.public_api_url).origin;
+  const mcpUrl = new URL(env.EYES_PUBLIC_MCP_URL || `${publicBase}/mcp`);
+  if (mcpUrl.pathname !== "/mcp" || mcpUrl.search || mcpUrl.hash || mcpUrl.username || mcpUrl.password)
+    throw new Error("EYES_PUBLIC_MCP_URL must be an origin followed by /mcp.");
+  // http.ts authenticates the edge host before exposing x-forwarded-host here.
+  // Keep the old API connector's issuer and card domain throughout staging.
+  const mcpBase = (c?: { req?: Context["req"] }) =>
+    c?.req && (c.req.header("x-forwarded-host") ?? new URL(c.req.url).host) === mcpUrl.host
+      ? mcpUrl.origin
+      : publicBase;
   const note = (text: string) => (sandbox ? `${SANDBOX_NOTICE}\n${text}` : text);
   const server = new MCPServer<never, AppEnv>({
     name: "eyes",
@@ -528,7 +538,7 @@ export function createServer(
         : null;
     if (!agent)
       return c.json(new EyesError("unauthorized").toBody(), 401, {
-        "WWW-Authenticate": `Bearer resource_metadata="${new URL("/.well-known/oauth-protected-resource", config.public_api_url).href}"`,
+        "WWW-Authenticate": `Bearer resource_metadata="${mcpBase(c)}/.well-known/oauth-protected-resource"`,
       });
     c.set("agent", agent);
     await next();
@@ -801,7 +811,6 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     (_input, ctx) => run(() => service.getSpendPolicy(ctx.get("agent"))),
   );
 
-  const publicBase = config.public_api_url.replace(/\/$/, "");
   server.resource(
     {
       name: "eyes-card",
@@ -816,7 +825,7 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       const claude = [ctx.client.info().name, ctx.req?.header("user-agent")].some((s) =>
         /claude/i.test(s ?? ""),
       );
-      const _meta = widgetResourceMeta(publicBase, claude);
+      const _meta = widgetResourceMeta(mcpBase(ctx), claude);
       return { contents: [{ uri: WIDGET_URI, mimeType: WIDGET_MIME, text: WIDGET_HTML, _meta }] };
     },
   );
@@ -885,7 +894,7 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     if (env.EYES_OAUTH_SECRET.length < 32)
       throw new Error("EYES_OAUTH_SECRET must be at least 32 characters.");
     oauthRoutes(server.app, {
-      base: publicBase,
+      base: mcpBase,
       secret: env.EYES_OAUTH_SECRET,
       validKey: async (key) => (await service.authenticate(key)) !== null,
       signup: async (c, name) => {

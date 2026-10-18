@@ -34,6 +34,7 @@ import { createServer, SMOKE_UA } from "./server.ts";
 
 const KEY = "eyes_test_key";
 const SECRET = "x".repeat(32);
+const STAGED_MCP_ENV = { EYES_PUBLIC_MCP_URL: "https://mcp.eyes.pictures/mcp" };
 const AGENT: Agent = {
   id: "0b6c8f9e-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
   name: "test-agent",
@@ -2022,11 +2023,16 @@ describe("ChatGPT and Claude widget", () => {
 
 describe("Claude sandbox domain", () => {
   const claudeDomain = `${createHash("sha256").update("http://api.eyes.test/mcp").digest("hex").slice(0, 32)}.claudemcpcontent.com`;
-  const read = async (name: string, userAgent?: string) => {
-    const { fetch } = setup();
+  const read = async (
+    name: string,
+    userAgent?: string,
+    origin = "http://eyes.test",
+    env: Record<string, string> = {},
+  ) => {
+    const { fetch } = setup({}, env);
     const client = new Client({ name, version: "1.0.0" });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+      new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
         fetch,
         requestInit: {
           headers: { authorization: `Bearer ${KEY}`, ...(userAgent ? { "user-agent": userAgent } : {}) },
@@ -2047,6 +2053,20 @@ describe("Claude sandbox domain", () => {
     expect(meta?.ui.domain).toBeUndefined();
     expect(meta?.["openai/widgetDomain"]).toBe("http://api.eyes.test");
   });
+
+  it.each([
+    ["https://mcp.eyes.pictures", "87d4a8d03df273ec472729285f051938.claudemcpcontent.com"],
+    ["http://api.eyes.test", "a46a27b41542292e61b1b034e66d1d69.claudemcpcontent.com"],
+  ])("keeps Claude and ChatGPT widget domains scoped to %s during staging", async (origin, domain) => {
+    const meta = await read("claude-test", "Claude-User/1.0", origin, STAGED_MCP_ENV);
+    expect(meta).toMatchObject({
+      ui: { domain },
+      "openai/widgetDomain": origin,
+    });
+    const openai = await read("openai-mcp", "openai-mcp/1.0.0", origin, STAGED_MCP_ENV);
+    expect(openai?.ui.domain).toBeUndefined();
+    expect(openai?.["openai/widgetDomain"]).toBe(origin);
+  });
 });
 
 describe("OAuth for connectors", () => {
@@ -2055,9 +2075,13 @@ describe("OAuth for connectors", () => {
   const VERIFIER = "v".repeat(43);
   const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 
-  async function begin(overrides: Partial<EyesService> = {}) {
-    const ctx = setup(overrides, { EYES_OAUTH_SECRET: OAUTH_SECRET });
-    const reg = await ctx.fetch("http://eyes.test/oauth/register", {
+  async function begin(
+    overrides: Partial<EyesService> = {},
+    origin = "http://eyes.test",
+    env: Record<string, string> = {},
+  ) {
+    const ctx = setup(overrides, { EYES_OAUTH_SECRET: OAUTH_SECRET, ...env });
+    const reg = await ctx.fetch(`${origin}/oauth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ client_name: "ChatGPT", redirect_uris: [REDIRECT] }),
@@ -2072,17 +2096,17 @@ describe("OAuth for connectors", () => {
       code_challenge_method: "S256",
       state: "st8",
     };
-    const page = await ctx.fetch(`http://eyes.test/oauth/authorize?${new URLSearchParams(params)}`);
+    const page = await ctx.fetch(`${origin}/oauth/authorize?${new URLSearchParams(params)}`);
     const cookie = (page.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const csrf = cookie.split("=")[1] ?? "";
     const submit = (fields: Record<string, string>, headers: Record<string, string> = {}) =>
-      ctx.fetch("http://eyes.test/oauth/authorize", {
+      ctx.fetch(`${origin}/oauth/authorize`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded", cookie, ...headers },
         body: new URLSearchParams({ ...params, csrf, ...fields }),
       });
     const token = (fields: Record<string, string>) =>
-      ctx.fetch("http://eyes.test/oauth/token", {
+      ctx.fetch(`${origin}/oauth/token`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -2117,35 +2141,81 @@ describe("OAuth for connectors", () => {
     );
   });
 
-  it("runs register, authorize with a key, token with PKCE, then MCP with the token", async () => {
-    const { page, submit, token, fetch } = await begin();
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain("Connect ChatGPT to Eyes");
-    expect(page.headers.get("content-security-policy")).toContain("form-action 'self' https://chatgpt.com");
-    const redirect = await submit({ action: "key", api_key: KEY });
-    expect(redirect.status).toBe(302);
-    const back = new URL(redirect.headers.get("location") ?? "");
-    expect(back.origin + back.pathname).toBe(REDIRECT);
-    expect(back.searchParams.get("state")).toBe("st8");
-    expect(back.searchParams.get("iss")).toBe("http://api.eyes.test");
-    const res = await token({ code: back.searchParams.get("code") ?? "" });
-    expect(res.status).toBe(200);
-    const { access_token, token_type } = await res.json();
-    expect(token_type).toBe("Bearer");
-    const client = new Client({ name: "chatgpt-test", version: "1.0.0" });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
-        fetch,
-        requestInit: { headers: { authorization: `Bearer ${access_token}` } },
-      }),
-    );
-    expect((await client.listTools()).tools.length).toBe(Object.keys(TOOLS).length + 1);
-    const quote = await client.callTool({
-      name: "quote_task",
-      arguments: { location: "Blue Bottle Coffee, Mint Plaza, San Francisco", task_type: "line_length" },
-    });
-    expect(quote.structuredContent).toEqual(QUOTE);
-  });
+  it.each(["https://mcp.eyes.pictures", "http://api.eyes.test"])(
+    "scopes staged discovery and unauthenticated challenges to %s",
+    async (origin) => {
+      const { fetch } = setup({}, { EYES_OAUTH_SECRET: OAUTH_SECRET, ...STAGED_MCP_ENV });
+      for (const path of [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+      ]) {
+        const res = await fetch(`${origin}${path}`);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({
+          resource: `${origin}/mcp`,
+          authorization_servers: [origin],
+        });
+      }
+      for (const path of [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+      ]) {
+        const res = await fetch(`${origin}${path}`);
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({
+          issuer: origin,
+          authorization_endpoint: `${origin}/oauth/authorize`,
+          token_endpoint: `${origin}/oauth/token`,
+          registration_endpoint: `${origin}/oauth/register`,
+          code_challenge_methods_supported: ["S256"],
+          token_endpoint_auth_methods_supported: ["none"],
+          authorization_response_iss_parameter_supported: true,
+        });
+      }
+      const res = await fetch(`${origin}/mcp`, { method: "POST", body: "{}" });
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe(
+        `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+      );
+    },
+  );
+
+  it.each([
+    ["http://eyes.test", "http://api.eyes.test", {}],
+    ["http://api.eyes.test", "http://api.eyes.test", STAGED_MCP_ENV],
+    ["https://mcp.eyes.pictures", "https://mcp.eyes.pictures", STAGED_MCP_ENV],
+  ] as const)(
+    "runs register, authorize with a key, token with PKCE, then MCP with the token on %s",
+    async (origin, issuer, env) => {
+      const { page, submit, token, fetch } = await begin({}, origin, env);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain("Connect ChatGPT to Eyes");
+      expect(page.headers.get("content-security-policy")).toContain("form-action 'self' https://chatgpt.com");
+      const redirect = await submit({ action: "key", api_key: KEY });
+      expect(redirect.status).toBe(302);
+      const back = new URL(redirect.headers.get("location") ?? "");
+      expect(back.origin + back.pathname).toBe(REDIRECT);
+      expect(back.searchParams.get("state")).toBe("st8");
+      expect(back.searchParams.get("iss")).toBe(issuer);
+      const res = await token({ code: back.searchParams.get("code") ?? "" });
+      expect(res.status).toBe(200);
+      const { access_token, token_type } = await res.json();
+      expect(token_type).toBe("Bearer");
+      const client = new Client({ name: "chatgpt-test", version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
+          fetch,
+          requestInit: { headers: { authorization: `Bearer ${access_token}` } },
+        }),
+      );
+      expect((await client.listTools()).tools.length).toBe(Object.keys(TOOLS).length + 1);
+      const quote = await client.callTool({
+        name: "quote_task",
+        arguments: { location: "Blue Bottle Coffee, Mint Plaza, San Francisco", task_type: "line_length" },
+      });
+      expect(quote.structuredContent).toEqual(QUOTE);
+    },
+  );
 
   it("creates a key through signup, shows it with its balance, and shares the /v1/signup budget", async () => {
     const { submit, fetch } = await begin();
