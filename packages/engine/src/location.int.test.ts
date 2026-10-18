@@ -172,9 +172,7 @@ describe.skipIf(!url)("worker location on Postgres", () => {
     await say(w.phone, "start", "START");
     // One text. STOP deleted every code, so this START sends a fresh app link even within the hour.
     expect(lastText(w.phone).split("\n").slice(1, 3)).toEqual([
-      expect.stringMatching(
-        /^Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/,
-      ),
+      expect.stringMatching(/^.+: https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/),
       "This is a test server and payouts are simulated, so no real money is paid.",
     ]);
   });
@@ -283,13 +281,16 @@ describe.skipIf(!url)("worker location on Postgres", () => {
     await svc.updateWorkerLocation(hereToken(lastText(w.phone)), fix);
   });
 
-  it("dispatches only to workers with a fresh fix, and a new fix makes a worker fresh at once", async () => {
+  it("START explains background location without gating fresh manual fixes on app installation", async () => {
     const at = somewhere();
     const a = await agent();
     const w = await worker(north(at, 100));
+    expect(welcome(w.phone)).toMatch(/install.*app.*background.*location/i);
+    expect(await row(w.phone)).toMatchObject({ app_connected: false });
+    expect(await ask(service, a, at)).toMatchObject({ workers_notified: 1 });
     providers.clock.advance(25 * HOUR);
     await say(w.phone, "start", "START");
-    expect(welcome(w.phone)).not.toContain("/here.html"); // the app step keeps the spot fresh now
+    expect(welcome(w.phone)).toMatch(/stale.*location.*stop.*offers.*updat/i);
     expect(await code(ask(service, a, at))).toBe("no_workers_nearby");
     await say(w.phone, "here");
     await service.updateWorkerLocation(hereToken(lastText(w.phone)), {
@@ -297,6 +298,10 @@ describe.skipIf(!url)("worker location on Postgres", () => {
       source: "here_link",
     });
     expect(await ask(service, a, at)).toMatchObject({ workers_notified: 1 });
+    expect(await row(w.phone)).toMatchObject({
+      app_connected: false,
+      location_source: "here_link",
+    });
     await say(w.phone, "start", "START");
     expect(welcome(w.phone)).not.toContain("/here.html");
   });

@@ -364,7 +364,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       if (mint) appLinkSentAt.set(worker.id, t);
       const link = mint ? appUrl(await mintLocationCode(worker.id)) : meUrl(worker.id);
       steps.push(
-        `${worker.app_connected ? "Reconnect the app" : "Get the app (keeps your spot fresh)"}: ${link}`,
+        `${worker.app_connected ? "Reconnect the app" : "Install the app for background location"}: ${link}`,
       );
     }
     if (config.live_payouts) {
@@ -375,6 +375,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       `${steps.length ? "You're in." : "You're all set."} Eyes texts you paid photo tasks near you.`,
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
+      "Stale location stops new offers until updated.",
       `Your setup: ${meUrl(worker.id)}`,
       "",
       "YES — take task",

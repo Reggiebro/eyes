@@ -71,7 +71,12 @@ function hubLines(payload: unknown): string[] {
   for (const line of lines) expect(line).toMatch(/^[A-Z]+(?: OFF)? — [^();\n]{1,55}$/);
   expect(text).not.toMatch(/aliases|\bYEP\b|\bUNSTOP\b|\bSTOPALL\b|\bE-MAIL\b/);
   expect(inputs).toMatch(/Maps link, coordinates or email address/);
-  return setup?.split("\n") ?? [];
+  const setupLines = setup?.split("\n") ?? [];
+  const warning = setupLines.find((line) => /stale/i.test(line));
+  expect(warning).toMatch(/location/i);
+  expect(warning).toMatch(/stop.*offers|offers.*stop/i);
+  expect(warning).toMatch(/updat/i);
+  return setupLines.filter((line) => line !== warning);
 }
 
 describe.skipIf(!url)("engine on Postgres", () => {
@@ -503,9 +508,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const lines = hubLines(start[0]);
     expect(lines).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
-      expect.stringMatching(
-        /^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/,
-      ),
+      expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
     ]);
@@ -515,7 +518,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await service.handleWorkerReply({ phone, intent: "start", text: "START" });
     expect(hubLines(sent().at(-1))).toEqual([
       lines[0],
-      expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
+      expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: /),
       expect.stringMatching(/^Your setup: /),
     ]);
@@ -528,7 +531,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     // START sent the app link within the hour: the app step links to the setup page, no second code.
     expect(help).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
-      expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
+      expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
     ]);
@@ -751,7 +754,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         providers.clock.advance(hour + 1);
         expect(await hub("start")).toEqual([
           `You're in. ${head}`,
-          expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): \S+$/),
+          expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/\S+$/),
           expect.stringMatching(/^2\. Set up payouts: \S+$/),
           ...tail,
         ]);
@@ -917,9 +920,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(last()).toMatch(/^Get the Eyes app: https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/);
     await withLink.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
     await withLink.handleWorkerReply({ phone, intent: "start", text: "START" });
-    expect(last().split("\n")[1]).toMatch(
-      /^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/,
-    );
+    expect(last().split("\n")[1]).toMatch(/^1\. .+: https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/);
   });
 
   it("returns outputs that parse against the frozen contract schemas on every service call", async () => {
@@ -1358,7 +1359,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const lines = hubLines(texts.at(-1));
     expect(lines.slice(0, 3)).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
-      expect.stringMatching(/^Get the app \(keeps your spot fresh\): /),
+      expect.stringMatching(/^.+: https:\/\/w\.eyes\.test\/\S+$/),
       simulated,
     ]);
     expect(String(texts.at(-1))).not.toContain("/w/connect/");
