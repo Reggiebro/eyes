@@ -199,6 +199,7 @@ function showResult({ status, message, verification: v }: CaptureResult) {
     }),
   );
   $("reason").textContent = v.vision_reason;
+  $("reason").hidden = !v.vision_reason || withoutTitle(title, message).includes(v.vision_reason);
   $("result").hidden = false;
 }
 
