@@ -213,7 +213,6 @@ describe("OPS_PAGE", () => {
           money_24h: {},
           queue: [],
           workers: { opted_in: 0, online: 0, total: 0 },
-          errors: [],
         },
       },
       "/ops/tickets": { tickets: [], total: 0, next_cursor: null },
@@ -226,6 +225,7 @@ describe("OPS_PAGE", () => {
         next_cursor: null,
       },
       "/ops/events": { source: "db", events: [] },
+      "/ops/issues": { issues: [] },
       "/ops/series": {
         source: "postgres",
         requests: [],

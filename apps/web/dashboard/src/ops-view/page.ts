@@ -130,7 +130,24 @@ type LedgerRow = {
   amount_cents: number;
   place_label?: string | null;
 };
-type OpsError = { level: string; at: string; summary: string };
+/** GET /ops/issues: one issue, with 24 hourly counts and how many it touched. */
+type Issue = {
+  fingerprint: string;
+  level: string;
+  title: string;
+  culprit: string | null;
+  status: "unresolved" | "resolved" | "ignored";
+  regressed: boolean;
+  ignore_until: number | null;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  message: string;
+  stack: string | null;
+  spark: number[];
+  affected: { workers: number; agents: number; tasks: number };
+};
+type IssueEvent = { id: number; at: string; message: string; tags: Record<string, string> };
 export type OpsFeed = {
   tasks: Task[];
   ledger: LedgerRow[];
@@ -153,7 +170,6 @@ export type OpsFeed = {
     money_24h: Record<string, number>;
     queue: Task[];
     workers: { opted_in: number; online: number; total: number };
-    errors: OpsError[];
   };
 };
 type Series = SeriesData & { source: string; dropped?: number };
@@ -378,6 +394,60 @@ export function boot(win: OpsWindow) {
   let layer: Layer | null = null;
   let fitted = false;
   let mapTasks: Task[] = [];
+  // Attention first, then live, then done, then ended: the order pins stack and spots pick a color.
+  const URGENCY = (t: Task) =>
+    ({ needs_review: 5, disputed: 5, dispatched: 4, claimed: 4, submitted: 4, verified: 3, paid: 2 })[
+      t.status
+    ] ?? 1;
+  // The map's tasks follow the Tasks tab's filters (status, dates); no dates means the last 24 h.
+  // Open and attention tasks always show, whatever their age.
+  async function loadMapTasks(refit: boolean) {
+    const st = tasks.state();
+    const query = new URLSearchParams(
+      [["status", st.f.status ?? ""], ...datedQuery(st.f, "", new Date())].filter(([, v]) => v),
+    );
+    const res = await fetch(`/map/tasks?${query}`, { cache: "no-store" });
+    if (!res.ok) return;
+    mapTasks = ((await res.json()) as { tasks: Task[] }).tasks;
+    const window = st.f.when || st.f.date_min || st.f.date_max ? "the Tasks tab's dates" : "the last 24 h";
+    $("map-scope").textContent =
+      `${mapTasks.length} task${mapTasks.length === 1 ? "" : "s"}: ${st.f.status ? `${statusLabel(st.f.status).toLowerCase()}, ` : ""}${window} and every open one`;
+    if (refit) fitted = false;
+    renderMap(workers.visible());
+  }
+  // Several tasks at one spot: pick one.
+  function openSpot(ts: Task[]) {
+    const panel = $<HTMLDialogElement>("review-panel");
+    const close = h("button", "ui-button ui-button--ghost ui-button--sm", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => panel.close());
+    panel.replaceChildren(
+      h(
+        "div",
+        "task-head",
+        h("h2", "ui-card__title", `${ts.length} tasks at ${cut(nearLabel(ts[0]?.place_label), 60)}`),
+        close,
+      ),
+      h(
+        "ul",
+        "spot",
+        ...ts.map((t) => {
+          const b = h(
+            "button",
+            "spot__task",
+            badge(statusLabel(t.status), STATUS_TONE[t.status]),
+            " ",
+            cut(t.question, 100),
+            h("span", "tiny", ` ${ago(t.created_at, Date.now())} ago`),
+          );
+          b.type = "button";
+          b.addEventListener("click", () => openReview(t.id, t));
+          return h("li", null, b);
+        }),
+      ),
+    );
+    panel.showModal();
+  }
   /** The worker shown in the panel (full id), kept in the hash as `w=<8 chars>`. */
   let selected: string | null = null;
   let wanted: string | null = null;
@@ -402,17 +472,35 @@ export function boot(win: OpsWindow) {
       layer = L.layerGroup().addTo(map);
     }
     layer.clearLayers();
-    const pinned = mapTasks.filter((t) => t.lat != null && t.lng != null);
-    // Older tasks first, so the live ones draw on top.
-    for (const t of [...pinned].reverse()) {
-      const live = LIVE.includes(t.status);
+    // Tasks at the same spot share one pin: the most urgent status colors it, the size counts them,
+    // and urgent pins draw last (on top). Clicking opens the task, or a list when there are several.
+    const spots = new Map<string, Task[]>();
+    for (const t of mapTasks) {
+      if (t.lat == null || t.lng == null) continue;
+      const key = `${t.lat.toFixed(5)},${t.lng.toFixed(5)}`;
+      spots.set(key, [...(spots.get(key) ?? []), t]);
+    }
+    const groups = [...spots.values()].map((ts) => ts.toSorted((a, b) => URGENCY(b) - URGENCY(a)));
+    for (const ts of groups.toSorted((a, b) => URGENCY(a[0] as Task) - URGENCY(b[0] as Task))) {
+      const t = ts[0] as Task;
+      const big = URGENCY(t) >= 4;
+      const counts = new Map<string, number>();
+      for (const x of ts) counts.set(x.status, (counts.get(x.status) ?? 0) + 1);
+      const what = [...counts]
+        .map(([st, n]) => `${statusLabel(st).toLowerCase()}${n > 1 ? ` ×${n}` : ""}`)
+        .join(", ");
       L.circleMarker([t.lat as number, t.lng as number], {
-        radius: live ? 9 : 5,
+        radius: (big ? 9 : 6) + Math.min(ts.length - 1, 4),
         weight: 2,
-        className: `pin s-${t.status}${live ? " is-live" : ""}`,
+        className: `pin s-${t.status}${big ? " is-live" : ""}`,
       })
-        .bindTooltip(`${statusLabel(t.status)}: ${cut(nearLabel(t.place_label), 60)}`, { direction: "top" })
-        .on("click", () => openReview(t.id, t))
+        .bindTooltip(
+          ts.length === 1
+            ? `${statusLabel(t.status)}: ${cut(nearLabel(t.place_label), 60)}`
+            : `${ts.length} tasks at ${cut(nearLabel(t.place_label), 50)}: ${what}`,
+          { direction: "top" },
+        )
+        .on("click", () => (ts.length === 1 ? openReview(t.id, t) : openSpot(ts)))
         .addTo(layer);
     }
     for (const w of workers) {
@@ -427,10 +515,9 @@ export function boot(win: OpsWindow) {
         .on("click", () => openWorker(w.id))
         .addTo(layer);
     }
-    // City zoom around what is there: the live tasks if any, else every marker.
-    const live = pinned.filter((t) => LIVE.includes(t.status));
-    const points = [...(live.length ? live : pinned), ...workers].map(
-      (p) => [p.lat, p.lng] as [number, number],
+    // City zoom around every task pin and worker, so nothing starts off screen.
+    const points = [...groups.map((ts) => ts[0] as Task), ...workers].map(
+      (p) => [p.lat as number, p.lng as number] as [number, number],
     );
     if (!fitted && points.length) {
       map.fitBounds(L.latLngBounds(points).pad(0.2), { maxZoom: 15 });
@@ -607,37 +694,14 @@ export function boot(win: OpsWindow) {
       h("div", "stat", h("b", null, String(w.total)), h("span", null, "signed up")),
     );
     workers.setRows(feed.workers);
-    mapTasks = feed.tasks;
     renderMap(workers.visible());
     renderStory(feed.tasks);
     openWanted();
     // The list tabs refresh with the feed while they are shown.
     const tab = tabFor(location.hash);
     if (tab === "tasks") taskPager.load();
+    if (tab === "workers") void loadMapTasks(false);
     if (tab === "money") ledgerPager.load();
-
-    $("errors").replaceChildren(
-      ...(o.errors.length
-        ? o.errors.map((e) =>
-            h(
-              "li",
-              null,
-              h(
-                "div",
-                "line",
-                badgeIcon(document, levelOf(e.level), `ev-level ev-level--${e.level}`),
-                h("span", "tiny", stamp(e.at)),
-              ),
-              h("pre", "err", e.summary),
-            ),
-          )
-        : [empty("No errors or warnings since the server started.")]),
-    );
-    count(
-      "n-logs",
-      o.errors.length,
-      o.errors.some((e) => e.level === "error"),
-    );
   }
 
   // Ticket decisions. Dispute actions (confirm_fraud, reject_dispute) take only a note; the others also send the task id.
@@ -991,7 +1055,7 @@ export function boot(win: OpsWindow) {
       if (res.status === 401) return location.assign(`${base}/login`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       render(await res.json());
-      await Promise.all([loadTickets(), countOpenTickets(), pollEvents(), loadSeries()]);
+      await Promise.all([loadTickets(), countOpenTickets(), pollEvents(), loadSeries(), loadIssues()]);
       state.className = "ui-badge ui-badge--success";
       state.textContent = "Live";
       $("updated").textContent = `updated ${new Date().toLocaleTimeString()}, every ${POLL_MS / 1000} s`;
@@ -1447,6 +1511,237 @@ export function boot(win: OpsWindow) {
 
   const toast = createToaster(document, later);
 
+  // Errors: console errors grouped into issues (fingerprinted on the server, kept in Postgres).
+  let issueRows: Issue[] = [];
+  const affectedText = (a: Issue["affected"]) =>
+    [
+      a.workers ? `${a.workers} worker${a.workers === 1 ? "" : "s"}` : "",
+      a.agents ? `${a.agents} agent${a.agents === 1 ? "" : "s"}` : "",
+      a.tasks ? `${a.tasks} task${a.tasks === 1 ? "" : "s"}` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const issueState = (i: Issue) =>
+    i.status === "ignored" && i.ignore_until != null ? `ignored until ${i.ignore_until}` : i.status;
+  function spark(values: number[]) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "spark");
+    svg.setAttribute("viewBox", "0 0 48 12");
+    svg.setAttribute("aria-hidden", "true");
+    const top = Math.max(1, ...values);
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("points", values.map((v, i) => `${i * 2},${12 - (v / top) * 11}`).join(" "));
+    svg.append(line);
+    return svg;
+  }
+  const issues = tableFor<Issue>("errors", {
+    name: "issues",
+    empty: "No errors or warnings recorded. Console errors on the server show up here, grouped.",
+    initial: { q: "", sort: "-last", f: { status: "unresolved" } },
+    key: (i) => i.fingerprint,
+    label: (i) => `${levelOf(i.level)[0]}: ${cut(i.title, 80)}, ${i.count} events`,
+    open: (i) => openIssue(i),
+    columns: [
+      {
+        key: "level",
+        label: "Level",
+        text: (i) => levelOf(i.level)[0],
+        cell: (i) => badgeIcon(document, levelOf(i.level), `ev-level ev-level--${i.level}`),
+      },
+      {
+        key: "issue",
+        label: "Issue",
+        text: (i) => `${i.title} ${i.culprit ?? ""}`,
+        cell: (i) =>
+          h("span", "issue", h("b", null, cut(i.title, 140)), h("code", "tiny", i.culprit ?? "no stack")),
+      },
+      {
+        key: "count",
+        label: "Events",
+        num: true,
+        desc: true,
+        text: (i) => String(i.count),
+        sort: (i) => i.count,
+      },
+      { key: "affected", label: "Affected", text: (i) => affectedText(i.affected) },
+      {
+        key: "last",
+        label: "Last seen",
+        num: true,
+        desc: true,
+        text: (i) => ago(i.last_seen, Date.now()),
+        sort: (i) => Date.parse(i.last_seen),
+      },
+      {
+        key: "first",
+        label: "First seen",
+        num: true,
+        desc: true,
+        text: (i) => ago(i.first_seen, Date.now()),
+        sort: (i) => Date.parse(i.first_seen),
+      },
+      { key: "spark", label: "24 h", text: (i) => String(sum(i.spark)), cell: (i) => spark(i.spark) },
+      {
+        key: "status",
+        label: "Status",
+        text: issueState,
+        cell: (i) =>
+          h(
+            "span",
+            null,
+            badge(issueState(i), i.status === "unresolved" ? "danger" : ""),
+            i.regressed ? badge("regressed", "warning") : null,
+          ),
+      },
+    ],
+    filters: [
+      {
+        kind: "select",
+        key: "status",
+        label: "Statuses",
+        options: [
+          ["unresolved", "Unresolved"],
+          ["resolved", "Resolved"],
+          ["ignored", "Ignored"],
+        ],
+        value: (i) => i.status,
+      },
+      {
+        kind: "select",
+        key: "level",
+        label: "Levels",
+        options: [
+          ["error", "Error"],
+          ["warn", "Warning"],
+        ],
+        value: (i) => i.level,
+      },
+    ],
+  });
+  $("issues").replaceChildren(issues.el);
+  async function loadIssues() {
+    const res = await fetch("/issues", { cache: "no-store" });
+    if (!res.ok) return;
+    issueRows = ((await res.json()) as { issues: Issue[] }).issues;
+    issues.setRows(issueRows);
+    const open = issueRows.filter((i) => i.status === "unresolved");
+    count(
+      "n-errors",
+      open.length,
+      open.some((i) => i.level === "error"),
+    );
+  }
+  // One issue: message, stack with our frames marked, tags, latest occurrences, a link into Logs, status.
+  async function openIssue(i: Issue) {
+    const panel = $<HTMLDialogElement>("review-panel");
+    const close = h("button", "ui-button ui-button--ghost ui-button--sm", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => panel.close());
+    const res = await fetch(`/issues/${i.fingerprint}`, { cache: "no-store" });
+    const occurrences = res.ok ? ((await res.json()) as { events: IssueEvent[] }).events : [];
+    const tags = Object.entries(occurrences[0]?.tags ?? {}).map(([k, v]) =>
+      badge(`${k}: ${/_id$/.test(k) ? `${v.slice(0, 8)}…` : v}`),
+    );
+    const firstLine = i.message.split("\n")[0] ?? "";
+    const logs = h("a", "ui-link", "Show in Logs");
+    logs.href = hashFor("logs", { q: firstLine.slice(0, 60), sort: "", f: { kind: "log", level: i.level } });
+    logs.addEventListener("click", () => panel.close());
+    const setStatus = (status: Issue["status"], more: number | undefined, label: string) => {
+      const b = h(
+        "button",
+        `ui-button ui-button--sm ${status === "resolved" ? "ui-button--primary" : "ui-button--ghost"}`,
+        label,
+      );
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        const r = await fetch(`/issues/${i.fingerprint}/status`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status, more }),
+        });
+        const body = await json<{ issue?: Issue } & Reply>(r);
+        if (!r.ok || !body.issue) {
+          b.disabled = false;
+          toast(`Not changed: ${body.message ?? r.status}`);
+          return;
+        }
+        toast(`Issue ${label.toLowerCase()}`);
+        await loadIssues();
+        void openIssue({ ...i, ...body.issue });
+      });
+      return b;
+    };
+    panel.replaceChildren(
+      ...[
+        h(
+          "div",
+          "task-head",
+          h("h2", "ui-card__title", cut(i.title, 200)),
+          h(
+            "span",
+            null,
+            badge(issueState(i), i.status === "unresolved" ? "danger" : ""),
+            i.regressed ? badge("regressed", "warning") : null,
+          ),
+          close,
+        ),
+        h(
+          "div",
+          "line",
+          badgeIcon(document, levelOf(i.level), `ev-level ev-level--${i.level}`),
+          h("code", null, i.culprit ?? "no stack"),
+          h("span", null, `${i.count} events, first ${stamp(i.first_seen)}, last ${stamp(i.last_seen)}`),
+          affectedText(i.affected) ? h("span", null, affectedText(i.affected)) : null,
+        ),
+        h(
+          "div",
+          "decide__row",
+          ...(i.status === "unresolved"
+            ? [
+                setStatus("resolved", undefined, "Resolve"),
+                setStatus("ignored", 10, "Ignore until 10 more"),
+                setStatus("ignored", 100, "Ignore until 100 more"),
+                setStatus("ignored", undefined, "Ignore forever"),
+              ]
+            : [setStatus("unresolved", undefined, "Reopen")]),
+        ),
+        h("pre", "err", i.message),
+        i.stack
+          ? h(
+              "pre",
+              "stack",
+              ...i.stack
+                .split("\n")
+                .map((line) =>
+                  h(
+                    "span",
+                    /(apps|packages)\//.test(line) && !line.includes("node_modules") ? "in-app" : null,
+                    `${line}\n`,
+                  ),
+                ),
+            )
+          : null,
+        tags.length ? h("p", "tags", ...tags) : null,
+        h(
+          "h3",
+          "panel__sub",
+          occurrences.length ? `Latest ${occurrences.length}` : "No occurrences kept (older than 14 days)",
+        ),
+        h(
+          "ul",
+          "occurrences",
+          ...occurrences.map((o) =>
+            h("li", null, h("span", "tiny", stamp(o.at)), " ", cut(o.message.split("\n")[0], 160)),
+          ),
+        ),
+        h("p", null, logs),
+        h("span", "tiny", i.fingerprint),
+      ].filter((x) => x != null),
+    );
+    if (!panel.open) panel.showModal();
+  }
+
   // Access: who can sign in to ops. The JSON routes the old /allowlist page used (same CSRF/Origin checks).
   type AccessEntry = {
     id: string;
@@ -1565,10 +1860,9 @@ export function boot(win: OpsWindow) {
     if (name === "money") ledgerPager.load();
     if (name === "access") void loadAccess();
     // Leaflet measured a hidden box; size it again and refit.
-    if (name === "workers" && map) {
-      map.invalidateSize();
-      fitted = false;
-      renderMap(workers.visible());
+    if (name === "workers") {
+      map?.invalidateSize();
+      void loadMapTasks(true);
     }
   }
   $("tabs").addEventListener("keydown", (e) => {

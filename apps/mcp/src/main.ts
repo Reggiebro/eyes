@@ -12,6 +12,7 @@ import {
   clickHouseConfig,
   createClickHouseSink,
   createEventLog,
+  createIssueSink,
   mirrorTriggerEvents,
 } from "@eyes/web-dashboard";
 import { z } from "zod";
@@ -113,7 +114,9 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   const clickhouse = chConfig ? createClickHouseSink(chConfig) : undefined;
   if (clickhouse) mirrorTriggerEvents(rpc, clickhouse.push);
   console.log(`clickhouse: ${chConfig ? `${chConfig.url} (${chConfig.database})` : "off"}`);
-  const events = createEventLog(rpc, 500, 2000, clickhouse ? [clickhouse.push] : []);
+  // Console errors and warnings also group into issues for the ops Errors tab.
+  const issues = createIssueSink(rpc);
+  const events = createEventLog(rpc, 500, 2000, [issues.push, ...(clickhouse ? [clickhouse.push] : [])]);
   captureConsole(events.log);
   const logged = instrumentProviders(providers, events.log);
 

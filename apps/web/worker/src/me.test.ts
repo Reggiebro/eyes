@@ -249,7 +249,7 @@ describe("taskLine", () => {
   });
 
   it.each([
-    [{ status: "paid", payout: "paid", bounty_usd: 2.5 }, "Paid", "success", null],
+    [{ status: "paid", payout: "paid", bounty_usd: 3 }, "Paid", "success", null],
     [{ status: "disputed", payout: "paid" }, "Disputed", "warning", "Paid out"],
     [{ payout: "waiting_for_payout_setup" }, "Verified", "success", "Waiting for payout setup"],
     [{ status: "expired", payout: null }, "Expired", "", null],

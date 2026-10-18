@@ -137,6 +137,21 @@ const TicketAction = z.object({
   task_id: z.uuid(),
   note: z.string().trim().min(1).max(500),
 });
+const TASK_STATUSES = [
+  "dispatched",
+  "claimed",
+  "submitted",
+  "verified",
+  "paid",
+  "needs_review",
+  "disputed",
+  "expired",
+  "refunded",
+];
+const IssueStatus = z.object({
+  status: z.enum(["resolved", "ignored", "unresolved"]),
+  more: z.coerce.number().int().positive().max(100_000).optional(),
+});
 const DisputeAction = z.object({
   ticket_id: z.coerce.number().int().positive(),
   note: z.string().trim().min(1).max(500),
@@ -1106,7 +1121,6 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
               db_error: dbError && redact(dbError),
             },
             ...summarize(feed, OPS_FEED_LIMIT, now),
-            errors: (deps.events?.recent() ?? []).filter((e) => e.kind === "log").slice(0, 50),
           },
         },
         200,
@@ -1171,6 +1185,19 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         FEED_HEADERS,
       );
     });
+    // The Workers map's tasks: the Tasks tab's status and date window, plus every open or attention task.
+    server.app.get("/ops/map/tasks", ops.operator, async (c) => {
+      const q = c.req.query();
+      const instant = (text: string | undefined) =>
+        text && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : null;
+      const tasks = await rpc<Record<string, unknown>>("eyes_map_tasks", {
+        p_status: TASK_STATUSES.includes(q.status ?? "") ? q.status : null,
+        p_from: instant(q.from),
+        p_to: instant(q.to),
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      return c.json({ tasks }, 200, FEED_HEADERS);
+    });
     // One worker for the Workers panel: state, rounded last fix, their tasks, what they earned.
     server.app.get("/ops/workers/:id", ops.operator, async (c) => {
       const id = c.req.param("id");
@@ -1219,6 +1246,39 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         data: { action: body.outcome, operator, ...result },
       });
       return c.json(result, 200, FEED_HEADERS);
+    });
+    // Errors tab: issues grouped from console errors (migration 028), one issue's occurrences, and its status.
+    server.app.get("/ops/issues", ops.operator, async (c) => {
+      const issues = await rpc<Record<string, unknown>>("eyes_issues", {
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      return c.json({ issues }, 200, FEED_HEADERS);
+    });
+    server.app.get("/ops/issues/:fp", ops.operator, async (c) => {
+      const fp = c.req.param("fp");
+      const events = /^[0-9a-f]{16}$/.test(fp)
+        ? await rpc<Record<string, unknown>>("eyes_issue_events", { p_fingerprint: fp, p_limit: 20 })
+        : [];
+      return c.json({ events }, 200, FEED_HEADERS);
+    });
+    server.app.post("/ops/issues/:fp/status", ops.sameOrigin, ops.operator, async (c) => {
+      const body = parse(IssueStatus, await readJson(c));
+      const operator = c.get("operator").label;
+      const [issue] = await rpc<{ fingerprint: string; title: string }>("eyes_issue_status", {
+        p_fingerprint: c.req.param("fp"),
+        p_status: body.status,
+        p_more: body.more ?? null,
+        p_by: operator,
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      if (!issue)
+        return c.json({ error: "issue_not_found", message: "No issue with this id." }, 404, FEED_HEADERS);
+      log({
+        kind: "ops",
+        summary: `issue ${issue.fingerprint} ${body.status}${body.more ? ` until ${body.more} more` : ""} by ${operator}`,
+        data: { action: body.status, fingerprint: issue.fingerprint, operator },
+      });
+      return c.json({ issue }, 200, FEED_HEADERS);
     });
     // Dispute tickets (ADR-026): confirm fraud (refund + reverse + ban) or reject. Each runs once;
     // a second click returns the same shape with already_resolved true and moves no money.

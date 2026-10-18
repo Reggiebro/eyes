@@ -1682,9 +1682,9 @@ describe("ops dashboard", () => {
         health: { db: "insforge", classifier: "rules only", commit: null, db_error: null },
         workers: { total: 1, opted_in: 1, online: 1 },
         queue: [],
-        errors: [],
       },
     });
+    // Errors live in the Errors tab (/ops/issues) now, not in the feed.
     expect(rpcCalls).toEqual([{ fn: "eyes_dashboard_feed", args: { p_limit: 500 } }]);
     // The old live map is the Workers tab now.
     expect([live.status, live.headers.get("location")]).toEqual([301, "/ops#workers"]);
@@ -1733,7 +1733,7 @@ describe("ops dashboard", () => {
       classifier: "clef",
       db_error: "connect ECONNREFUSED postgres://[redacted]@db.internal",
     });
-    expect(body.ops.errors).toMatchObject([{ kind: "log", level: "error", summary: "boom" }]);
+    expect(body.ops).not.toHaveProperty("errors");
     expect(body.tasks).toEqual([]);
   });
 
@@ -2205,7 +2205,6 @@ describe("ops data routes", () => {
     });
     const feed = await (await get("/ops/feed")).json();
     expect(feed.ops.health).toMatchObject({ classifier: "Claude", db_error: "socket closed" });
-    expect(feed.ops.errors).toEqual([]);
     expect(await (await get("/ops/series")).json()).toMatchObject({ source: "postgres" });
     expect(await (await get("/ops/events?q=x")).json()).toMatchObject({ source: "memory", events: [] });
     errors.mockRestore();
@@ -2298,6 +2297,56 @@ describe("ops data routes", () => {
     expect(bad.status).toBe(404);
     expect(await bad.json()).toMatchObject({ error: "task_not_found", message: "No task with this id." });
     expect(calls.length).toBe(before);
+  });
+
+  it("lists issues, an issue's occurrences, and changes an issue's status with a log line", async () => {
+    const FP = "0123456789abcdef";
+    let rows: unknown[] = [{ fingerprint: FP, title: "TypeError: x", status: "unresolved" }];
+    const { get, post, calls, events } = opsServer(() => rows);
+    expect(await (await get("/ops/issues")).json()).toEqual({ issues: rows });
+    expect(calls.at(-1)?.fn).toBe("eyes_issues");
+    expect(calls.at(-1)?.args).toHaveProperty("p_now");
+    rows = [{ id: 1, at: "2026-10-17T12:00:00Z", message: "TypeError: x", tags: {} }];
+    expect(await (await get(`/ops/issues/${FP}`)).json()).toEqual({ events: rows });
+    expect(calls.at(-1)).toMatchObject({ fn: "eyes_issue_events", args: { p_fingerprint: FP, p_limit: 20 } });
+    const before = calls.length;
+    expect(await (await get("/ops/issues/not-a-fingerprint")).json()).toEqual({ events: [] });
+    expect(calls.length).toBe(before);
+
+    rows = [{ fingerprint: FP, title: "TypeError: x", status: "ignored" }];
+    const ignored = await post(`/ops/issues/${FP}/status`, { status: "ignored", more: 10 });
+    expect([ignored.status, (await ignored.json()).issue.status]).toEqual([200, "ignored"]);
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_issue_status",
+      args: { p_fingerprint: FP, p_status: "ignored", p_more: 10, p_by: "break-glass" },
+    });
+    await post(`/ops/issues/${FP}/status`, { status: "resolved" });
+    expect(calls.at(-1)?.args).toMatchObject({ p_status: "resolved", p_more: null });
+    expect(
+      events
+        .recent()
+        .filter((e) => e.kind === "ops")
+        .map((e) => e.summary),
+    ).toEqual([`issue ${FP} resolved by break-glass`, `issue ${FP} ignored until 10 more by break-glass`]);
+    expect((await post(`/ops/issues/${FP}/status`, { status: "deleted" })).status).toBe(400);
+    rows = [];
+    const missing = await post(`/ops/issues/${FP}/status`, { status: "resolved" });
+    expect([missing.status, (await missing.json()).error]).toEqual([404, "issue_not_found"]);
+  });
+
+  it("serves the map's tasks for the Tasks tab's status and window, ignoring unknown statuses and bad dates", async () => {
+    const { get, calls } = opsServer(() => [{ id: "t1", status: "needs_review" }]);
+    expect(
+      await (await get("/ops/map/tasks?status=needs_review&from=2026-10-17T07:00:00.000Z&to=nope")).json(),
+    ).toEqual({
+      tasks: [{ id: "t1", status: "needs_review" }],
+    });
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_map_tasks",
+      args: { p_status: "needs_review", p_from: "2026-10-17T07:00:00.000Z", p_to: null },
+    });
+    await get("/ops/map/tasks?status=bogus");
+    expect(calls.at(-1)?.args).toMatchObject({ p_status: null, p_from: null, p_to: null });
   });
 
   it("shows one worker with a rounded position, their tasks and earnings, and 404s unknown or malformed ids", async () => {
