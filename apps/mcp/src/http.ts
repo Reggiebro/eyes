@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -27,6 +28,25 @@ const LOGGED_ROUTES = [
 }));
 
 type Fetch = (request: Request) => Promise<Response>;
+
+/**
+ * With EDGE_SECRET set the server sits behind the edge Worker (apps/edge/api), possibly via another
+ * proxy that appends to x-forwarded-for or rewrites x-forwarded-host. Only a request carrying the
+ * secret may name the client IP and original host; one reaching the origin directly cannot spoof
+ * them (its cf-connecting-ip and x-forwarded-host are dropped, x-forwarded-for is left as is).
+ */
+function trustEdge(headers: Headers, secret: string | undefined) {
+  const given = headers.get("x-eyes-edge-secret") ?? "";
+  const ip = headers.get("x-eyes-client-ip")?.trim();
+  const host = headers.get("x-eyes-host");
+  for (const name of ["x-eyes-edge-secret", "x-eyes-client-ip", "x-eyes-host"]) headers.delete(name);
+  if (!secret) return;
+  headers.delete("cf-connecting-ip");
+  const sha = (value: string) => createHash("sha256").update(value).digest();
+  if (!timingSafeEqual(sha(given), sha(secret))) return void headers.delete("x-forwarded-host");
+  if (ip) headers.set("x-forwarded-for", ip);
+  if (host) headers.set("x-forwarded-host", host);
+}
 
 function tooLarge(req: IncomingMessage, limit: number): Response {
   req.resume();
@@ -91,7 +111,13 @@ async function readJsonBody(req: IncomingMessage, limit: number, state: { overfl
   return Buffer.concat(chunks);
 }
 
-async function respond(req: IncomingMessage, url: URL, fetch: Fetch, signal: AbortSignal): Promise<Response> {
+async function respond(
+  req: IncomingMessage,
+  url: URL,
+  fetch: Fetch,
+  signal: AbortSignal,
+  edgeSecret: string | undefined,
+): Promise<Response> {
   const type = (req.headers["content-type"] ?? "").toLowerCase();
   const multipart = type.startsWith("multipart/form-data") && !type.includes("application/json");
   const limit =
@@ -101,6 +127,7 @@ async function respond(req: IncomingMessage, url: URL, fetch: Fetch, signal: Abo
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
   }
+  trustEdge(headers, edgeSecret);
   if (!headers.get("x-forwarded-for")?.trim()) headers.set("x-forwarded-for", req.socket.remoteAddress ?? "");
   const state = { overflow: false };
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
@@ -131,7 +158,7 @@ async function respond(req: IncomingMessage, url: URL, fetch: Fetch, signal: Abo
   return state.overflow || !response ? tooLarge(req, limit) : response;
 }
 
-export function toNodeListener(fetch: Fetch) {
+export function toNodeListener(fetch: Fetch, edgeSecret?: string) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const started = Date.now();
     const abort = new AbortController();
@@ -143,7 +170,13 @@ export function toNodeListener(fetch: Fetch) {
       const url = parsed && !parsed.username && !parsed.password ? parsed : null;
       if (url) path = routeOf(url.pathname);
       const response = url
-        ? await respond(req, new URL(`http://localhost${url.pathname}${url.search}`), fetch, abort.signal)
+        ? await respond(
+            req,
+            new URL(`http://localhost${url.pathname}${url.search}`),
+            fetch,
+            abort.signal,
+            edgeSecret,
+          )
         : badTarget(req);
       res.statusCode = response.status;
       for (const [name, value] of response.headers) if (name !== "set-cookie") res.setHeader(name, value);

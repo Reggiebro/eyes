@@ -85,31 +85,66 @@ afterEach(() => {
 });
 
 describe("api worker routing", () => {
-  it("proxies to ORIGIN when set and the host is not workers.dev", async () => {
+  it("forwards every host and path to ORIGIN with method, body, and edge headers, redirect manual", async () => {
     const stub = fakeStub();
-    const upstream = vi.fn(async (_input: URL | string, _init?: RequestInit) => new Response("from mac"));
+    const upstream = vi.fn(async (_input: URL | string, _init?: RequestInit) => new Response("from origin"));
     vi.stubGlobal("fetch", upstream);
-    const env = fakeEnv(stub, { ORIGIN: "https://eyes-dispatch.inkboxwire.com" });
+    const env = fakeEnv(stub, { ORIGIN: "https://eyes.run.mcp-use.com", EDGE_SECRET: "s3cret" });
 
     const res = await worker.fetch(new Request("https://api.eyes.pictures/v1/tasks?limit=2"), env);
+    await worker.fetch(new Request("https://eyes-api.someone.workers.dev/healthz?x=1"), env);
+    await worker.fetch(
+      new Request("https://internal.eyes.pictures/login", {
+        method: "POST",
+        body: "a=1",
+        headers: { "cf-connecting-ip": "203.0.113.9", "x-eyes-client-ip": "6.6.6.6" },
+      }),
+      env,
+    );
 
-    expect(await res.text()).toBe("from mac");
-    expect(upstream).toHaveBeenCalledOnce();
-    expect(String(upstream.mock.calls[0]?.[0])).toBe("https://eyes-dispatch.inkboxwire.com/v1/tasks?limit=2");
+    expect(await res.text()).toBe("from origin");
+    expect(upstream.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://eyes.run.mcp-use.com/v1/tasks?limit=2",
+      "https://eyes.run.mcp-use.com/healthz?x=1",
+      "https://eyes.run.mcp-use.com/login",
+    ]);
+    const init = upstream.mock.calls[2]?.[1] as RequestInit;
+    const headers = init.headers as Headers;
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("manual");
+    expect(await new Response(init.body).text()).toBe("a=1");
+    expect(headers.get("x-forwarded-host")).toBe("internal.eyes.pictures");
+    expect(headers.get("x-eyes-host")).toBe("internal.eyes.pictures");
+    expect(headers.get("x-eyes-client-ip")).toBe("203.0.113.9");
+    expect(headers.get("x-eyes-edge-secret")).toBe("s3cret");
     expect(stub.fetch).not.toHaveBeenCalled();
   });
 
-  it("sends workers.dev traffic to the container even when ORIGIN is set", async () => {
+  it("passes a streamed ORIGIN response through untouched", async () => {
+    const body = new ReadableStream({ start: (c) => c.close() });
+    const upstream = new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+
+    expect(res).toBe(upstream);
+  });
+
+  it("sends an empty edge secret when EDGE_SECRET is unset, overriding a client-sent one", async () => {
     const stub = fakeStub();
-    const upstream = vi.fn();
-    vi.stubGlobal("fetch", upstream);
-    const env = fakeEnv(stub, { ORIGIN: "https://eyes-dispatch.inkboxwire.com" });
+    const req = new Request("https://api.eyes.pictures/v1/agents", {
+      headers: { "x-eyes-edge-secret": "guess" },
+    });
 
-    const res = await worker.fetch(new Request("https://eyes-api.someone.workers.dev/healthz?x=1"), env);
+    await worker.fetch(req, fakeEnv(stub));
 
-    expect(await res.text()).toBe("routed");
-    expect(upstream).not.toHaveBeenCalled();
-    expect(stub.fetch.mock.calls[0]?.[0].url).toBe("http://eyes/healthz?x=1");
+    expect(stub.fetch.mock.calls[0]?.[0].headers.get("x-eyes-edge-secret")).toBe("");
   });
 
   it("sends everything to the container when ORIGIN is not set", async () => {
@@ -155,6 +190,26 @@ describe("api worker routing", () => {
     await worker.fetch(req, fakeEnv(stub));
 
     expect(stub.fetch.mock.calls[0]?.[0].headers.get("host")).toBeNull();
+  });
+
+  it("scheduled() with ORIGIN pings ORIGIN /healthz and never touches the container", async () => {
+    const stub = fakeStub();
+    const upstream = vi.fn(async (_input: URL | string) => new Response("ok"));
+    vi.stubGlobal("fetch", upstream);
+    const env = fakeEnv(stub, { ORIGIN: "https://eyes.run.mcp-use.com" });
+
+    await worker.scheduled({}, env);
+    upstream.mockRejectedValueOnce(new Error("down"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await worker.scheduled({}, env);
+
+    expect(upstream.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://eyes.run.mcp-use.com/healthz",
+      "https://eyes.run.mcp-use.com/healthz",
+    ]);
+    expect(error).toHaveBeenCalledWith("origin ping failed", expect.any(Error));
+    expect(env.EYES.get).not.toHaveBeenCalled();
+    expect(stub.ensure).not.toHaveBeenCalled();
   });
 
   it("scheduled() calls ensure() on the main Durable Object", async () => {

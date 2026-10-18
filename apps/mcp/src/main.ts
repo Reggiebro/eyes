@@ -143,7 +143,7 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
 
   const server = createServer({ service, providers: logged, config, env, rpc, events, clickhouse });
   const host = env.HOST || "0.0.0.0";
-  const http = createHttpServer(toNodeListener(server.fetch));
+  const http = createHttpServer(toNodeListener(server.fetch, env.EDGE_SECRET || undefined));
   http.listen(port, host, () => {
     const bound = (http.address() as AddressInfo).port;
     console.log(`Eyes MCP listening on http://${host}:${bound}/mcp`);

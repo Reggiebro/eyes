@@ -1,8 +1,10 @@
 // api.eyes.pictures: a pass-through to the Eyes server, so agents and the app use one stable name.
-// The server runs in a Cloudflare Container (one instance, the Dockerfile at the repo root) managed
-// by the EyesServer Durable Object below. Rollback to the Mac: deploy with ORIGIN set to the tunnel
-// (`--var ORIGIN:https://eyes-dispatch.inkboxwire.com`); while ORIGIN is set, api.eyes.pictures
-// proxies there and only the workers.dev URL reaches the container.
+// Without ORIGIN the server runs in a Cloudflare Container (one instance, the Dockerfile at the repo
+// root) managed by the EyesServer Durable Object below. With ORIGIN set (Manufact Cloud, e.g.
+// `--var ORIGIN:https://<slug>.run.mcp-use.com`, or the Mac tunnel for a rollback) every request on
+// every host goes there and the container is never started, so only one server runs sweeps/payouts.
+// EDGE_SECRET (a Worker secret, same value in the server's env) proves to the server that the
+// client IP and host headers below came from this Worker.
 import { DurableObject } from "cloudflare:workers";
 
 const PORT = 3000;
@@ -98,15 +100,24 @@ export default {
     headers.set("x-forwarded-host", url.host);
     // The server rate-limits by the last x-forwarded-for entry; a client-sent value would pass
     // straight through, so replace it with the address Cloudflare saw.
-    headers.set("x-forwarded-for", request.headers.get("cf-connecting-ip") ?? "");
+    const ip = request.headers.get("cf-connecting-ip") ?? "";
+    headers.set("x-forwarded-for", ip);
+    // Proxies in front of ORIGIN append to x-forwarded-for and may rewrite x-forwarded-host; the
+    // server trusts these copies only next to the matching secret.
+    headers.set("x-eyes-client-ip", ip);
+    headers.set("x-eyes-host", url.host);
+    headers.set("x-eyes-edge-secret", env.EDGE_SECRET ?? "");
     const init = { method: request.method, headers, body: request.body, redirect: "manual" };
-    if (env.ORIGIN && !url.hostname.endsWith(".workers.dev")) {
-      return fetch(new URL(url.pathname + url.search, env.ORIGIN), init);
-    }
+    if (env.ORIGIN) return fetch(new URL(url.pathname + url.search, env.ORIGIN), init);
     return server(env).fetch(new Request(`http://eyes${url.pathname}${url.search}`, init));
   },
 
   async scheduled(_event, env) {
+    // Keep the origin warm; never start the container while ORIGIN serves traffic.
+    if (env.ORIGIN) {
+      await fetch(new URL("/healthz", env.ORIGIN)).catch((err) => console.error("origin ping failed", err));
+      return;
+    }
     await server(env).ensure();
   },
 };
