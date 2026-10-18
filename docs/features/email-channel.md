@@ -17,11 +17,11 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 
 1. Join at https://app.eyes.pictures with your mobile number.
 2. From your phone, text START.
-3. Open your setup page at `/me` and tap Add email in the Email row.
-4. Open the confirmation link in the email within 24 hours. It signs you in and opens `/me`, where the Email row now shows your address (masked).
+3. Open your setup page at `/me` and tap Add email in the Email row. Your email app opens a message to Eyes; send it as is, from the address you want to use.
+4. Refresh `/me`. The Email row now shows your address (masked).
 5. Later, sign in at https://app.eyes.pictures/login: enter that email, tap "Email me a sign-in link", and open the link within 15 minutes.
 
-You can also change or remove the email from the Email row on `/me`. Adding or changing it emails a new confirmation link.
+You can also change or remove the email from the Email row on `/me`. Changing it emails a confirmation link to the new address.
 
 ## Where in the code
 

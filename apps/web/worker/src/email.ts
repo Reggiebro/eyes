@@ -90,6 +90,19 @@ export async function saveEmail(code: string, email: string | null, send: Send):
   }
 }
 
+/** Starts adding by email: answers a mailto to Eyes; once the worker sends it, the sender's address is on, verified. */
+export async function startEmail(code: string, send: Send): Promise<string> {
+  try {
+    const { mailto } = (await send("/w/me/email/start", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${code}` },
+    })) as { mailto: string };
+    return mailto;
+  } catch (err) {
+    throw worded(err);
+  }
+}
+
 /** Asks for a sign-in link. The API answers 200 whether or not the email is on an account. */
 export async function sendLink(email: string, send: Send): Promise<void> {
   try {

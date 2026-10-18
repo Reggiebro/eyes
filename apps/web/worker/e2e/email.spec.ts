@@ -44,34 +44,36 @@ test("/me shows no email row while the API does not send the email fields", asyn
   await expect(emailRow(page)).toHaveCount(0);
 });
 
-test("/me none: Add email posts it with the code, then asks to check the inbox; Resend re-sends it", async ({
-  page,
-}) => {
-  const posts = await mockMe(
-    page,
-    withEmail("none", null),
-    { json: withEmail("pending") },
-    { json: withEmail("pending") },
-  );
+test("/me none: Add email opens the API's mailto, then says to send it and refresh", async ({ page }) => {
+  const starts: (string | undefined)[] = [];
+  const opened: string[] = [];
+  page.on("request", (r) => r.url().startsWith("mailto:") && opened.push(r.url()));
+  await page.route("**/api/w/me/email/start", (route) => {
+    starts.push(route.request().headers().authorization);
+    return route.fulfill({ json: { mailto: "mailto:work@example.test?subject=Eyes%20abc" } });
+  });
+  const posts = await mockMe(page, withEmail("none", null));
   const row = emailRow(page);
   await expect(row).toContainText("Get tasks by email too");
-  await expect(page.getByRole("heading", { name: "You're set up" })).toBeVisible();
   await row.getByRole("button", { name: "Add email" }).click();
-  const input = row.getByRole("textbox", { name: "Email" });
-  await expect(input).toBeFocused();
-  await input.fill("nope");
-  await row.getByRole("button", { name: "Send link" }).click();
-  await expect(row.getByRole("alert")).toContainText("That email does not look right.");
-  await input.fill("ada@example.com");
-  await row.getByRole("button", { name: "Send link" }).click();
-  await expect(emailRow(page)).toContainText("Check your inbox");
-  await expect(emailRow(page)).toContainText(`Tap the link we sent to ${MASKED} to confirm it.`);
-  await emailRow(page).getByRole("button", { name: "Resend link" }).click();
-  await expect.poll(() => posts.length).toBe(2);
-  expect(posts).toEqual([
-    { body: { email: "ada@example.com" }, auth: `Bearer ${code}` },
-    { body: { email: "ada@example.com" }, auth: `Bearer ${code}` },
-  ]);
+  await expect(row).toContainText("Check: send the email we opened, then refresh.");
+  await expect(row.getByRole("textbox")).toBeHidden();
+  await expect.poll(() => opened).toEqual(["mailto:work@example.test?subject=Eyes%20abc"]);
+  expect(starts).toEqual([`Bearer ${code}`]);
+  expect(posts).toEqual([]);
+});
+
+test("/me none: Add email shows the API's words when it refuses", async ({ page }) => {
+  await page.route("**/api/w/me/email/start", (route) =>
+    route.fulfill({
+      status: 400,
+      json: { error: "invalid_input", message: "Text START to the Eyes number first.", fix: "" },
+    }),
+  );
+  await mockMe(page, withEmail("none", null));
+  await emailRow(page).getByRole("button", { name: "Add email" }).click();
+  await expect(emailRow(page).getByRole("alert")).toContainText("Text START to the Eyes number first.");
+  await expect(emailRow(page).getByRole("button", { name: "Add email" })).not.toHaveAttribute("aria-busy");
 });
 
 test("/me none before START: says to text START first, offers nothing", async ({ page }) => {
