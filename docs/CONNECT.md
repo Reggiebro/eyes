@@ -143,6 +143,8 @@ In ChatGPT and Claude, `quote_task`, `ask_eyes`, `await_answer`, `get_task` and 
 
 Claude Desktop uses the connectors from your claude.ai account. On Team and Enterprise plans, an owner adds the connector first, in **Organization settings > Connectors**.
 
+When OAuth creates a key, click **Copy** beside the displayed key to save it before continuing. **Copied** confirms success; if clipboard access is unavailable or denied, select the displayed key and copy it manually. Copy never submits the page or follows **Continue**.
+
 ### Fallback for every other client
 
 For every other client, the public URL also works without the optional gateway. If the gateway returns errors (for example `402` once its plan's monthly credits run out), replace the section 2 URL with `https://api.eyes.pictures/mcp`. For example:
