@@ -299,13 +299,16 @@ describe("node adapter on a real socket", () => {
     await fetch(`${base}/some/${token}/deeper`);
     await fetch(`${base}/llms.txt`);
     await fetch(`${base}/v1/tasks/${TASK_ID}`);
+    await fetch(`${base}/s/AbCd1234`);
 
     const lines = log.mock.calls.map((call) => String(call[0]));
     expect(lines[0]).toMatch(/^GET <other> 404 \d+ms$/);
     expect(lines[1]).toMatch(/^GET \/llms\.txt \d{3} \d+ms$/);
     expect(lines[2]).toMatch(/^GET \/v1\/tasks\/<task_id> 401 \d+ms$/);
+    expect(lines[3]).toMatch(/^GET \/s\/<id> 404 \d+ms$/);
     expect(lines.join("\n")).not.toContain(token);
     expect(lines.join("\n")).not.toContain(TASK_ID);
+    expect(lines.join("\n")).not.toContain("AbCd1234");
   });
 
   const secret = signToken(config.link_secret, "offer-secret");
@@ -425,15 +428,14 @@ describe("node adapter on a real socket", () => {
     const log = quiet();
 
     const statuses: number[] = [];
-    for (const path of [`/ops/${opsKey}`, `/ops/${opsKey}/feed`, `/ops/${opsKey}0/feed`]) {
-      statuses.push((await fetch(`${base}${path}`)).status);
+    for (const path of [`/ops/${opsKey}`, `/ops/${opsKey}0`]) {
+      statuses.push((await fetch(`${base}${path}`, { redirect: "manual" })).status);
     }
 
-    expect(statuses).toEqual([200, 200, 404]);
+    expect(statuses).toEqual([303, 404]);
     const lines = log.mock.calls.map((call) => String(call[0]));
     expect(lines).toEqual([
-      expect.stringMatching(/^GET <other> 200 \d+ms$/),
-      expect.stringMatching(/^GET <other> 200 \d+ms$/),
+      expect.stringMatching(/^GET <other> 303 \d+ms$/),
       expect.stringMatching(/^GET <other> 404 \d+ms$/),
     ]);
   });
@@ -481,5 +483,85 @@ describe("node adapter on a real socket", () => {
     expect(result.structuredContent).toMatchObject({ task_id: TASK_ID, status: "claimed", answered: false });
     expect(progress).toHaveLength(1);
     await client.close();
+  });
+
+  it("answers 413 with the retake-photo fix to a multipart capture declared over 21 MB", async () => {
+    const submitCapture = vi.fn();
+    const base = await start({ submitCapture });
+    quiet();
+
+    const res = await raw(
+      `${base}/w/offers/bad.token/capture`,
+      {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=x", "content-length": 22 * MB },
+      },
+      (req) => req.flushHeaders(),
+    );
+
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({
+      max_bytes: 21 * MB,
+      fix: "Retake the photo at a lower resolution and submit again.",
+    });
+    expect(submitCapture).not.toHaveBeenCalled();
+  });
+
+  it("joins a repeated request header that Node keeps as an array", async () => {
+    const seen: Request[] = [];
+    const base = await start({}, seen);
+    quiet();
+
+    await raw(base, { method: "GET", path: "/healthz", headers: { "set-cookie": ["a=1", "b=2"] } }, (req) =>
+      req.end(),
+    );
+
+    expect(seen[0]?.headers.get("set-cookie")).toBe("a=1, b=2");
+  });
+
+  it("answers 413 when the app's read of a streamed body fails because it grew past 1 MB", async () => {
+    const base = await listenOn(async (request) => {
+      await request.arrayBuffer();
+      return new Response("read it all");
+    });
+    quiet();
+
+    const res = await raw(
+      `${base}/v1/signup`,
+      { method: "POST", headers: { "content-type": "application/octet-stream" } },
+      (req) => pump(req, 2 * MB),
+    );
+
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ error: "invalid_input", max_bytes: MB });
+  });
+
+  it("logs 'unknown error' when the app rejects with something that is not an Error", async () => {
+    const base = await listenOn(() => Promise.reject("boom"));
+    silence();
+
+    const res = await raw(base, { method: "GET", path: "/healthz" }, (req) => req.end());
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual(new EyesError("internal_error").toBody());
+    expect(logged()).toContain("request failed: unknown error");
+  });
+
+  it("logs only the error name when the client drops a JSON body part-way, and never calls the app", async () => {
+    const signupAgent = vi.fn();
+    const base = await start({ signupAgent });
+    silence();
+
+    const req = request(`${base}/v1/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": 1000 },
+    });
+    req.on("error", () => undefined);
+    req.write('{"name":');
+    await sleep(50);
+    req.destroy();
+
+    await vi.waitFor(() => expect(logged()).toContain("request failed: Error"));
+    expect(signupAgent).not.toHaveBeenCalled();
   });
 });

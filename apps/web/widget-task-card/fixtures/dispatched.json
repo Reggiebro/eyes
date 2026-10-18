@@ -13,7 +13,8 @@
     "deadline_at": "2026-10-17T18:30:00Z",
     "created_at": "2026-10-17T18:00:00Z",
     "claimed_at": null,
-    "answer": null
+    "answer": null,
+    "dispute": null
   },
   "workers_notified": 3
 }

@@ -6,6 +6,7 @@ import {
   agentEmailAddress,
   CaptureFields,
   centsToUsd,
+  type DisputeOutcome,
   distanceMeters,
   type EngineDeps,
   ERRORS,
@@ -15,6 +16,7 @@ import {
   type LatLng,
   type LedgerType,
   OwnerPolicyInput,
+  parseMapLink,
   type ReplyIntent,
   type ResolvedLocation,
   SignupInput,
@@ -26,6 +28,8 @@ import {
   usdToCents,
   verifyToken,
   type Worker,
+  WorkerLocationInput,
+  type WorkerTasks,
 } from "@eyes/core";
 import { createRpc, type RpcArgs } from "@eyes/db";
 import { z } from "zod";
@@ -58,15 +62,27 @@ type EarningsRow = {
   paid_cents: number;
   pending_cents: number;
   payouts_set_up: boolean;
-  tasks: {
-    task_id: string;
-    place_label: string;
-    status: TaskStatus;
-    bounty_cents: number;
-    claimed_at: string;
-    released: boolean;
-    paid_at: string | null;
-  }[];
+  tasks: { task_id: string; status: TaskStatus }[];
+};
+type TaskRow = {
+  task_id: string;
+  question: string;
+  place_label: string;
+  status: TaskStatus;
+  bounty_cents: number;
+  claimed_at: string;
+  released: boolean;
+  paid_at: string | null;
+};
+const TASKS_PAGE = 20;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// An IANA zone the browser sent, or null (UTC) when the runtime does not know it.
+const zoneOf = (tz: string | undefined) => {
+  try {
+    return tz ? new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone : null;
+  } catch {
+    return null;
+  }
 };
 
 const ANSWERED: TaskStatus[] = ["verified", "paid", "needs_review"];
@@ -76,12 +92,57 @@ const CAPTURE_MINUTES = 3;
 const POLL_MS = 1000;
 const WORKER_LINK_MS = 7 * 24 * 60 * 60 * 1000;
 const PAYOUT_BATCH = 25;
+// RFC 2606 and RFC 6761 reserved names: example.com/.org/.net and the .example, .test, .invalid, .localhost TLDs.
+const RESERVED_EMAIL_DOMAIN = /(^|\.)(example\.(com|org|net)|example|test|invalid|localhost)\.?$/i;
+const HERE_LINK_MS = 30 * 60 * 1000;
+const DEVICE_LINK_EXPIRED = {
+  message: "This install link is invalid or has expired.",
+  fix: "Text HELP to the Eyes number for a fresh link.",
+};
+// The setup page's code (ADR-028) is the worker's "e:" token, which START and HELP renew.
+const SETUP_LINK_INVALID = {
+  message: "This link is invalid or has expired.",
+  fix: "Text HELP to the Eyes number for a fresh link.",
+};
+const HOUR_MS = 3_600_000;
+const APP_SENDING_MS = 24 * HOUR_MS; // the app sent a fix this recently: no "Get the app" step
+const PING_MAX = 5;
+const PING_WAIT_MS = 30_000;
+const PING_IN_INPUT = /Eyes ping ([0-9a-f]{8})/i;
 
 const ResolveInput = z.object({
   task_id: z.uuid(),
   decision: z.enum(["refund", "release"]),
   note: z.string().trim().min(1),
 });
+
+type Ticket = { id: number | string; worker_id: string; task_id: string };
+const ResolveTicketInput = z.object({
+  ticket_id: z.number().int().positive(),
+  outcome: z.enum(["release", "refund", "close"]),
+  note: z.string().trim().min(1),
+});
+const DisputeDecision = z.object({
+  ticket_id: z.number().int().positive(),
+  note: z.string().trim().min(1).max(500),
+});
+type DisputeTicket = Ticket & {
+  dispute_status: "open" | "upheld" | "rejected" | null;
+  reversal_owed_cents: number | string | null;
+};
+// bigint columns may arrive as strings, so amounts are read with Number().
+type FraudRow = {
+  ticket: DisputeTicket;
+  already: boolean;
+  refund_cents: number | string | null;
+  transfer_id: string | null;
+  payout_cents: number | string | null;
+};
+const TICKET_OUTCOME: Record<z.output<typeof ResolveTicketInput>["outcome"], string> = {
+  release: "Your answer was approved and you are being paid.",
+  refund: "Your answer was not approved, so this task is not paid.",
+  close: "",
+};
 
 const AWAIT_NEXT_STEP: Record<TaskStatus, string> = {
   dispatched:
@@ -101,11 +162,9 @@ const AWAIT_NEXT_STEP: Record<TaskStatus, string> = {
     "You disputed this answer and it is flagged for human review. Call get_task later to see the outcome.",
 };
 
-const REPLY_TEXT: Record<"no" | "released" | "help" | "unknown", string> = {
+const REPLY_TEXT: Record<"no" | "released", string> = {
   no: "No problem, we will text you the next task nearby.",
   released: "Got it, the task is released. Thanks.",
-  help: "Eyes texts you paid tasks to check public places nearby. Reply YES to claim a task, STOP to opt out.",
-  unknown: "Sorry, we did not get that. Reply YES to claim the task, NO to skip it, or HELP for help.",
 };
 const SIMULATED_PAY = "This is a test server and payouts are simulated, so no real money is paid.";
 
@@ -147,7 +206,8 @@ function answerOf({ task, submission, worker_rating }: Detail): Answer | null {
     task_id: task.id,
     answer_text: submission.answer_text ?? fallback,
     answer_bool: submission.answer_bool,
-    photo_url: submission.photo_url,
+    // A photo that failed moderation (vision_ok false) is never delivered; ops still sees it.
+    photo_url: submission.vision_ok ? submission.photo_url : null,
     captured_at: iso(submission.captured_at),
     worker_distance_m: Math.round(distanceMeters(task, submission)),
     verification: {
@@ -176,10 +236,56 @@ export function createEyesService(deps: EngineDeps): EyesService {
     `${config.public_api_url}/topup/${signToken(config.link_secret, `t:${agentId}`)}`;
   const connectUrl = (workerId: string) =>
     `${config.public_api_url}/w/connect/${signToken(config.link_secret, `c:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
-  const earningsUrl = (workerId: string) =>
-    `${config.public_api_url}/w/earnings/${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
+  // The setup page (ADR-028) takes the worker's "e:" token, in the fragment so no server logs it.
+  const meUrl = (workerId: string) =>
+    `${config.worker_web_url}/me#c=${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
   const captureUrl = (task: Task, workerId: string) =>
     `${config.worker_web_url}/capture.html?t=${signToken(config.link_secret, `o:${task.id}:${workerId}`, new Date(task.deadline_at))}`;
+  const hereUrl = (workerId: string) =>
+    `${config.worker_web_url}/here.html?t=${signToken(config.link_secret, `l:${workerId}`, new Date(now().getTime() + HERE_LINK_MS))}`;
+  const maxAge = `${config.location_max_age_h} hours`;
+  // A location code for one device: adds a code, the 5 newest work (the RPC name is from when it
+  // replaced the one code). Returns the code so it can be texted once; only its hash is stored.
+  const mintLocationCode = async (workerId: string) => {
+    const code = randomBytes(32).toString("base64url");
+    await one("eyes_rotate_location_token", { p_worker_id: workerId, p_token_hash: sha256(code) });
+    return code;
+  };
+  // The code rides in the URL fragment, so no server (ours or a CDN) ever logs it. /app opens or
+  // connects the app and falls back to TestFlight; without TestFlight, /install (ad hoc, T6.31).
+  const installUrl = (code: string) => `${config.worker_web_url}/install#c=${code}`;
+  const appUrl = (code: string) =>
+    config.testflight_url ? `${config.worker_web_url}/app#c=${code}` : installUrl(code);
+  // ponytail: in memory (one server instance); a restart allows one extra code on the next START.
+  const appLinkSentAt = new Map<string, number>();
+  // The hub text (START, HELP): links for everything, so YES and STOP are the only words to remember.
+  // Only open steps are listed, numbered when there are two or more; none left: "You're all set".
+  async function hubReply(worker: Worker & { location_source: string | null }): Promise<string> {
+    const t = now().getTime();
+    const steps: string[] = [];
+    const appSending =
+      worker.location_source === "app" && t - Date.parse(worker.location_at ?? "") <= APP_SENDING_MS;
+    // Again within the hour (a retry, a double tap) mints no second code (each one evicts an older
+    // device's): the step links to the setup page, which has the app button.
+    if (!appSending) {
+      const last = appLinkSentAt.get(worker.id);
+      const mint = last === undefined || t - last >= HOUR_MS;
+      if (mint) appLinkSentAt.set(worker.id, t);
+      const link = mint ? appUrl(await mintLocationCode(worker.id)) : meUrl(worker.id);
+      steps.push(`Get the app (keeps your spot fresh): ${link}`);
+    }
+    if (config.live_payouts) {
+      const e = await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: worker.id });
+      if (!e?.payouts_set_up) steps.push(`Set up payouts: ${connectUrl(worker.id)}`);
+    }
+    return [
+      `${steps.length ? "You're in." : "You're all set."} Eyes texts you paid photo tasks near you.`,
+      ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
+      ...(config.live_payouts ? [] : [SIMULATED_PAY]),
+      `Your setup: ${meUrl(worker.id)}`,
+      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+    ].join("\n");
+  }
 
   const newApiKey = () =>
     `${config.test_mode ? "eyes_test_" : "eyes_live_"}${randomBytes(32).toString("base64url")}`;
@@ -187,7 +293,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
   const ownerUrl = (agentId: string) =>
     `${config.public_api_url}/owner/${signToken(config.link_secret, `p:${agentId}`)}`;
 
-  function tokenPayload(token: string, kind: "t" | "c" | "o" | "p" | "e"): string | null {
+  function tokenPayload(token: string, kind: "t" | "c" | "o" | "p" | "e" | "l" | "d"): string | null {
     const payload = verifyToken(config.link_secret, token, now());
     return payload?.startsWith(`${kind}:`) ? payload.slice(kind.length + 1) : null;
   }
@@ -198,7 +304,19 @@ export function createEyesService(deps: EngineDeps): EyesService {
     return agentId;
   }
 
+  // Names the failure for the log. The recipient and the control link stay out: error text can echo them.
+  function describeSendError(err: unknown): string {
+    if (!(err instanceof Error)) return "unknown";
+    const status = "status" in err && err.status !== undefined ? ` status ${String(err.status)}` : "";
+    return `${err.name}${status}: ${err.message.replace(/https?:\/\/\S+|\S+@\S+/g, "<redacted>").slice(0, 200)}`;
+  }
+
   async function emailOwner(to: string, agentId: string, subject: string, intro: string): Promise<boolean> {
+    // RFC 2606/6761 names never reach a mailbox (smoke and test agents sign up with them): don't try.
+    if (RESERVED_EMAIL_DOMAIN.test(to.split("@").pop() ?? "")) {
+      console.debug(`owner email for agent ${agentId} skipped: reserved test domain`);
+      return false;
+    }
     try {
       await providers.email.send({
         to,
@@ -213,9 +331,13 @@ export function createEyesService(deps: EngineDeps): EyesService {
       });
       return true;
     } catch (err) {
-      console.error(
-        `owner email for agent ${agentId} failed: ${err instanceof Error ? err.name : "unknown"}`,
-      );
+      if (err instanceof Error && "status" in err && err.status === 403 && /recipient/i.test(err.message)) {
+        console.warn(
+          `owner email for agent ${agentId} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
+        );
+      } else {
+        console.error(`owner email for agent ${agentId} failed: ${describeSendError(err)}`);
+      }
       return false;
     }
   }
@@ -233,7 +355,85 @@ export function createEyesService(deps: EngineDeps): EyesService {
       p_lng: place.lng,
       p_radius_m: config.dispatch_radius_m,
       p_limit: limit,
+      p_max_age: maxAge,
+      p_now: nowIso(),
     });
+
+  async function sendOffers(task: Task, workers: Nearby[]): Promise<number> {
+    const sent = await Promise.allSettled(
+      workers.map((w) =>
+        messaging.sendOffer(w.phone, {
+          task_id: task.id,
+          task_type: task.task_type,
+          question: task.question,
+          place_label: task.place_label,
+          bounty_cents: task.bounty_cents,
+          distance_m: Math.round(w.distance_m),
+          deadline_at: iso(task.deadline_at),
+          live_payouts: config.live_payouts,
+        }),
+      ),
+    );
+    logFailedOffers(task.id, sent);
+    return sent.filter((s) => s.status === "fulfilled").length;
+  }
+
+  // Too few fresh workers nearby: text the nearest stale ones a ping. Their Message automation on
+  // "Eyes ping" (automation.html) or a tap on the HERE link sends a fresh fix.
+  async function pingStale(place: LatLng, taskId: string | null): Promise<number> {
+    const stale = await rpc<Nearby>("eyes_ping_candidates", {
+      p_lat: place.lat,
+      p_lng: place.lng,
+      p_radius_m: config.dispatch_radius_m,
+      p_limit: PING_MAX,
+      p_max_age: maxAge,
+      p_now: nowIso(),
+    });
+    if (stale.length === 0) return 0;
+    const pings = stale.map((w) => ({
+      nonce: randomBytes(4).toString("hex"),
+      worker_id: w.worker_id,
+      task_id: taskId,
+    }));
+    await rpc("eyes_record_pings", { p_pings: pings, p_now: nowIso() });
+    const sent = await Promise.allSettled(
+      stale.map((w, i) =>
+        messaging.sendText(
+          w.phone,
+          `Eyes ping ${pings[i]?.nonce}: a paid task may be near you. Tap to update your spot: ${hereUrl(w.worker_id)}`,
+        ),
+      ),
+    );
+    for (const s of sent) if (s.status === "rejected") console.error(`ping failed: ${errorName(s.reason)}`);
+    return sent.filter((s) => s.status === "fulfilled").length;
+  }
+
+  async function offerMore(task: Task) {
+    const more = await rpc<Nearby>("eyes_offer_more", {
+      p_task_id: task.id,
+      p_radius_m: config.dispatch_radius_m,
+      p_limit: config.dispatch_max_workers,
+      p_max_age: maxAge,
+      p_now: nowIso(),
+    });
+    await sendOffers(task, more);
+  }
+
+  type Fix = { lat: number; lng: number; accuracy_m?: number; source: string; captured_at?: string };
+  function storeFix(workerId: string, fix: Fix, pingNonce: string | null) {
+    return one<"stored" | "rate_limited" | "not_found">("eyes_store_location", {
+      p_worker_id: workerId,
+      p_lat: fix.lat,
+      p_lng: fix.lng,
+      p_accuracy_m: fix.accuracy_m ?? null,
+      p_source: fix.source,
+      p_captured_at: fix.captured_at ?? null,
+      p_ping_nonce: pingNonce,
+      p_min_interval_s: config.location_min_interval_s,
+      p_daily_max: config.location_daily_max,
+      p_now: nowIso(),
+    });
+  }
 
   async function detail(agent: Agent, taskId: string): Promise<Detail> {
     const found = await maybe<Detail>("eyes_task_detail", { p_task_id: taskId });
@@ -313,7 +513,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         task_id: task.id,
         place_label: task.place_label,
         amount_cents: task.bounty_cents,
-        earnings_url: earningsUrl(worker.id),
+        me_url: meUrl(worker.id),
         live_payouts: config.live_payouts,
       }),
     );
@@ -374,6 +574,29 @@ export function createEyesService(deps: EngineDeps): EyesService {
     });
   let retryAfter: string | null = null;
 
+  async function resolveTask(task_id: string, decision: "refund" | "release", note: string) {
+    const input = parse(ResolveInput, { task_id, decision, note });
+    const resolved = await one<Task>("eyes_resolve_task", {
+      p_task_id: input.task_id,
+      p_decision: input.decision,
+      p_note: input.note,
+      p_now: nowIso(),
+    });
+    const worker = await one<Worker>("eyes_worker", { p_worker_id: resolved.claimed_by, p_phone: null });
+    const settled = await settle(resolved, worker);
+    return { task_id: settled.id, status: settled.status };
+  }
+
+  async function disputeOf(task: Task) {
+    const t = await maybe<DisputeTicket>("eyes_task_dispute", { p_task_id: task.id });
+    if (!t?.dispute_status) return null;
+    const upheld = t.dispute_status === "upheld";
+    return {
+      status: t.dispute_status,
+      refunded_usd: upheld ? centsToUsd(task.bounty_cents + task.fee_cents) : null,
+    };
+  }
+
   return {
     async authenticate(apiKey) {
       return (await maybe<Agent>("eyes_agent_by_key_hash", { p_api_key_hash: sha256(apiKey) })) ?? null;
@@ -426,7 +649,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
       const { location, task_type } = parse(TOOLS.quote_task.input, input);
       const place = await resolve(location);
       const verdict = await deps.assessTask({
-        question: `${task_type.replaceAll("_", " ")} at ${place.label}`,
+        question: "", // no question yet: rules only; ask_eyes runs the classifier on the real one
         task_type,
         place_label: place.label,
       });
@@ -508,6 +731,12 @@ export function createEyesService(deps: EngineDeps): EyesService {
         });
       }
       const workers = await nearby(place, config.dispatch_max_workers);
+      const ping = config.location_ping && workers.length < config.dispatch_max_workers;
+      const pinged = (taskId: string | null) =>
+        pingStale(place, taskId).catch((err) => {
+          console.error(`location pings failed: ${errorName(err)}`);
+          return 0;
+        });
       const posted = await one<Posted>("eyes_post_task", {
         p_agent_id: agent.id,
         p_question: ask.question,
@@ -520,7 +749,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         p_fee_cents: config.fee_cents,
         p_require_photo: ask.require_photo,
         p_deadline_minutes: ask.deadline_minutes,
-        p_idempotency_key: ask.idempotency_key ?? null,
+        p_idempotency_key: ask.idempotency_key,
         p_worker_ids: workers.map((w) => w.worker_id),
         p_now: nowIso(),
       }).catch(async (err) => {
@@ -532,28 +761,26 @@ export function createEyesService(deps: EngineDeps): EyesService {
               new EyesError("insufficient_balance", { balance_cents: s.balance_cents, needed_cents }),
               agent.id,
             );
+          // Pinged workers who answer are fresh for the agent's retry.
+          if (ping) await pinged(null);
         }
         throw agentFacing(err, agent.id);
       });
       const { task } = posted;
       let notified = posted.workers_notified;
       if (posted.created) {
-        const sent = await Promise.allSettled(
-          workers.map((w) =>
-            messaging.sendOffer(w.phone, {
-              task_id: task.id,
-              task_type: task.task_type,
-              question: task.question,
-              place_label: task.place_label,
-              bounty_cents: task.bounty_cents,
-              distance_m: Math.round(w.distance_m),
-              deadline_at: iso(task.deadline_at),
-              live_payouts: config.live_payouts,
-            }),
-          ),
-        );
-        notified = sent.filter((s) => s.status === "fulfilled").length;
-        logFailedOffers(task.id, sent);
+        notified = await sendOffers(task, workers);
+        if (ping && (await pinged(task.id)) > 0) {
+          // ponytail: in-process timer, so a restart in these 30 s loses the re-offer; persist due
+          // re-offers (a column on worker_pings) if that ever matters.
+          setTimeout(
+            () =>
+              offerMore(task).catch((err) =>
+                console.error(`re-offer for task ${task.id} failed: ${errorName(err)}`),
+              ),
+            PING_WAIT_MS,
+          ).unref();
+        }
       }
       return {
         task_id: task.id,
@@ -595,6 +822,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         created_at: iso(task.created_at),
         claimed_at: task.claimed_at && iso(task.claimed_at),
         answer: answerOf(found),
+        dispute: await disputeOf(task),
       };
     },
 
@@ -641,7 +869,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         task_id,
         status: "disputed",
         next_step:
-          "Recorded. The task is flagged for human review. If the worker payout has not been sent yet it is held; a payout already sent is not reversed automatically. Call get_task later to see the outcome.",
+          "Recorded. A person reviews the dispute; an unpaid payout is held meanwhile. If the answer was fake, the full bounty and fee are refunded to your balance. Call get_task later: dispute.status is open, upheld (refunded) or rejected (the answer stands).",
       };
     },
 
@@ -664,7 +892,10 @@ export function createEyesService(deps: EngineDeps): EyesService {
         throw new EyesError(
           "unauthorized",
           {},
-          { message: "This top-up link is invalid.", fix: "Call get_balance to get a fresh top_up_url." },
+          {
+            message: "This top-up link is invalid.",
+            fix: "Ask your AI agent for a new top-up link. It can get one from Eyes at any time.",
+          },
         );
       }
       const { url } = await payments.createTopupCheckout({
@@ -798,8 +1029,11 @@ export function createEyesService(deps: EngineDeps): EyesService {
       for (const { task, worker } of await payoutsDue(account_id, null)) await payOut(task, worker);
     },
 
-    async handleWorkerReply({ phone, intent }) {
-      const worker = await maybe<Worker>("eyes_worker", { p_worker_id: null, p_phone: phone });
+    async handleWorkerReply({ phone, intent, text }) {
+      const worker = await maybe<Worker & { location_source: string | null }>("eyes_worker", {
+        p_worker_id: null,
+        p_phone: phone,
+      });
       if (!worker) {
         if (intent === "stop") return;
         await messaging.sendText(
@@ -808,17 +1042,20 @@ export function createEyesService(deps: EngineDeps): EyesService {
         );
         return;
       }
+      if (worker.banned) {
+        // Banned after confirmed fraud (ADR-026): no tasks, no rejoining with this phone.
+        if (intent === "start") await messaging.sendText(phone, "This number can't take Eyes tasks.");
+        return;
+      }
       if (!worker.opted_in && intent !== "start") return;
       const reply: Record<ReplyIntent, () => Promise<unknown>> = {
         start: async () => {
           await rpc("eyes_set_worker_opt_in", { p_phone: phone, p_opted_in: true });
-          await messaging.sendText(
-            phone,
-            `You are in. Eyes will text you paid tasks nearby. ${config.live_payouts ? `Set up payouts here: ${connectUrl(worker.id)}` : SIMULATED_PAY}`,
-          );
+          await messaging.sendText(phone, await hubReply(worker));
         },
         stop: async () => {
           await rpc("eyes_set_worker_opt_in", { p_phone: phone, p_opted_in: false });
+          appLinkSentAt.delete(worker.id); // STOP deleted every code, so the next START sends a fresh one
           await messaging.sendText(
             phone,
             "Eyes: you're opted out and won't get task texts. Text START to rejoin.",
@@ -832,58 +1069,133 @@ export function createEyesService(deps: EngineDeps): EyesService {
           });
           await messaging.sendText(phone, released ? REPLY_TEXT.released : REPLY_TEXT.no);
           if (!released) return;
-          const idle = await rpc<Worker>("eyes_reoffer", {
+          const idle = await rpc<Worker & LatLng>("eyes_reoffer", {
             p_task_id: released.id,
             p_released_by: worker.id,
             p_now: nowIso(),
+            p_max_age: maxAge,
           });
-          const sent = await Promise.allSettled(
-            idle.map((w) =>
-              messaging.sendOffer(w.phone, {
-                task_id: released.id,
-                task_type: released.task_type,
-                question: released.question,
-                place_label: released.place_label,
-                bounty_cents: released.bounty_cents,
-                distance_m: Math.round(distanceMeters(released, w)),
-                deadline_at: iso(released.deadline_at),
-                live_payouts: config.live_payouts,
-              }),
-            ),
+          await sendOffers(
+            released,
+            idle.map((w) => ({ worker_id: w.id, phone: w.phone, distance_m: distanceMeters(released, w) })),
           );
-          logFailedOffers(released.id, sent);
         },
-        help: () =>
+        here: () =>
           messaging.sendText(
             phone,
-            `${REPLY_TEXT.help}${simulatedPay} More: ${config.worker_web_url} Your earnings: ${earningsUrl(worker.id)}`,
+            `Eyes: tap to update your spot (the link works for 30 minutes): ${hereUrl(worker.id)}`,
           ),
-        unknown: () => messaging.sendText(phone, REPLY_TEXT.unknown),
+        location_share: () =>
+          messaging.sendText(
+            phone,
+            `Thanks! iMessage locations don't reach us, so tap this to update your spot: ${hereUrl(worker.id)}`,
+          ),
+        app: async () => {
+          appLinkSentAt.set(worker.id, now().getTime());
+          await messaging.sendText(phone, `Get the Eyes app: ${appUrl(await mintLocationCode(worker.id))}`);
+        },
+        install: () => reply.app(),
+        // ADR-027: the live capture link again. Newest claim first; a claim past its deadline
+        // stays 'claimed' until the sweep expires it, so the deadline is checked here.
+        task: async () => {
+          const earnings = await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: worker.id });
+          const claimed = earnings?.tasks.find((t) => t.status === "claimed");
+          const found = claimed && (await maybe<Detail>("eyes_task_detail", { p_task_id: claimed.task_id }));
+          const open = found && new Date(found.task.deadline_at) > now() ? found.task : null;
+          await messaging.sendText(
+            phone,
+            open
+              ? `Eyes: here is the link for your task: ${captureUrl(open, worker.id)}`
+              : "You have no open task right now. We'll text you when one is near.",
+          );
+        },
+        shortcut: async () => {
+          const code = await mintLocationCode(worker.id);
+          await messaging.sendText(
+            phone,
+            `Eyes: your location code is in the next text. Set up automatic location with these steps and paste the code where they say: ${config.worker_web_url}/automation.html Use one code per device; your earlier codes keep working (the 5 newest do). Text STOP to delete your location and turn all codes off.`,
+          );
+          await messaging.sendText(phone, code);
+        },
+        help: async () => {
+          const ticket = await maybe<Ticket>("eyes_open_ticket", {
+            p_worker_id: worker.id,
+            p_message: text,
+            p_now: nowIso(),
+          });
+          await messaging.sendText(
+            phone,
+            ticket
+              ? `Eyes: ticket #${ticket.id} opened. Someone will check your answer by hand and text you the outcome. Reply here to add details.`
+              : await hubReply(worker),
+          );
+        },
+        unknown: async () => {
+          const spot = parseMapLink(text);
+          if (spot === "short_link") {
+            return messaging.sendText(
+              phone,
+              `Eyes: short map links can't be read, so tap this to update your spot (the link works for 30 minutes): ${hereUrl(worker.id)}`,
+            );
+          }
+          if (spot) {
+            const outcome = await storeFix(worker.id, { ...spot, source: "map_link" }, null);
+            if (outcome === "stored") {
+              await messaging.sendText(
+                phone,
+                `Spot updated: near ${spot.lat.toFixed(2)}, ${spot.lng.toFixed(2)}.`,
+              );
+            } else if (outcome === "rate_limited") {
+              await messaging.sendText(
+                phone,
+                `Eyes: your spot was updated less than ${config.location_min_interval_s} seconds ago. Send the link again in a minute.`,
+              );
+            }
+            return;
+          }
+          const ticket = await maybe<Ticket>("eyes_append_ticket", {
+            p_worker_id: worker.id,
+            p_message: text,
+          });
+          await messaging.sendText(
+            phone,
+            ticket
+              ? `Eyes: added to ticket #${ticket.id}. We will text you the outcome.`
+              : `Didn't catch that. Reply YES to take a task or STOP to pause. Your setup: ${meUrl(worker.id)}`,
+          );
+        },
       };
       await reply[intent]();
     },
 
-    async workerEarnings(token) {
+    async workerTasks(token, { q, status, cursor, tz }) {
       const workerId = tokenPayload(token, "e");
       const e = workerId && (await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }));
-      if (!e) {
-        throw new EyesError(
-          "offer_invalid",
-          {},
-          {
-            message: "This earnings link is invalid or has expired.",
-            fix: "Text HELP to the Eyes number for a fresh link.",
-          },
-        );
-      }
+      if (!workerId || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      // The cursor is the last row's raw claimed_at (microseconds kept) and id: "<at>|<id>".
+      const [at, id] = (cursor ?? "").split("|");
+      const before = at && id && UUID.test(id) && !Number.isNaN(Date.parse(at)) ? { at, id } : null;
+      const rows = await rpc<TaskRow>("eyes_worker_tasks_page", {
+        p_worker_id: workerId,
+        p_limit: TASKS_PAGE + 1,
+        p_q: q || null,
+        p_filter: status ?? null,
+        p_tz: zoneOf(tz),
+        p_before_at: before?.at ?? null,
+        p_before_id: before?.id ?? null,
+      });
+      const shown = rows.slice(0, TASKS_PAGE);
+      const last = shown.at(-1);
       return {
         paid_usd: centsToUsd(e.paid_cents),
         pending_usd: centsToUsd(e.pending_cents),
-        tasks: e.tasks.map((t) => ({
+        tasks: shown.map((t) => ({
           task_id: t.task_id,
+          question: t.question,
           place_label: t.place_label,
           status: t.status,
           bounty_usd: centsToUsd(t.bounty_cents),
+          // The payout label rule (ADR-020).
           payout: t.paid_at
             ? "paid"
             : !t.released
@@ -892,8 +1204,50 @@ export function createEyesService(deps: EngineDeps): EyesService {
                 ? "pending"
                 : "waiting_for_payout_setup",
           claimed_at: iso(t.claimed_at),
-          paid_at: t.paid_at && iso(t.paid_at),
         })),
+        next_cursor: rows.length > TASKS_PAGE && last ? `${last.claimed_at}|${last.task_id}` : null,
+      } satisfies WorkerTasks;
+    },
+
+    async workerSetup(token) {
+      const workerId = tokenPayload(token, "e");
+      const [w, e] = workerId
+        ? await Promise.all([
+            maybe<Worker & { location_source: string | null }>("eyes_worker", {
+              p_worker_id: workerId,
+              p_phone: null,
+            }),
+            maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }),
+          ])
+        : [];
+      if (!w || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      // Same spot rule as START: a fix, or the sign-up location until the first fix.
+      const at = w.lat === null ? null : iso(w.location_at ?? w.created_at);
+      const fresh = at !== null && now().getTime() - Date.parse(at) <= config.location_max_age_h * 3_600_000;
+      const app = w.location_source === "app";
+      return {
+        opted_in: w.opted_in,
+        spot: { at, fresh, max_age_h: config.location_max_age_h },
+        app: { last_at: app ? at : null, sending: app && fresh },
+        payouts: {
+          set_up: e.payouts_set_up,
+          live: config.live_payouts,
+          setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
+        },
+        here_url: hereUrl(w.id),
+      };
+    },
+
+    async workerInstallLink(token) {
+      const workerId = tokenPayload(token, "e");
+      const w = workerId
+        ? await maybe<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null })
+        : undefined;
+      // Codes only work for an opted-in worker (eyes_rotate_location_token skips the others).
+      if (!w?.opted_in) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      const code = await mintLocationCode(w.id);
+      return {
+        install_url: appUrl(code),
       };
     },
 
@@ -985,21 +1339,24 @@ export function createEyesService(deps: EngineDeps): EyesService {
         if (lost && photo_url && !faces) await dropPhoto();
         throw err;
       });
+      await storeFix(workerId, { ...capture, source: "capture" }, null).catch((err) =>
+        console.error(`location from capture for task ${task.id} failed: ${errorName(err)}`),
+      );
       const worker = await one<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null });
       const settled = await settle(submitted, worker);
       const amount = dollars(settled.bounty_cents);
       const message =
         settled.status === "needs_review"
-          ? `Thanks, we got it. Your answer needs a quick manual check (${v.vision_reason}). ${config.live_payouts ? "You will be paid once it is approved." : SIMULATED_PAY}`
+          ? `Thanks, we got it. Your answer needs a quick manual check (${v.vision_reason}). ${config.live_payouts ? "You will be paid once it is approved." : SIMULATED_PAY} To request a manual review, reply HELP to the Eyes text.`
           : !config.live_payouts
             ? `Verified. ${SIMULATED_PAY}`
             : settled.status === "paid"
               ? `Verified and paid. ${amount} is on its way to your account. Thank you!`
               : worker.stripe_account_id
-                ? `Verified. Your ${amount} payout did not go through yet; it will be retried.`
+                ? `Your ${amount} payout did not go through yet; it will be retried.`
                 : worker.opted_in
-                  ? `Verified. We texted you a link to set up payouts; your ${amount} is sent automatically once that is done.`
-                  : `Verified. To get your ${amount}, set up payouts here: ${connectUrl(worker.id)}`;
+                  ? `We texted you a link to set up payouts; your ${amount} is sent automatically once that is done.`
+                  : `To get your ${amount}, set up payouts here: ${connectUrl(worker.id)}`;
       return {
         task_id: settled.id,
         status: settled.status,
@@ -1011,6 +1368,71 @@ export function createEyesService(deps: EngineDeps): EyesService {
         },
         message,
       };
+    },
+
+    async updateWorkerLocation(token, input) {
+      const fix = parse(WorkerLocationInput, input);
+      const workerId = token.includes(".")
+        ? tokenPayload(token, "l")
+        : (await maybe<Worker>("eyes_worker_by_location_token", { p_token_hash: sha256(token) }))?.id;
+      const outcome = workerId
+        ? await storeFix(workerId, fix, PING_IN_INPUT.exec(fix.input ?? "")?.[1]?.toLowerCase() ?? null)
+        : "not_found";
+      if (outcome === "not_found") {
+        throw new EyesError(
+          "unauthorized",
+          {},
+          {
+            message: "This location link or code is invalid or has expired.",
+            fix: "Text HELP to the Eyes number for a fresh link.",
+          },
+        );
+      }
+      if (outcome === "rate_limited") {
+        const wait = config.location_min_interval_s;
+        throw new EyesError(
+          "rate_limited",
+          { retry_after_s: wait },
+          { fix: `Wait ${wait} seconds and send again.` },
+        );
+      }
+    },
+
+    async workerDevice(code) {
+      const w = await maybe<Worker & { location_source: string | null }>("eyes_worker_by_location_token", {
+        p_token_hash: sha256(code),
+      });
+      if (!w) throw new EyesError("unauthorized", {}, DEVICE_LINK_EXPIRED);
+      const workerId = w.id;
+      const devices = await rpc<{ released_at: string | null }>("eyes_worker_devices", {
+        p_worker_id: workerId,
+      });
+      const ticket = signToken(
+        config.link_secret,
+        `d:${workerId}`,
+        new Date(now().getTime() + HERE_LINK_MS * 2),
+      );
+      return {
+        profile_url: `${config.public_api_url}/w/device/profile/${ticket}`,
+        registered: devices.length > 0,
+        ready: devices.some((d) => d.released_at !== null),
+        // The install page's done signal: the app sent a fix in the last 10 minutes.
+        app_connected:
+          w.location_source === "app" &&
+          w.location_at !== null &&
+          now().getTime() - Date.parse(w.location_at) <= 10 * 60_000,
+      };
+    },
+
+    async addWorkerDevice(ticket, device) {
+      const workerId = tokenPayload(ticket, "d");
+      if (!workerId) throw new EyesError("unauthorized", {}, DEVICE_LINK_EXPIRED);
+      await rpc("eyes_add_worker_device", {
+        p_worker_id: workerId,
+        p_udid: device.udid,
+        p_product: device.product,
+        p_os_version: device.version,
+      });
     },
 
     async expireOverdue() {
@@ -1027,17 +1449,80 @@ export function createEyesService(deps: EngineDeps): EyesService {
       return { paid };
     },
 
-    async resolveTask(task_id, decision, note) {
-      const input = parse(ResolveInput, { task_id, decision, note });
-      const resolved = await one<Task>("eyes_resolve_task", {
-        p_task_id: input.task_id,
-        p_decision: input.decision,
-        p_note: input.note,
+    resolveTask,
+
+    async resolveTicket(input) {
+      const { ticket_id, outcome, note } = parse(ResolveTicketInput, input);
+      const ticket = await one<Ticket>("eyes_resolve_ticket", {
+        p_ticket_id: ticket_id,
+        p_note: note,
         p_now: nowIso(),
       });
-      const worker = await one<Worker>("eyes_worker", { p_worker_id: resolved.claimed_by, p_phone: null });
-      const settled = await settle(resolved, worker);
-      return { task_id: settled.id, status: settled.status };
+      const worker = await one<Worker>("eyes_worker", { p_worker_id: ticket.worker_id, p_phone: null });
+      const body = [`Eyes: ticket #${ticket.id} is resolved.`, TICKET_OUTCOME[outcome], `Note: ${note}`];
+      await textWorker(worker, ticket.task_id, () =>
+        messaging.sendText(worker.phone, body.filter(Boolean).join(" ")),
+      );
+      return { ticket_id: Number(ticket.id), task_id: ticket.task_id, status: "resolved" };
+    },
+
+    async confirmFraud(input) {
+      const { ticket_id, note } = parse(DisputeDecision, input);
+      const r = await one<FraudRow>("eyes_confirm_fraud", {
+        p_ticket_id: ticket_id,
+        p_note: note,
+        p_now: nowIso(),
+      });
+      const { ticket } = r;
+      let owed = ticket.reversal_owed_cents === null ? null : Number(ticket.reversal_owed_cents);
+      let reversal: DisputeOutcome["reversal"] = owed ? "owed" : "none";
+      if (!r.already && r.transfer_id && r.payout_cents) {
+        try {
+          await payments.reverseTransfer({
+            transfer_id: r.transfer_id,
+            amount_cents: Number(r.payout_cents),
+            idempotency_key: `reverse-${ticket.task_id}`,
+          });
+          reversal = "reversed";
+        } catch (err) {
+          // Usually balance_insufficient: the worker already moved the money out. Recorded as owed.
+          const code = err instanceof Error && "code" in err ? String(err.code) : errorName(err);
+          console.error(`transfer reversal for task ${ticket.task_id} failed: ${code}`);
+          owed = Number(r.payout_cents);
+          reversal = "owed";
+          await rpc("eyes_record_reversal", { p_ticket_id: ticket_id, p_owed_cents: owed });
+        }
+      }
+      return {
+        ticket_id: Number(ticket.id),
+        task_id: ticket.task_id,
+        dispute_status: "upheld",
+        agent_refund_cents: r.already ? 0 : Number(r.refund_cents ?? 0),
+        reversal,
+        reversal_owed_cents: owed,
+        worker_banned: true,
+        already_resolved: r.already,
+      };
+    },
+
+    async rejectDispute(input) {
+      const { ticket_id, note } = parse(DisputeDecision, input);
+      const r = await one<{ ticket: DisputeTicket; already: boolean }>("eyes_reject_dispute", {
+        p_ticket_id: ticket_id,
+        p_note: note,
+        p_now: nowIso(),
+      });
+      if (!r.already) await resolveTask(r.ticket.task_id, "release", `dispute rejected: ${note}`);
+      return {
+        ticket_id: Number(r.ticket.id),
+        task_id: r.ticket.task_id,
+        dispute_status: "rejected",
+        agent_refund_cents: 0,
+        reversal: "none",
+        reversal_owed_cents: null,
+        worker_banned: false,
+        already_resolved: r.already,
+      };
     },
   };
 }

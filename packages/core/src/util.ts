@@ -6,6 +6,17 @@ export const centsToUsd = (cents: number): number => cents / 100;
 
 const EARTH_RADIUS_M = 6_371_000;
 
+const COORDS = /^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/;
+
+/**
+ * A place label people can read. Agents that ask by coordinates get a "lat,lng" label; people see it
+ * as "Near 37.761, -122.386", rounded to 3 decimals (about 100 m) so pages never show exact points.
+ */
+export function placeName(label: string): string {
+  const m = COORDS.exec(label);
+  return m ? `Near ${Number(m[1]).toFixed(3)}, ${Number(m[2]).toFixed(3)}` : label;
+}
+
 export function distanceMeters(a: LatLng, b: LatLng): number {
   const rad = (d: number) => (d * Math.PI) / 180;
   const dLat = rad(b.lat - a.lat);
@@ -53,4 +64,48 @@ export function agentIdFromEmailAddress(secret: string, address: string): string
   const expected = Buffer.from(emailMac(secret, agentId).toLowerCase());
   const given = Buffer.from(m[2]);
   return expected.length === given.length && timingSafeEqual(expected, given) ? agentId : null;
+}
+
+const URLISH = /(?:https?:\/\/)?(?:[\w-]+\.)+[a-z]{2,}(?:[/?]\S*)?/gi;
+const PAIR = /^(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)/;
+// Copied coordinates have 4-6 decimals; 3+ keeps prices like "4.50, 3.20" from moving a spot.
+const PLAIN_PAIR = /(?<![\w.-])-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}(?![\w.])/;
+
+// Same checks as POST /w/location: in range, and not 0,0.
+function pin(value: string | null | undefined): LatLng | null {
+  const m = value ? PAIR.exec(value.trim()) : null;
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lng = Number(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat !== 0 || lng !== 0) ? { lat, lng } : null;
+}
+
+/**
+ * Coordinates from an Apple or Google Maps link, or a plain "lat, lng" decimal pair, anywhere in a text.
+ * Never fetches anything: short links (maps.app.goo.gl, goo.gl/maps) carry no coordinates, so they
+ * come back as "short_link".
+ */
+export function parseMapLink(text: string): LatLng | "short_link" | null {
+  let short = false;
+  for (const [raw] of text.matchAll(URLISH)) {
+    let url: URL;
+    try {
+      url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    } catch {
+      continue;
+    }
+    const host = url.hostname.replace(/^www\./, "");
+    const q = (key: string) => url.searchParams.get(key);
+    if (host === "maps.app.goo.gl" || (host === "goo.gl" && url.pathname.startsWith("/maps"))) short = true;
+    const candidates =
+      host === "maps.apple.com"
+        ? [q("coordinate"), q("ll"), q("q"), q("sll")]
+        : /^(maps\.)?google\.[a-z.]+$/.test(host) &&
+            (host.startsWith("maps.") || url.pathname.startsWith("/maps"))
+          ? [/\/@([^/]+)/.exec(url.pathname)?.[1], q("q"), q("query"), q("ll")]
+          : [];
+    const found = candidates.map(pin).find((p) => p !== null);
+    if (found) return found;
+  }
+  return pin(PLAIN_PAIR.exec(text.replace(URLISH, " "))?.[0]) ?? (short ? "short_link" : null);
 }

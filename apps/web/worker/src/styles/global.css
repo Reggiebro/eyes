@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import "@fontsource-variable/instrument-sans";
+@import "@eyes/ui/tailwind.css";
+
+/* Site chrome only. Everything reusable lives in @eyes/ui. */
+
+html {
+  /* The site head (@eyes/ui .ui-site-head) is as wide as the page column, so the wordmark starts
+     where the page text starts. Wide pages (design references) widen both. */
+  --ui-column: calc(var(--eyes-measure) + 2 * var(--eyes-space-5));
+  background: var(--eyes-surface);
+}
+
+html:has(.page--wide) {
+  --ui-column: 72rem;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+.page {
+  display: grid;
+  gap: var(--eyes-space-6);
+  width: 100%;
+  max-width: var(--ui-column);
+  margin: 0 auto;
+  padding: var(--eyes-space-6) var(--eyes-space-5) var(--eyes-space-10);
+}
+
+.page > section {
+  display: grid;
+  gap: var(--eyes-space-4);
+}
+
+.hero-title {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 2.75rem);
+  font-weight: var(--eyes-weight-semibold);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.lede {
+  margin: 0;
+  color: var(--eyes-text-secondary);
+  font-size: var(--eyes-text-lg);
+  text-wrap: pretty;
+}
+
+.prose {
+  display: grid;
+  gap: var(--eyes-space-3);
+}
+
+.prose ul {
+  display: grid;
+  gap: var(--eyes-space-2);
+  margin: 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
+.prose p {
+  margin: 0;
+}

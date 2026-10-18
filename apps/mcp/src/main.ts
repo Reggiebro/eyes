@@ -6,92 +6,167 @@ import { createInsforgeStorage, createRpc } from "@eyes/db";
 import { createEyesService } from "@eyes/engine";
 import { createStripePayments } from "@eyes/payments";
 import { createAssessTask } from "@eyes/safety";
-import { createClaudeVision, verifySubmission } from "@eyes/verify";
+import { createClaudeVision, createClefVision, verifySubmission } from "@eyes/verify";
+import {
+  captureConsole,
+  clickHouseConfig,
+  createClickHouseSink,
+  createEventLog,
+  mirrorTriggerEvents,
+} from "@eyes/web-dashboard";
 import { z } from "zod";
 import { createNominatimGeo } from "./geo.ts";
 import { toNodeListener } from "./http.ts";
+import { instrumentAssess, instrumentProviders, instrumentService } from "./instrument.ts";
 import { createSandboxService } from "./sandbox.ts";
 import { createServer, liveProviders } from "./server.ts";
+import { withShortLinks } from "./short-links.ts";
 
 const EXPIRE_EVERY_MS = 30_000;
+/** Longest SIGTERM drain; most await_answer long polls finish inside it. */
+export const DRAIN_MS = 10_000;
 
-function exit(message: string): never {
+type Exit = (message: string) => never;
+/* v8 ignore start -- process exit: only the spawned boot in main.test.ts reaches it */
+const fail: Exit = (message) => {
   console.error(message);
   process.exit(1);
-}
-
-const env = process.env;
-
-const live = liveProviders(env);
-
-const parsed = AppConfig.safeParse({
-  public_api_url: env.EYES_PUBLIC_API_URL,
-  worker_web_url: env.EYES_WORKER_WEB_URL,
-  link_secret: env.EYES_LINK_SECRET,
-  test_mode: env.EYES_TEST_MODE ? env.EYES_TEST_MODE === "true" : undefined,
-  email_domain: env.PRIMITIVE_DOMAIN || undefined,
-  email_delivery: live.email,
-  live_payouts: live.payments,
-});
-if (!parsed.success) exit(`Invalid EYES_* environment (see .env.example):\n${z.prettifyError(parsed.error)}`);
-const config = parsed.data;
-
-const sandbox = env.EYES_SANDBOX === "1";
-if (sandbox && (env.EYES_PROVIDERS === "live" || env.EYES_FAKE_WEBHOOKS || env.ANTHROPIC_API_KEY)) {
-  exit(
-    "EYES_SANDBOX=1 gives an agent with play money to anyone who calls without a key, and its simulated worker answers every task, so it runs only with every provider fake and no billed key: unset EYES_PROVIDERS=live, EYES_FAKE_WEBHOOKS and ANTHROPIC_API_KEY. Never set EYES_SANDBOX on the live server.",
-  );
-}
-if (env.EYES_PROVIDERS === "live" && !env.ANTHROPIC_API_KEY) {
-  exit(
-    "EYES_PROVIDERS=live needs ANTHROPIC_API_KEY: without it the safety classifier and photo verification are off. Set ANTHROPIC_API_KEY, or run with EYES_PROVIDERS=fake.",
-  );
-}
-if (env.EYES_PROVIDERS === "live" && Boolean(env.INSFORGE_BASE_URL) !== Boolean(env.INSFORGE_API_KEY)) {
-  exit(
-    "Live photo storage needs both INSFORGE_BASE_URL and INSFORGE_API_KEY. Set both, or unset both to keep fake storage.",
-  );
-}
-if (env.EYES_OPS_KEY && env.EYES_OPS_KEY.length < 32) {
-  exit("EYES_OPS_KEY must be at least 32 random characters. Leave it empty to keep the ops dashboard off.");
-}
-const port = env.PORT ? Number(env.PORT) : 3000;
-if ((env.PORT && !/^\d+$/.test(env.PORT)) || port > 65535) {
-  exit(`PORT must be an integer from 0 to 65535, got "${env.PORT}".`);
-}
-
-const db: DbConfig = env.DATABASE_URL
-  ? { kind: "postgres", url: env.DATABASE_URL }
-  : env.INSFORGE_BASE_URL && env.INSFORGE_API_KEY
-    ? { kind: "insforge", base_url: env.INSFORGE_BASE_URL, api_key: env.INSFORGE_API_KEY }
-    : exit("Set DATABASE_URL, or INSFORGE_BASE_URL and INSFORGE_API_KEY.");
-
-const fakes = fakeProviders();
-const providers: Providers = {
-  messaging: live.messaging ? createInkboxMessaging(env) : fakes.messaging,
-  email: live.email ? createPrimitiveEmail(env) : fakes.email,
-  payments: live.payments ? createStripePayments(env) : fakes.payments,
-  storage: live.storage ? createInsforgeStorage(env) : fakes.storage,
-  vision: live.vision ? createClaudeVision(env) : fakes.vision,
-  geo: live.geo ? createNominatimGeo() : fakes.geo,
-  clock: { now: () => new Date() },
 };
-for (const name of Object.keys(live) as (keyof typeof live)[])
-  console.log(`provider ${name}: ${providers[name] === fakes[name] ? "FAKE" : "live"}`);
-console.log(`db: ${db.kind}`);
+/* v8 ignore stop */
 
-const engine = { db, providers, assessTask: createAssessTask(env), verifySubmission, config };
-const service = sandbox ? createSandboxService(engine) : createEyesService(engine);
+/** Boots the API from env. Returns the HTTP server and a stop() for tests; `exit` reports a bad env. */
+export function start(env: Record<string, string | undefined>, exit: Exit = fail) {
+  const live = liveProviders(env);
 
-setInterval(() => {
-  service.expireOverdue().catch((err) => console.error("expireOverdue failed", err));
-  service.retryPayouts().catch((err) => console.error("retryPayouts failed", err));
-}, EXPIRE_EVERY_MS);
+  const parsed = AppConfig.safeParse({
+    public_api_url: env.EYES_PUBLIC_API_URL,
+    worker_web_url: env.EYES_WORKER_WEB_URL,
+    link_secret: env.EYES_LINK_SECRET,
+    test_mode: env.EYES_TEST_MODE ? env.EYES_TEST_MODE === "true" : undefined,
+    dispatch_radius_m: env.EYES_DISPATCH_RADIUS_M ? Number(env.EYES_DISPATCH_RADIUS_M) : undefined,
+    location_max_age_h: env.EYES_LOCATION_MAX_AGE_H ? Number(env.EYES_LOCATION_MAX_AGE_H) : undefined,
+    location_ping: env.EYES_LOCATION_PING ? env.EYES_LOCATION_PING === "true" : undefined,
+    location_min_interval_s: env.EYES_LOCATION_MIN_INTERVAL_S
+      ? Number(env.EYES_LOCATION_MIN_INTERVAL_S)
+      : undefined,
+    location_daily_max: env.EYES_LOCATION_DAILY_MAX ? Number(env.EYES_LOCATION_DAILY_MAX) : undefined,
+    testflight_url: env.EYES_TESTFLIGHT_URL || undefined,
+    email_domain: env.PRIMITIVE_DOMAIN || undefined,
+    email_delivery: live.email,
+    live_payouts: live.payments,
+  });
+  if (!parsed.success)
+    exit(`Invalid EYES_* environment (see .env.example):\n${z.prettifyError(parsed.error)}`);
+  const config = parsed.data;
 
-const server = createServer({ service, providers, config, env, rpc: createRpc(db) });
-const host = env.HOST || "0.0.0.0";
-const http = createHttpServer(toNodeListener(server.fetch));
-http.listen(port, host, () => {
-  const bound = (http.address() as AddressInfo).port;
-  console.log(`Eyes MCP listening on http://${host}:${bound}/mcp`);
-});
+  const clef = Boolean(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN);
+  const sandbox = env.EYES_SANDBOX === "1";
+  if (sandbox && (env.EYES_PROVIDERS === "live" || env.EYES_FAKE_WEBHOOKS || env.ANTHROPIC_API_KEY || clef)) {
+    exit(
+      "EYES_SANDBOX=1 gives an agent with play money to anyone who calls without a key, and its simulated worker answers every task, so it runs only with every provider fake and no billed key: unset EYES_PROVIDERS=live, EYES_FAKE_WEBHOOKS, ANTHROPIC_API_KEY and CLOUDFLARE_API_TOKEN. Never set EYES_SANDBOX on the live server.",
+    );
+  }
+  if (env.EYES_PROVIDERS === "live" && !clef && !env.ANTHROPIC_API_KEY) {
+    exit(
+      "EYES_PROVIDERS=live needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (clef) or ANTHROPIC_API_KEY: without one the safety classifier and photo verification are off. Set them, or run with EYES_PROVIDERS=fake.",
+    );
+  }
+  if (env.EYES_PROVIDERS === "live" && Boolean(env.INSFORGE_BASE_URL) !== Boolean(env.INSFORGE_API_KEY)) {
+    exit(
+      "Live photo storage needs both INSFORGE_BASE_URL and INSFORGE_API_KEY. Set both, or unset both to keep fake storage.",
+    );
+  }
+  if (env.EYES_OPS_KEY && env.EYES_OPS_KEY.length < 32) {
+    exit(
+      "EYES_OPS_KEY must be at least 32 random characters. Leave it empty to turn off the break-glass ops link.",
+    );
+  }
+  const port = env.PORT ? Number(env.PORT) : 3000;
+  if ((env.PORT && !/^\d+$/.test(env.PORT)) || port > 65535) {
+    exit(`PORT must be an integer from 0 to 65535, got "${env.PORT}".`);
+  }
+
+  const db: DbConfig = env.DATABASE_URL
+    ? { kind: "postgres", url: env.DATABASE_URL }
+    : env.INSFORGE_BASE_URL && env.INSFORGE_API_KEY
+      ? { kind: "insforge", base_url: env.INSFORGE_BASE_URL, api_key: env.INSFORGE_API_KEY }
+      : exit("Set DATABASE_URL, or INSFORGE_BASE_URL and INSFORGE_API_KEY.");
+
+  const fakes = fakeProviders();
+  const providers: Providers = {
+    messaging: live.messaging ? createInkboxMessaging(env) : fakes.messaging,
+    email: live.email ? createPrimitiveEmail(env) : fakes.email,
+    payments: live.payments ? createStripePayments(env) : fakes.payments,
+    storage: live.storage ? createInsforgeStorage(env) : fakes.storage,
+    vision: live.vision ? (clef ? createClefVision(env) : createClaudeVision(env)) : fakes.vision,
+    geo: live.geo ? createNominatimGeo() : fakes.geo,
+    clock: { now: () => new Date() },
+  };
+  for (const name of Object.keys(live) as (keyof typeof live)[])
+    console.log(`provider ${name}: ${providers[name] === fakes[name] ? "FAKE" : "live"}`);
+  console.log(`db: ${db.kind}`);
+
+  const rpc = createRpc(db);
+  if (live.messaging)
+    providers.messaging = withShortLinks(providers.messaging, rpc, config, providers.clock.now);
+  const chConfig = clickHouseConfig(env);
+  const clickhouse = chConfig ? createClickHouseSink(chConfig) : undefined;
+  if (clickhouse) mirrorTriggerEvents(rpc, clickhouse.push);
+  console.log(`clickhouse: ${chConfig ? `${chConfig.url} (${chConfig.database})` : "off"}`);
+  const events = createEventLog(rpc, 500, 2000, clickhouse ? [clickhouse.push] : []);
+  captureConsole(events.log);
+  const logged = instrumentProviders(providers, events.log);
+
+  const deps = {
+    db,
+    providers: logged,
+    assessTask: instrumentAssess(createAssessTask(env), events.log),
+    verifySubmission,
+    config,
+  };
+  const engine = sandbox ? createSandboxService(deps) : createEyesService(deps);
+  const service = instrumentService(engine, events.log);
+
+  const sweep = setInterval(() => {
+    service.expireOverdue().catch((err) => console.error("expireOverdue failed", err));
+    service.retryPayouts().catch((err) => console.error("retryPayouts failed", err));
+  }, EXPIRE_EVERY_MS);
+
+  const server = createServer({ service, providers: logged, config, env, rpc, events, clickhouse });
+  const host = env.HOST || "0.0.0.0";
+  const http = createHttpServer(toNodeListener(server.fetch));
+  http.listen(port, host, () => {
+    const bound = (http.address() as AddressInfo).port;
+    console.log(`Eyes MCP listening on http://${host}:${bound}/mcp`);
+  });
+  const stop = () => {
+    clearInterval(sweep);
+    http.close();
+  };
+  return { http, stop };
+}
+
+/**
+ * A rollout SIGTERMs the container and waits up to 15 min before SIGKILL. As PID 1, node ignores
+ * SIGTERM without a handler, so every deploy would wait the full 15 min. This one stops new
+ * connections, lets in-flight requests finish, and exits after at most DRAIN_MS.
+ */
+export function onSigterm(
+  http: { once(event: "close", listener: () => void): unknown },
+  stop: () => void,
+  exit: (code: number) => void = process.exit,
+) {
+  return () => {
+    console.log(`SIGTERM: draining for up to ${DRAIN_MS / 1000} s`);
+    http.once("close", () => exit(0));
+    stop();
+    setTimeout(() => exit(0), DRAIN_MS);
+  };
+}
+
+/* v8 ignore start -- process entry: the spawned boots in main.test.ts run it */
+if (import.meta.main) {
+  const { http, stop } = start(process.env);
+  process.once("SIGTERM", onSigterm(http, stop));
+}
+/* v8 ignore stop */

@@ -26,14 +26,27 @@ export interface Messaging {
       task_id: string;
       place_label: string;
       amount_cents: number;
-      earnings_url: string;
+      me_url: string;
       live_payouts: boolean;
     },
   ): Promise<SentMessage>;
   sendText(to: string, body: string): Promise<SentMessage>;
 }
 
-export const REPLY_INTENTS = ["yes", "no", "stop", "start", "help", "unknown"] as const;
+export const REPLY_INTENTS = [
+  "yes",
+  "no",
+  "stop",
+  "start",
+  "help",
+  "here",
+  "shortcut",
+  "app",
+  "install",
+  "task",
+  "location_share",
+  "unknown",
+] as const;
 export type ReplyIntent = (typeof REPLY_INTENTS)[number];
 
 export type EmailAttachment = { filename: string; content_type: string; url: string };
@@ -81,6 +94,11 @@ export interface Payments {
     task_id: string;
     idempotency_key: string;
   }): Promise<{ transfer_id: string }>;
+  // Reverses a payout transfer (confirmed fraud). Throws when Stripe refuses, e.g. the connected
+  // account has no balance left (code balance_insufficient).
+  reverseTransfer(i: { transfer_id: string; amount_cents: number; idempotency_key: string }): Promise<{
+    reversal_id: string;
+  }>;
   parseWebhook(rawBody: string, signature: string | null): Promise<PaymentsEvent | null>;
 }
 
@@ -89,17 +107,12 @@ export interface Storage {
   deletePhoto(i: { key: string }): Promise<void>;
 }
 
-export type VisionJudgeInput = {
-  question: string;
-  task_type: TaskType;
-  place_label: string;
-  photo_url: string;
-  answer_text: string | null;
-  answer_bool: boolean | null;
-};
+// Moderation only: the photo is judged on whether it is safe to share, never on whether it
+// answers the question (ADR-025).
+export type VisionJudgeInput = { photo_url: string };
 
 export type VisionVerdict = {
-  answers_question: boolean;
+  allowed: boolean;
   reason: string;
   prominent_faces: boolean;
   confidence: number;

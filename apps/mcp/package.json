@@ -6,8 +6,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/main.ts",
-    "dev": "node --watch src/main.ts",
+    "start": "node --no-experimental-webstorage src/main.ts",
+    "dev": "node --no-experimental-webstorage --watch src/main.ts",
     "build": "mcp-use build --inline --entry views/entry.ts"
   },
   "dependencies": {
@@ -17,8 +17,10 @@
     "@eyes/engine": "workspace:*",
     "@eyes/payments": "workspace:*",
     "@eyes/safety": "workspace:*",
+    "@eyes/ui": "workspace:*",
     "@eyes/verify": "workspace:*",
     "@eyes/web-dashboard": "workspace:*",
+    "@fontsource-variable/instrument-sans": "5.3.0",
     "hono": "4.13.13",
     "mcp-use": "2.10.0",
     "zod": "4.6.7"

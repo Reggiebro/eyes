@@ -3,12 +3,50 @@ import { createServer } from "node:http";
 import type { DbConfig } from "@eyes/core";
 import { createRpc, type Rpc } from "@eyes/db";
 
-export const PAGE = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+export const UI_CSS = ["tokens.css", "components.css"]
+  .map((file) => readFileSync(new URL(`../../../../packages/ui/${file}`, import.meta.url), "utf8"))
+  .join("\n");
+// Both pages inline the shared tokens and components (ui-mark) in place of /* @eyes/ui */.
+export const PAGE = readFileSync(new URL("./index.html", import.meta.url), "utf8").replace(
+  "/* @eyes/ui */",
+  () => UI_CSS,
+);
+// The ops page script lives in ops-view/*.ts (unit-tested). scripts/build-ops-view.ts joins it into one IIFE
+// (the page CSP allows one hashed inline script); the server only reads the built file.
+const OPS_SCRIPT = readFileSync(new URL("./ops-view.gen.js", import.meta.url), "utf8");
+export const OPS_PAGE = readFileSync(new URL("./ops.html", import.meta.url), "utf8")
+  .replace("/* @eyes/ui */", () => UI_CSS)
+  .replace("/* @eyes/ops-view */", () => OPS_SCRIPT)
+  // The outline icons the page references with <use href="#i-…">.
+  .replace("<!-- @eyes/icons -->", () =>
+    readFileSync(new URL("../../../../packages/ui/icons.svg", import.meta.url), "utf8"),
+  );
+export {
+  buildSeries,
+  type ClickHouseSink,
+  clickHouseConfig,
+  createClickHouseSink,
+  fallbackRows,
+  mirrorTriggerEvents,
+  readClickHouseSeries,
+  type Series,
+} from "./clickhouse.ts";
+export {
+  captureConsole,
+  createEventLog,
+  type EventLog,
+  type Feed,
+  type LoggedEvent,
+  type OpsEvent,
+  redact,
+  summarize,
+} from "./ops.ts";
+
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const FEED_LIMIT = 50;
 
-export async function readFeed(rpc: Rpc) {
-  const [feed] = await rpc<Record<string, unknown>>("eyes_dashboard_feed", { p_limit: FEED_LIMIT });
+export async function readFeed(rpc: Rpc, limit = FEED_LIMIT) {
+  const [feed] = await rpc<Record<string, unknown>>("eyes_dashboard_feed", { p_limit: limit });
   return feed;
 }
 
@@ -39,14 +77,24 @@ export function createDashboardServer(rpc: Rpc) {
   });
 }
 
-if (import.meta.main) {
-  const { DATABASE_URL, INSFORGE_BASE_URL, INSFORGE_API_KEY, PORT = "4400" } = process.env;
-  let db: DbConfig;
-  if (DATABASE_URL) db = { kind: "postgres", url: DATABASE_URL };
-  else if (INSFORGE_BASE_URL && INSFORGE_API_KEY)
-    db = { kind: "insforge", base_url: INSFORGE_BASE_URL, api_key: INSFORGE_API_KEY };
-  else throw new Error("Set DATABASE_URL, or INSFORGE_BASE_URL and INSFORGE_API_KEY, to read the feed.");
-  createDashboardServer(createRpc(db)).listen(Number(PORT), "127.0.0.1", () =>
-    console.log(`EYES dashboard on http://127.0.0.1:${PORT}`),
+export function dbFromEnv(env: Record<string, string | undefined>): DbConfig {
+  const { DATABASE_URL, INSFORGE_BASE_URL, INSFORGE_API_KEY } = env;
+  if (DATABASE_URL) return { kind: "postgres", url: DATABASE_URL };
+  if (INSFORGE_BASE_URL && INSFORGE_API_KEY)
+    return { kind: "insforge", base_url: INSFORGE_BASE_URL, api_key: INSFORGE_API_KEY };
+  throw new Error("Set DATABASE_URL, or INSFORGE_BASE_URL and INSFORGE_API_KEY, to read the feed.");
+}
+
+export function startFromEnv(
+  env: Record<string, string | undefined>,
+  log: (line: string) => void = console.log,
+) {
+  const port = Number(env.PORT ?? "4400");
+  return createDashboardServer(createRpc(dbFromEnv(env))).listen(port, "127.0.0.1", () =>
+    log(`EYES dashboard on http://127.0.0.1:${port}`),
   );
 }
+
+/* v8 ignore start -- process entry: only runs when this file is the main module */
+if (import.meta.main) startFromEnv(process.env);
+/* v8 ignore stop */

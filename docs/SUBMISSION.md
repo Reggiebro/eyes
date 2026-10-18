@@ -28,12 +28,12 @@ Eyes is an MCP server where the agent is the customer and a nearby human is the 
 
 1. The agent calls `quote_task` to check coverage and price, then `ask_eyes` with a question, a place, a bounty (default $3) and a deadline. Eyes runs a safety check and escrows the bounty plus a $0.50 fee from the agent's prepaid balance.
 2. Eyes texts up to three nearby workers over iMessage. The first to reply YES gets a capture link that opens the camera and reads GPS.
-3. Eyes verifies the capture: within 150 m of the place, photo taken live before the deadline, and a vision model confirms the photo answers the question and shows no prominent faces.
+3. Eyes verifies the capture: within 150 m of the place, photo taken live before the deadline, and a moderation check confirms the photo is safe to share (no prominent faces, private spaces or personal details). Eyes does not judge whether the answer is correct; a human disputes wrong answers.
 4. The agent's `await_answer` call returns the answer, photo URL, distance, checks and a confidence score. The worker is paid $3 through Stripe Connect. If nobody answers, or the agent cancels before a claim, the full amount is refunded.
 
 The agent's human stays in control: per-key max bounty, daily cap and allowed task types, a top-up link, and an owner console the agent never sees, where they change the limits, freeze spending, add funds or replace a leaked API key. An agent that lost a `task_id` finds it with `list_tasks` instead of paying twice, `quote_task` suggests a bounty `ask_eyes` will accept, and the server's `/status` page says which parts are simulated.
 
-Workers reply YES to claim, NO to give a claimed task back (it is offered again to idle workers), STOP and START to opt out and back in, and HELP for a reply with a private earnings link.
+Workers reply YES to claim, NO to give a claimed task back (it is offered again to idle workers), STOP and START to opt out and back in, and HELP for a reply with a private link to their page: setup steps and every task they did, with totals and search.
 
 Tasks about private people, homes, vehicles or anything that identifies a person are refused with an error that tells the agent how to rephrase: deterministic rules catch homes and home addresses, and a Claude classifier handles the subtler cases. Both are live on the deployed server: on 2026-10-17 it refused "the woman in the red jacket" and "whether my ex is working the register" with reasons the classifier wrote. In `pnpm safety:eval` (also run in CI), the same rules and classifier blocked all 106 unsafe tasks among 200 labelled ones (recall 1.000, precision 0.946; 6 safe tasks over-blocked). Agents that live in an inbox can email their private Eyes address and get the answer back in the same thread with the photo attached.
 
@@ -77,7 +77,7 @@ Each agent gets its own Eyes email address at signup, a capability address with 
 
 Eyes' dispatcher is an Inkbox identity with an iMessage line: it sends the offer, receives the YES claim, sends the capture link and the paid confirmation. We followed Inkbox's rules: workers opt in by texting START (on Inkbox's shared line a worker first texts `connect @hackathon`, and the JOIN page shows both steps), the first message has no link and is at most 159 characters, and the inbound `imessage.received` webhook is signature-verified. The offer never includes the agent's question, so no free text from an agent reaches a stranger's phone before they claim.
 
-Workers can run their side by text alone. STOP gets one confirmation and then silence until START. HELP gets a short explanation plus a private earnings page link, and so does every paid text; links go only in replies to a worker who has already texted us, never in a cold offer. NO after YES gives the task back and re-offers it to the other offered workers who are idle, at most once each per task, so a worker cycling YES and NO cannot spend the line's daily send budget on texts to other people.
+Workers can run their side by text alone. STOP gets one confirmation and then silence until START. HELP gets a short explanation plus a private link to the worker's page (setup and every task, searchable), and so does every paid text; links go only in replies to a worker who has already texted us, never in a cold offer. NO after YES gives the task back and re-offers it to the other offered workers who are idle, at most once each per task, so a worker cycling YES and NO cannot spend the line's daily send budget on texts to other people.
 
 - **TODO** live fact: teammate iPhone received a live offer, replied YES and got the capture link on `<date/time>`.
 

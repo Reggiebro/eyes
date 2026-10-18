@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Eyes ops</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+/* @eyes/ui */
+body { margin: 0; background: var(--eyes-surface); min-height: 100vh; }
+.bar { position: sticky; top: 0; z-index: 1000; display: flex; align-items: center; gap: var(--eyes-space-4); padding: var(--eyes-space-3) var(--eyes-space-6); background: var(--eyes-surface); box-shadow: 0 1px 0 var(--eyes-border); }
+.brand { display: inline-flex; align-items: center; gap: var(--eyes-space-2); font-weight: var(--eyes-weight-semibold); font-size: var(--eyes-heading-sm); }
+.bar .spacer { flex: 1; }
+.bar a { color: var(--eyes-text-secondary); font-size: var(--eyes-text-sm); }
+main { padding: var(--eyes-space-4) var(--eyes-space-6) var(--eyes-space-6); }
+/* Viewport height left under the sticky chrome and main's padding; Overview and Workers fill it on wide screens. */
+:root { --fill: calc(100dvh - var(--chrome, 6.5rem) - var(--eyes-space-4) - var(--eyes-space-6)); }
+.panel { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--eyes-space-4); }
+.panel[hidden] { display: none; }
+/* Panels are layered by color, not outlined: cards on surface-secondary over the surface page, insets on tertiary. */
+.panel > .ui-card { max-width: none; align-content: start; background: var(--eyes-surface-secondary); box-shadow: none; }
+.c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; } .c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+@media (max-width: 1100px) { .panel > .ui-card { grid-column: span 12; } }
+@media (min-width: 1101px) {
+  /* Overview: the top row keeps its content height, Trends takes the rest. */
+  .overview { min-height: var(--fill); grid-template-rows: auto 1fr; }
+  .overview .trends { display: flex; flex-direction: column; }
+  .overview .charts { flex: 1; grid-auto-rows: 1fr; }
+  .overview .chart { grid-template-rows: auto auto auto 1fr; }
+  /* The svg is absolutely placed so its 100:40 viewBox ratio does not size the row; the plot takes the row. */
+  .overview .chart__plot { height: auto; min-height: 4.5rem; }
+  .overview .chart svg { position: absolute; inset: 0; }
+  /* Workers: the list card fills the screen and grows with the list (the page scrolls); the map card stays put. */
+  #p-workers { min-height: var(--fill); }
+  #p-workers .map-card { position: sticky; top: calc(var(--chrome, 6.5rem) + var(--eyes-space-4)); align-self: start; height: var(--fill); }
+}
+/* Tabs sit under the sticky bar; --bar-h and --chrome come from the script, since the bar wraps on phones. */
+.tabs { position: sticky; top: var(--bar-h, 3.5rem); z-index: 999; display: flex; gap: var(--eyes-space-1); overflow-x: auto; scrollbar-width: none; padding: 0 var(--eyes-space-6); background: var(--eyes-surface); border-bottom: 1px solid var(--eyes-border-subtle); }
+.tabs a { flex: none; display: inline-flex; align-items: center; gap: var(--eyes-space-1); padding: var(--eyes-space-3); color: var(--eyes-text-secondary); text-decoration: none; font-size: var(--eyes-text-sm); white-space: nowrap; border-bottom: 2px solid transparent; }
+.tabs a[aria-selected="true"] { color: var(--eyes-text); border-bottom-color: var(--eyes-accent); font-weight: var(--eyes-weight-semibold); }
+.tabs a:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: -2px; }
+.count:empty { display: none; }
+.count { padding: 0 0.4rem; border-radius: 999px; background: var(--eyes-surface-tertiary); font-size: var(--eyes-text-xs); font-variant-numeric: tabular-nums; }
+.count.hot { background: var(--eyes-danger-bg); color: var(--eyes-danger-text); }
+/* One scroller: the page. Lists grow; their filter bars stick under the tabs. Only the map and dialogs clip. */
+.fill { display: flex; flex-direction: column; gap: var(--eyes-space-3); }
+.grow { flex: 1; }
+#banner { margin-bottom: var(--eyes-space-4); }
+.ui-card__title { font-size: var(--eyes-text-md); }
+.sub { color: var(--eyes-text-secondary); font-size: var(--eyes-text-xs); font-weight: var(--eyes-weight-normal); }
+.big { font-size: var(--eyes-heading-xl); font-weight: var(--eyes-weight-semibold); line-height: 1; font-variant-numeric: tabular-nums; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--eyes-space-2); }
+.stat { padding: var(--eyes-space-2) var(--eyes-space-3); border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-tertiary); }
+.stat b { display: block; font-size: var(--eyes-heading-md); font-variant-numeric: tabular-nums; }
+.stat span { color: var(--eyes-text-secondary); font-size: var(--eyes-text-xs); }
+.flow span { font-size: var(--eyes-text-xs); color: var(--eyes-text-secondary); font-variant-numeric: tabular-nums; }
+.flow span + span::before { content: "→ "; color: var(--eyes-text-tertiary); }
+.stat.hot { background: var(--eyes-danger-bg); } .stat.hot b, .stat.hot span { color: var(--eyes-danger-text); }
+/* Live counts get an accent dot after the number, not an edge stripe (it read as a broken bracket). */
+.stat.live b::after { content: ""; display: inline-block; width: 0.5rem; height: 0.5rem; margin-left: var(--eyes-space-2); border-radius: 50%; background: var(--eyes-accent); vertical-align: middle; }
+.rows { display: grid; align-content: start; margin: 0; padding: 0; list-style: none; }
+.rows > li { padding: var(--eyes-space-3) 0; border-bottom: 1px solid var(--eyes-border-subtle); display: grid; gap: var(--eyes-space-1); }
+.rows > li:last-child { border-bottom: 0; }
+.task-head { display: flex; gap: var(--eyes-space-2); align-items: baseline; justify-content: space-between; }
+.q { margin: 0; font-weight: var(--eyes-weight-medium); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.muted { color: var(--eyes-text-secondary); font-size: var(--eyes-text-sm); }
+.tiny { color: var(--eyes-text-tertiary); font-size: var(--eyes-text-xs); font-variant-numeric: tabular-nums; }
+.line { display: flex; flex-wrap: wrap; gap: var(--eyes-space-1) var(--eyes-space-3); align-items: center; font-size: var(--eyes-text-sm); color: var(--eyes-text-secondary); }
+.line strong { color: var(--eyes-text); font-variant-numeric: tabular-nums; }
+.flow { display: flex; flex-wrap: wrap; gap: var(--eyes-space-1); }
+code, pre { font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); }
+.cmd { display: block; padding: var(--eyes-space-2) var(--eyes-space-3); border-radius: var(--eyes-radius-md); background: var(--eyes-surface-tertiary); user-select: all; overflow-x: auto; white-space: nowrap; }
+.err { font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); white-space: pre-wrap; word-break: break-word; margin: 0; max-height: 6.5em; overflow: hidden; }
+.ledger { display: grid; grid-template-columns: auto 1fr auto; gap: var(--eyes-space-1) var(--eyes-space-3); font-size: var(--eyes-text-sm); margin: 0; }
+.ledger > * { padding: var(--eyes-space-1) 0; border-bottom: 1px solid var(--eyes-border-subtle); }
+.ledger .amt { text-align: right; font-variant-numeric: tabular-nums; font-weight: var(--eyes-weight-medium); }
+#map { height: 22rem; border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-tertiary); z-index: 0; }
+#map.grow { height: auto; min-height: 22rem; overflow: hidden; }
+.filters.short { grid-template-columns: minmax(0, 24rem) minmax(0, 12rem); justify-content: start; }
+/* Map markers: tasks colored by status (live ones larger), workers yellow when available, the selected one ringed. */
+#map .pin { stroke: var(--eyes-surface); fill: var(--eyes-text-tertiary); fill-opacity: 0.9; }
+#map .pin.s-dispatched, #map .pin.s-claimed, #map .pin.s-submitted { fill: var(--eyes-accent); }
+#map .pin.s-verified, #map .pin.s-paid { fill: var(--eyes-success-text); }
+#map .pin.s-needs_review { fill: var(--eyes-warning-text); }
+#map .pin.s-disputed { fill: var(--eyes-danger-text); }
+#map .wk { stroke: var(--eyes-surface); fill-opacity: 1; cursor: pointer; }
+#map .wk.is-on { fill: var(--eyes-text); }
+#map .wk.is-off { fill: var(--eyes-text-tertiary); fill-opacity: 0.6; }
+#map .wk.is-selected { stroke: var(--eyes-accent); fill: var(--eyes-text); }
+/* The latest task, as the old live page told it: headline, question, then its timeline. */
+.story { display: grid; gap: var(--eyes-space-1); }
+.story p { margin: 0; }
+.story__head { font-weight: var(--eyes-weight-medium); }
+.story__q { font-size: var(--eyes-text-sm); }
+.steps { display: flex; flex-wrap: wrap; gap: var(--eyes-space-1) var(--eyes-space-3); margin: var(--eyes-space-1) 0 0; padding: 0; list-style: none; font-size: var(--eyes-text-xs); }
+.step { display: inline-flex; align-items: baseline; gap: var(--eyes-space-1); color: var(--eyes-text-tertiary); }
+.step::before { content: ""; align-self: center; width: 0.5rem; height: 0.5rem; border-radius: 999px; border: 1.5px solid currentColor; }
+.step + .step::after { order: -2; content: "→"; color: var(--eyes-text-tertiary); }
+.step.is-done { color: var(--eyes-text); }
+.step.is-done::before { background: currentColor; }
+.step.is-done.t-success { color: var(--eyes-success-text); }
+.step.is-done.t-warning { color: var(--eyes-warning-text); }
+.step.is-done.t-danger { color: var(--eyes-danger-text); }
+.step.is-next { color: var(--eyes-text-secondary); }
+.step.is-next::before { border-color: var(--eyes-accent); }
+.step b { font-weight: var(--eyes-weight-medium); }
+.step time { color: var(--eyes-text-tertiary); font-variant-numeric: tabular-nums; }
+.wtasks { display: grid; gap: var(--eyes-space-3); margin: 0; padding: 0; list-style: none; }
+.wtasks > li { display: grid; gap: 2px; padding-bottom: var(--eyes-space-3); border-bottom: 1px solid var(--eyes-border-subtle); }
+.wtasks p, .panel__sub { margin: 0; }
+.panel__sub { font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-semibold); }
+/* Access tab. */
+#access-list > .access__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--eyes-space-2); padding: var(--eyes-space-2) 0; border-bottom: 1px solid var(--eyes-border-subtle); }
+#access-list > .access__row > button, #access-list > .access__row > .tiny { margin-left: auto; }
+.access__who { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--eyes-space-1); }
+.access__add { display: flex; flex-wrap: wrap; align-items: end; gap: var(--eyes-space-2); margin-top: var(--eyes-space-4); }
+.access__add .ui-field { flex: 1 1 18rem; }
+.access__error { flex-basis: 100%; margin: 0; font-size: var(--eyes-text-sm); color: var(--eyes-danger-text); }
+.access__error:empty { display: none; }
+#map.nomap { display: grid; place-items: center; color: var(--eyes-text-secondary); font-size: var(--eyes-text-sm); }
+/* Grey street tiles (inverted in dark mode), so the pins carry the color. */
+#map .leaflet-tile-pane { filter: grayscale(1) contrast(0.9); }
+@media (prefers-color-scheme: dark) { #map .leaflet-tile-pane { filter: grayscale(1) invert(1) brightness(0.75) contrast(0.8); } }
+.ui-status > li { padding: var(--eyes-space-2) 0; }
+.ui-notice { margin: 0; }
+#banner { grid-column: span 12; }
+.filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1.5fr; gap: var(--eyes-space-2); }
+.filters .ui-input { min-height: 2.25rem; padding: 0 var(--eyes-space-3); font-size: var(--eyes-text-sm); }
+.ticket { display: grid; grid-template-columns: 9rem 1fr; gap: var(--eyes-space-4); }
+.ticket img, .ticket .nophoto { width: 9rem; height: 9rem; object-fit: cover; border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-tertiary); }
+.ticket .nophoto { display: grid; place-items: center; color: var(--eyes-text-tertiary); font-size: var(--eyes-text-xs); }
+.ticket textarea { width: 100%; min-height: 2.5rem; resize: vertical; font: inherit; font-size: var(--eyes-text-sm); }
+.ui-button--danger { background: var(--eyes-danger-bg); color: var(--eyes-danger-text); border-color: transparent; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--eyes-space-2); align-items: center; }
+.msg { margin: 0; padding: var(--eyes-space-2) var(--eyes-space-3); border-radius: var(--eyes-radius-md); background: var(--eyes-surface-tertiary); white-space: pre-wrap; font-size: var(--eyes-text-sm); }
+/* Overview: the three top cards share one type scale and padding, stretch to one height, and fill it. */
+.overview > .ov { display: flex; flex-direction: column; gap: var(--eyes-space-3); }
+.ov__body { display: flex; flex-direction: column; gap: var(--eyes-space-3); flex: 1; }
+.ui-icon { width: 1.125rem; height: 1.125rem; flex: none; }
+.svc { display: flex; flex-wrap: wrap; align-items: center; gap: var(--eyes-space-2) var(--eyes-space-3); margin: 0; font-weight: var(--eyes-weight-medium); }
+.svc__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--eyes-space-1) var(--eyes-space-3); margin: 0; padding: 0; list-style: none; font-size: var(--eyes-text-sm); }
+.svc__item { position: relative; display: flex; align-items: center; gap: var(--eyes-space-1); min-width: 0; padding: 2px var(--eyes-space-1); border-radius: var(--eyes-radius-sm); white-space: nowrap; color: var(--eyes-text-secondary); }
+.svc__item .ui-icon { flex: none; }
+.svc__item.is-live .ui-icon { color: var(--eyes-success-text); }
+.svc__item.is-off, .svc__item.is-off .ui-icon { color: var(--eyes-danger-text); }
+.svc__item:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: 0; }
+/* Tooltip on hover or keyboard focus: provider and state. Touch shows the label already. */
+.svc__item::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 10; padding: 2px var(--eyes-space-2); border-radius: var(--eyes-radius-sm); background: var(--eyes-text); color: var(--eyes-surface); font-size: var(--eyes-text-xs); pointer-events: none; opacity: 0; transform: translateY(2px); transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out); }
+.svc__item:focus-visible::after { opacity: 1; transform: none; }
+@media (hover: hover) and (pointer: fine) { .svc__item:hover::after { opacity: 1; transform: none; } }
+.svc-off { display: grid; gap: var(--eyes-space-1); margin: 0; padding: 0; list-style: none; font-size: var(--eyes-text-sm); color: var(--eyes-warning-text); }
+.svc-off li { display: flex; gap: var(--eyes-space-2); align-items: center; }
+.meta { display: grid; grid-template-columns: auto 1fr; gap: var(--eyes-space-1) var(--eyes-space-3); margin: 0; font-size: var(--eyes-text-xs); color: var(--eyes-text-secondary); }
+.meta dt { color: var(--eyes-text-tertiary); }
+.meta dd { margin: 0; }
+.funnel { flex: 1; display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: var(--eyes-space-2); min-height: 8rem; margin: 0; padding: 0; list-style: none; }
+.funnel > li { display: flex; min-width: 0; }
+.funnel__step { flex: 1; display: grid; grid-template-rows: 1fr auto auto; gap: 2px; min-width: 0; margin: calc(-1 * var(--eyes-space-1)); padding: var(--eyes-space-1); border-radius: var(--eyes-radius-sm); color: inherit; text-decoration: none; transition: background-color 150ms ease; }
+.funnel__step:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: 0; }
+@media (hover: hover) and (pointer: fine) { .funnel__step:hover { background: var(--eyes-surface-tertiary); } }
+/* A hairline splits the funnel from the states after it. */
+.funnel__step.is-first-after { box-shadow: inset 1px 0 0 var(--eyes-border-subtle); padding-left: var(--eyes-space-2); }
+.funnel__track { display: flex; align-items: flex-end; min-height: 2.5rem; border-bottom: 1px solid var(--eyes-border); }
+.funnel__bar { width: 100%; min-height: 2px; border-radius: var(--eyes-radius-sm) var(--eyes-radius-sm) 0 0; background: var(--eyes-surface-tertiary); }
+.funnel__step.is-live .funnel__bar { background: var(--eyes-accent); }
+.funnel__step:not(.is-live):not(.is-zero) .funnel__bar { background: var(--eyes-success-bg); box-shadow: inset 0 2px 0 var(--eyes-success-text); }
+.funnel__step b { margin-top: var(--eyes-space-1); font-size: var(--eyes-heading-md); font-variant-numeric: tabular-nums; line-height: 1.1; }
+/* Words wrap only between words: "Needs review" takes two lines, "Dispatched" never splits. */
+.funnel__label { font-size: 0.6875rem; color: var(--eyes-text-secondary); overflow-wrap: normal; }
+.funnel__step.is-zero b { color: var(--eyes-text-tertiary); }
+/* Attention columns: no box, just a solid bar of the same shape (red, amber) and a colored count. */
+.funnel__step.is-danger:not(.is-zero) .funnel__bar { background: var(--eyes-danger-text); box-shadow: none; }
+.funnel__step.is-warn:not(.is-zero) .funnel__bar { background: var(--eyes-warning-text); box-shadow: none; }
+.funnel__step.is-danger b { color: var(--eyes-danger-text); }
+.funnel__step.is-warn b { color: var(--eyes-warning-text); }
+.lead { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--eyes-space-2); margin: 0; }
+.money { width: 100%; border-collapse: collapse; font-size: var(--eyes-text-sm); }
+.money tbody + tbody { border-top: 1px solid var(--eyes-border-subtle); }
+.money th { width: 3rem; padding: 3px var(--eyes-space-2) 3px 0; text-align: left; vertical-align: top; font-size: var(--eyes-text-xs); font-weight: var(--eyes-weight-medium); color: var(--eyes-text-tertiary); }
+.money td { padding: 3px 0; color: var(--eyes-text-secondary); }
+.money td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--eyes-text); font-weight: var(--eyes-weight-medium); }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--eyes-space-6) var(--eyes-space-5); }
+@media (min-width: 1200px) { .charts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.chart { display: grid; gap: 2px; align-content: start; }
+.chart h3 { margin: 0; font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-medium); color: var(--eyes-text-secondary); }
+.chart__now { margin: 0; font-size: var(--eyes-heading-md); font-weight: var(--eyes-weight-semibold); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.chart__note { margin: 0; font-size: var(--eyes-text-xs); color: var(--eyes-text-tertiary); }
+.chart__plot { position: relative; height: 4.5rem; margin: var(--eyes-space-2) 2.75rem 0 0; border-bottom: 1px solid var(--eyes-border); outline: none; cursor: crosshair; }
+.chart__plot:focus-visible { box-shadow: 0 0 0 2px var(--eyes-accent); border-radius: 2px; }
+.chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chart .area { fill: var(--eyes-accent); opacity: .16; }
+/* Pure accent yellow is too faint as a line on white; mix in the text color so it reads in both themes. */
+.chart .line { fill: none; stroke: color-mix(in srgb, var(--eyes-accent) 65%, var(--eyes-text)); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.chart.bad .area { fill: var(--eyes-danger-text); } .chart.bad .line { stroke: var(--eyes-danger-text); }
+.chart__axis { position: absolute; left: calc(100% + var(--eyes-space-2)); font-size: 0.6875rem; line-height: 1; color: var(--eyes-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart__axis--max { top: 0; } .chart__axis--min { bottom: 0; }
+.chart__dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: color-mix(in srgb, var(--eyes-accent) 65%, var(--eyes-text)); box-shadow: 0 0 0 2px var(--eyes-surface-secondary); }
+.chart.bad .chart__dot { background: var(--eyes-danger-text); }
+.chart__cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--eyes-border-strong); pointer-events: none; }
+.chart__tip { position: absolute; transform: translate(-50%, calc(-100% - 8px)); padding: 2px var(--eyes-space-2); border-radius: var(--eyes-radius-sm); background: var(--eyes-text); color: var(--eyes-surface); font-size: var(--eyes-text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; z-index: 2; }
+.chart__dot[hidden], .chart__cursor[hidden], .chart__tip[hidden] { display: none; }
+@media (max-width: 640px) {
+  .funnel { gap: var(--eyes-space-2); grid-template-columns: repeat(5, 1fr); }
+  .funnel__step.is-first-after { box-shadow: none; padding-left: var(--eyes-space-1); }
+  .funnel__step b { font-size: var(--eyes-heading-sm); }
+  .funnel__label { font-size: 0.6875rem; overflow-wrap: normal; }
+  .charts { grid-template-columns: 1fr; }
+}
+.bar { flex-wrap: wrap; row-gap: var(--eyes-space-2); }
+.bar .brand { color: var(--eyes-text); font-size: var(--eyes-heading-sm); text-decoration: none; white-space: nowrap; }
+.bar a, #updated { white-space: nowrap; }
+#operator { white-space: nowrap; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) {
+  .bar { gap: var(--eyes-space-2) var(--eyes-space-3); padding: var(--eyes-space-3) var(--eyes-space-4); }
+  .bar .spacer { flex-basis: 100%; }
+  main { padding: var(--eyes-space-3) var(--eyes-space-3) var(--eyes-space-8); }
+  .filters, .filters.short { grid-template-columns: 1fr 1fr; }
+  .filters > :first-child { grid-column: span 2; }
+  .tabs { padding: 0 var(--eyes-space-2); }
+}
+.rows > li.open { cursor: pointer; }
+.rows > li.open:hover, .rows > li.open:focus-visible { background: var(--eyes-surface-tertiary); outline: none; }
+#review-panel { width: min(40rem, calc(100vw - 1.5rem)); max-height: calc(100vh - 1.5rem); overflow: auto; padding: var(--eyes-space-5); border: 1px solid var(--eyes-border-subtle); border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-primary, Canvas); color: inherit; }
+#review-panel::backdrop { background: rgb(0 0 0 / 0.4); }
+#review-panel > * + * { margin-top: var(--eyes-space-3); }
+#review-panel img, #review-panel .nophoto { display: grid; place-items: center; width: 100%; max-height: 22rem; object-fit: contain; border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-tertiary); color: var(--eyes-text-tertiary); min-height: 6rem; }
+#review-panel textarea { width: 100%; min-height: 2.5rem; resize: vertical; font: inherit; font-size: var(--eyes-text-sm); }
+.checklist { display: grid; gap: var(--eyes-space-1); margin: 0; padding: 0; list-style: none; }
+.checklist .ok { color: var(--eyes-text-success, green); }
+.checklist .bad { color: var(--eyes-text-danger, crimson); }
+/* Shared list table (ops-view/table.ts). */
+.tbl { display: grid; gap: var(--eyes-space-2); }
+.tbl-bar { position: sticky; top: var(--chrome, 6.5rem); z-index: 5; display: flex; flex-wrap: wrap; gap: var(--eyes-space-2); align-items: center; margin: 0 calc(-1 * var(--eyes-space-4)); padding: var(--eyes-space-2) var(--eyes-space-4); background: var(--eyes-surface-secondary); box-shadow: 0 1px 0 var(--eyes-border-subtle); }
+.tbl-bar .ui-input { width: auto; min-height: 2.25rem; padding: 0 var(--eyes-space-3); font-size: var(--eyes-text-sm); }
+.tbl-bar .tbl-search { flex: 1 1 16rem; min-width: 10rem; }
+.tbl-range { display: inline-flex; align-items: center; gap: var(--eyes-space-1); }
+.tbl-range__label { font-size: var(--eyes-text-xs); color: var(--eyes-text-secondary); }
+.tbl-bar .tbl-range input[type="number"] { width: 6rem; }
+.tbl-check { display: inline-flex; align-items: center; gap: var(--eyes-space-1); font-size: var(--eyes-text-sm); color: var(--eyes-text-secondary); white-space: nowrap; cursor: pointer; }
+.tbl-count { margin-left: auto; font-size: var(--eyes-text-xs); color: var(--eyes-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl-table { width: 100%; border-collapse: collapse; font-size: var(--eyes-text-sm); }
+.tbl-table[hidden], .tbl-empty[hidden] { display: none; }
+.tbl-table th { padding: 0; text-align: left; font-size: var(--eyes-text-xs); font-weight: var(--eyes-weight-medium); color: var(--eyes-text-secondary); border-bottom: 1px solid var(--eyes-border); white-space: nowrap; }
+.tbl-sort { all: unset; box-sizing: border-box; display: block; width: 100%; padding: var(--eyes-space-2); cursor: pointer; border-radius: var(--eyes-radius-sm); }
+.tbl-sort:hover { color: var(--eyes-text); }
+.tbl-sort:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: -2px; }
+th[aria-sort="ascending"] .tbl-sort, th[aria-sort="descending"] .tbl-sort { color: var(--eyes-text); }
+th[aria-sort="ascending"] .tbl-sort::after { content: " ↑"; }
+th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
+.tbl-table td { padding: var(--eyes-space-2); border-bottom: 1px solid var(--eyes-border-subtle); vertical-align: top; color: var(--eyes-text-secondary); }
+.tbl-table td:first-child { color: var(--eyes-text); }
+.tbl-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl-table tr.open { cursor: pointer; }
+.tbl-table tr.open:hover, .tbl-table tr.open:focus-visible { background: var(--eyes-surface-tertiary); outline: none; }
+.tbl-table tr.open:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--eyes-accent); }
+.tbl-table .q { font-weight: var(--eyes-weight-medium); }
+.tbl-empty { margin: var(--eyes-space-4) 0; }
+.tbl-toggle { display: none; }
+@media (max-width: 640px) {
+  .tbl-bar { margin: 0 calc(-1 * var(--eyes-space-4)); }
+  .tbl-bar .tbl-search { flex: 1 1 0; }
+  .tbl-toggle { display: inline-flex; }
+  .tbl:not(.tbl--open) :is(.tbl-filter, .tbl-range, .tbl-check, .tbl-clear) { display: none; }
+  .tbl-range { flex-basis: 100%; }
+  .tbl-range .ui-input { flex: 1; }
+  .tbl-count { flex-basis: 100%; margin-left: 0; }
+  .tbl-table, .tbl-table tbody, .tbl-table tr, .tbl-table td { display: block; }
+  .tbl-table thead tr { display: flex; flex-wrap: wrap; gap: var(--eyes-space-1); }
+  .tbl-table th { border: 0; }
+  .tbl-sort { padding: var(--eyes-space-1) var(--eyes-space-2); background: var(--eyes-surface-tertiary); border-radius: 999px; }
+  .tbl-table tr { padding: var(--eyes-space-3) 0; border-bottom: 1px solid var(--eyes-border-subtle); }
+  .tbl-table td { padding: 0; border: 0; text-align: left; }
+  .tbl-table td + td { display: inline-block; margin: var(--eyes-space-1) var(--eyes-space-3) 0 0; }
+  .tbl-table td.num { text-align: left; }
+  .tbl-table td + td:not(:empty)::before { content: attr(data-label) " "; color: var(--eyes-text-tertiary); font-size: var(--eyes-text-xs); }
+}
+/* Logs: one compact line per event; icons carry level and source (with a title and label). */
+.ev-level, .ev-source { display: inline-flex; color: var(--eyes-text-tertiary); }
+.ev-level--warn { color: var(--eyes-warning-text); }
+.ev-level--error { color: var(--eyes-danger-text); }
+#events .tbl-table td { padding-top: 6px; padding-bottom: 6px; vertical-align: middle; }
+#events .tbl-table td:nth-child(2) { white-space: nowrap; }
+/* Fixed columns, set by the header so rows line up with it: level icon, time, source icon, then the event. */
+@media (min-width: 641px) {
+  #events .tbl-table { table-layout: fixed; }
+  #events .tbl-table th:is(:nth-child(1), :nth-child(3)) { width: 28px; }
+  #events .tbl-table th:nth-child(2) { width: 150px; }
+  #events .tbl-table th:is(:nth-child(1), :nth-child(3)) .tbl-sort { padding-inline: 0; font-size: 0; }
+  #events .tbl-table td:is(:nth-child(1), :nth-child(3)) { padding-inline: 0; text-align: center; }
+}
+.ev-sum { display: block; max-width: 0; min-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); color: var(--eyes-text); }
+.tbl-detail td { padding: 0 var(--eyes-space-2) var(--eyes-space-3); background: var(--eyes-surface-tertiary); }
+.ev-detail { display: grid; gap: var(--eyes-space-2); justify-items: start; padding-top: var(--eyes-space-2); }
+.ev-detail__summary { margin: 0; font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); white-space: pre-wrap; word-break: break-word; }
+.ev-detail__data { margin: 0; max-width: 100%; font-size: var(--eyes-text-xs); white-space: pre-wrap; word-break: break-word; color: var(--eyes-text-secondary); }
+.tbl-foot { display: flex; justify-content: center; align-items: center; gap: var(--eyes-space-3); min-height: 2.5rem; }
+.tbl-foot [hidden] { display: none; }
+.tbl-end { font-size: var(--eyes-text-xs); }
+/* New live events wait behind this pill, so the list never shifts under the reader. It hangs from the
+   sticky filter bar, so it sits on the top edge of the list wherever the page is scrolled. */
+.new-events { position: absolute; top: calc(100% + var(--eyes-space-2)); left: 50%; translate: -50% 0; z-index: 6; white-space: nowrap; padding: var(--eyes-space-1) var(--eyes-space-4); border: 0; border-radius: 999px; background: var(--eyes-text); color: var(--eyes-surface); font: inherit; font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-medium); cursor: pointer; box-shadow: var(--eyes-shadow-md, 0 4px 12px rgb(0 0 0 / 0.15)); }
+.new-events[hidden] { display: none; }
+@media (max-width: 640px) {
+  /* Phones keep the log to one line per event too: icons, time, then the summary, cut. */
+  #events .tbl-table tr:not(.tbl-detail) { display: flex; align-items: center; gap: var(--eyes-space-2); padding: 6px 0; }
+  #events .tbl-table td { display: block; margin: 0; padding: 0; width: auto; }
+  #events .tbl-table td::before { content: none; }
+  #events .tbl-table td:nth-child(2) { font-size: var(--eyes-text-xs); color: var(--eyes-text-tertiary); white-space: nowrap; }
+  #events .tbl-table td:last-child { flex: 1; min-width: 0; }
+}
+
+/* Decisions in the review and ticket panels: one primary action, the rest in a menu, an inline confirm. */
+.decide { display: grid; gap: var(--eyes-space-2); padding-top: var(--eyes-space-3); border-top: 1px solid var(--eyes-border-subtle); }
+.decide__field { display: grid; gap: var(--eyes-space-1); }
+.decide__label { font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-medium); }
+.decide__note { width: 100%; min-height: 2.75rem; resize: vertical; font: inherit; font-size: var(--eyes-text-sm); field-sizing: content; max-height: 14rem; }
+.decide__note[aria-invalid="true"] { border-color: var(--eyes-danger-text); }
+.decide__hint { margin: 0; font-size: var(--eyes-text-xs); color: var(--eyes-text-tertiary); }
+.decide__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--eyes-space-2); min-height: 2.25rem; }
+.decide__row.is-confirming { padding: var(--eyes-space-2) var(--eyes-space-3); border-radius: var(--eyes-radius-md); background: var(--eyes-surface-tertiary); }
+.decide__question { flex: 1 1 14rem; font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-medium); }
+.decide__menuwrap { position: relative; }
+.decide__menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 3; display: grid; min-width: 13rem; padding: var(--eyes-space-1); border-radius: var(--eyes-radius-md); background: var(--eyes-surface); box-shadow: var(--eyes-hairline), 0 8px 24px rgb(0 0 0 / 0.16); transform-origin: top left; }
+.decide__menu[hidden] { display: none; }
+.decide__item { all: unset; box-sizing: border-box; padding: var(--eyes-space-2) var(--eyes-space-3); border-radius: var(--eyes-radius-sm); font-size: var(--eyes-text-sm); cursor: pointer; }
+.decide__item:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: -2px; }
+.decide__item.is-danger { color: var(--eyes-danger-text); }
+@media (hover: hover) and (pointer: fine) { .decide__item:hover { background: var(--eyes-surface-secondary); } }
+.decide__status { display: flex; align-items: center; gap: var(--eyes-space-1); margin: 0; font-size: var(--eyes-text-sm); }
+.decide__status:empty { display: none; }
+.decide__status.is-ok { color: var(--eyes-success-text); }
+.decide__status.is-error { color: var(--eyes-danger-text); }
+.toasts { position: fixed; left: 50%; bottom: var(--eyes-space-6); z-index: 2000; transform: translateX(-50%); pointer-events: none; }
+.toast { display: flex; align-items: center; gap: var(--eyes-space-2); max-width: min(32rem, calc(100vw - 2rem)); padding: var(--eyes-space-2) var(--eyes-space-4); border-radius: 999px; background: var(--eyes-text); color: var(--eyes-surface); font-size: var(--eyes-text-sm); box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); }
+
+/* Motion (Emil Kowalski's rules): strong custom ease-out, transform and opacity only, under 300 ms,
+   press feedback on everything pressable, hover gated to fine pointers, nothing on keyboard actions. */
+:root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); }
+.ui-button, .tbl-sort, .new-events, .tbl-toggle { transition: transform 160ms var(--ease-out), background-color 150ms ease, color 150ms ease; }
+.ui-button:active:not(:disabled), .tbl-sort:active, .new-events:active { transform: scale(0.97); }
+.tbl-table tr.open:hover { background: transparent; }
+@media (hover: hover) and (pointer: fine) {
+  .tbl-table tr.open { transition: background-color 120ms ease; }
+  .tbl-table tr.open:hover { background: var(--eyes-surface-tertiary); }
+}
+/* The pill enters from where it sits (slightly above), fades and settles; leaving is instant. */
+.new-events { transition: transform 200ms var(--ease-out), opacity 200ms var(--ease-out); }
+@starting-style { .new-events { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+/* Dialogs (review and ticket panels): centered, so they scale from the center; 200 ms in, faster out. */
+#review-panel[open] { animation: none; transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+@starting-style { #review-panel[open] { opacity: 0; transform: scale(0.96); } }
+#review-panel::backdrop { transition: opacity 200ms ease; }
+@starting-style { #review-panel[open]::backdrop { opacity: 0; } }
+/* Menus scale from their trigger; the confirm row and the result fade in; toasts rise in, leave faster. */
+.decide__menu { transition: opacity 150ms var(--ease-out), transform 150ms var(--ease-out); }
+@starting-style { .decide__menu { opacity: 0; transform: scale(0.97); } }
+.decide__row.is-confirming, .decide__status { transition: opacity 150ms var(--ease-out); }
+@starting-style { .decide__row.is-confirming, .decide__status { opacity: 0; } }
+.toast { transition: transform 300ms ease, opacity 300ms ease; }
+@starting-style { .toast { opacity: 0; transform: translateY(100%); } }
+.toast.is-leaving { opacity: 0; transform: translateY(40%); transition-duration: 200ms; }
+@media (prefers-reduced-motion: reduce) {
+  .svc__item::after { transform: none; }
+  .toast, .toast.is-leaving, .decide__menu { transform: none; }
+  @starting-style { .toast, .decide__menu { transform: none; } }
+  .ui-button, .tbl-sort, .new-events, .tbl-toggle, #review-panel[open] { transition: opacity 150ms ease, background-color 150ms ease; }
+  .ui-button:active:not(:disabled), .tbl-sort:active, .new-events:active { transform: none; }
+  @starting-style { .new-events, #review-panel[open] { transform: none; } }
+}
+</style>
+</head>
+<body class="ui">
+<!-- @eyes/icons -->
+<header class="bar">
+  <a class="brand" href="https://eyes.pictures"><span class="ui-mark" aria-hidden="true"></span>Eyes ops</a>
+  <span id="state" class="ui-badge">Connecting</span>
+  <span id="updated" class="tiny"></span>
+  <span class="spacer"></span>
+  <span id="operator" class="tiny"></span>
+  <button id="logout" class="ui-button ui-button--ghost ui-button--sm" type="button">Log out</button>
+</header>
+<div id="tabs" class="tabs" role="tablist" aria-label="Ops sections">
+  <a role="tab" id="tab-overview" href="#overview" aria-controls="p-overview">Overview</a>
+  <a role="tab" id="tab-review" href="#review" aria-controls="p-review">Review <span id="n-review" class="count"></span></a>
+  <a role="tab" id="tab-support" href="#support" aria-controls="p-support">Support <span id="n-support" class="count"></span></a>
+  <a role="tab" id="tab-tasks" href="#tasks" aria-controls="p-tasks">Tasks</a>
+  <a role="tab" id="tab-workers" href="#workers" aria-controls="p-workers">Workers</a>
+  <a role="tab" id="tab-money" href="#money" aria-controls="p-money">Money</a>
+  <a role="tab" id="tab-logs" href="#logs" aria-controls="p-logs">Logs <span id="n-logs" class="count"></span></a>
+  <a role="tab" id="tab-access" href="#access" aria-controls="p-access">Access</a>
+</div>
+<main>
+  <p id="banner" class="ui-notice ui-notice--danger" hidden></p>
+
+  <div id="p-overview" class="panel overview" role="tabpanel" aria-labelledby="tab-overview">
+    <section class="ui-card c3 ov">
+      <header class="ui-card__header"><h2 class="ui-card__title">Health</h2></header>
+      <div class="ov__body">
+        <p class="lead"><span id="uptime" class="big"></span> <span class="sub">since the last restart</span></p>
+        <div id="health" class="ov__body"></div>
+      </div>
+    </section>
+
+    <section class="ui-card c5 ov">
+      <header class="ui-card__header"><h2 class="ui-card__title">Tasks, last 24 h</h2><span id="tasks-total" class="sub"></span></header>
+      <div id="statuses" class="ov__body"></div>
+    </section>
+
+    <section class="ui-card c4 ov">
+      <header class="ui-card__header"><h2 class="ui-card__title">Money, last 24 h</h2></header>
+      <div class="ov__body">
+        <p class="lead"><span id="escrowed" class="big"></span> <span class="sub">held in escrow now</span></p>
+        <table id="money-kv" class="money"></table>
+      </div>
+    </section>
+
+    <section class="ui-card c12 trends">
+      <header class="ui-card__header"><h2 class="ui-card__title">Trends</h2><span id="series-source" class="tiny"></span></header>
+      <div id="charts" class="charts"></div>
+    </section>
+  </div>
+
+  <div id="p-review" class="panel" role="tabpanel" aria-labelledby="tab-review" hidden>
+    <section class="ui-card c12 fill">
+      <header class="ui-card__header"><h2 class="ui-card__title">Needs a decision</h2><span id="queue-count" class="ui-badge"></span></header>
+      <div id="queue"></div>
+    </section>
+  </div>
+
+  <div id="p-support" class="panel" role="tabpanel" aria-labelledby="tab-support" hidden>
+    <section class="ui-card c12">
+      <header class="ui-card__header"><h2 class="ui-card__title">Support tickets</h2><span id="tickets-count" class="ui-badge"></span></header>
+      <div id="tickets"></div>
+    </section>
+  </div>
+
+  <div id="p-tasks" class="panel" role="tabpanel" aria-labelledby="tab-tasks" hidden>
+    <section class="ui-card c12">
+      <header class="ui-card__header"><h2 class="ui-card__title">Tasks</h2><span class="sub">newest first</span></header>
+      <div id="tasks"></div>
+    </section>
+  </div>
+
+  <div id="p-workers" class="panel" role="tabpanel" aria-labelledby="tab-workers" hidden>
+    <section class="ui-card c7 map-card fill">
+      <header class="ui-card__header"><h2 class="ui-card__title">Workers</h2><span class="sub">positions rounded to about 100 m</span></header>
+      <div id="worker-stats" class="stats"></div>
+      <div id="story" class="story" aria-live="polite"></div>
+      <div id="map" class="grow"></div>
+    </section>
+    <section class="ui-card c5">
+      <header class="ui-card__header"><h2 class="ui-card__title">All workers</h2><span class="sub">the filters pick the map markers too</span></header>
+      <div id="workers"></div>
+    </section>
+  </div>
+
+  <div id="p-money" class="panel" role="tabpanel" aria-labelledby="tab-money" hidden>
+    <section class="ui-card c12">
+      <header class="ui-card__header"><h2 class="ui-card__title">Ledger</h2><span id="ledger-total" class="sub"></span></header>
+      <div id="ledger"></div>
+    </section>
+  </div>
+
+  <div id="p-access" class="panel" role="tabpanel" aria-labelledby="tab-access" hidden>
+    <section class="ui-card c8">
+      <header class="ui-card__header"><h2 class="ui-card__title">Who can sign in</h2><span class="sub">phones and emails, masked; each signs in with a code</span></header>
+      <ul id="access-list" class="rows access"></ul>
+      <form id="access-add" class="access__add" novalidate>
+        <label class="ui-field"><span class="ui-field__label">Add a phone or email</span>
+        <input id="access-identifier" class="ui-input" name="identifier" required autocomplete="off" placeholder="+14155550123 or name@example.com" aria-describedby="access-error"></label>
+        <button class="ui-button ui-button--primary" type="submit">Add</button>
+        <p id="access-error" class="access__error" role="alert"></p>
+      </form>
+    </section>
+  </div>
+
+  <div id="p-logs" class="panel" role="tabpanel" aria-labelledby="tab-logs" hidden>
+    <section class="ui-card c12">
+      <header class="ui-card__header"><h2 class="ui-card__title">Server errors and warnings</h2><span class="sub">this process, newest first, redacted</span></header>
+      <ul id="errors" class="rows"></ul>
+    </section>
+
+    <section class="ui-card c12">
+      <header class="ui-card__header"><h2 class="ui-card__title">Event log</h2><span id="events-source" class="sub"></span></header>
+      <button id="new-events" class="new-events" type="button" hidden></button>
+      <div id="events"></div>
+    </section>
+  </div>
+</main>
+<dialog id="review-panel" aria-label="Review task"></dialog>
+<script>
+/* @eyes/ops-view */
+</script>
+</body>
+</html>

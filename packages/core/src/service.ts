@@ -16,7 +16,10 @@ import type {
   TaskType,
   ToolInput,
   ToolOutput,
-  WorkerEarnings,
+  WorkerLocationInput,
+  WorkerSetup,
+  WorkerTasks,
+  WorkerTasksQuery,
 } from "./schemas.ts";
 
 export const SAFETY_CATEGORIES = [
@@ -102,9 +105,25 @@ export interface EyesService {
   workerConnectUrl(token: string): Promise<string>;
   markWorkerOnboarded(account_id: string): Promise<void>;
   handleWorkerReply(input: { phone: string; intent: ReplyIntent; text: string }): Promise<void>;
-  workerEarnings(token: string): Promise<WorkerEarnings>;
+  /** token: the worker's "e:" token, the /me page's code (ADR-028). Throws unauthorized. */
+  workerSetup(token: string): Promise<WorkerSetup>;
+  /** token: as workerSetup. One page of the worker's tasks, newest first, and the totals. Throws unauthorized. */
+  workerTasks(token: string, query: WorkerTasksQuery): Promise<WorkerTasks>;
+  /** token: as workerSetup. Mints a location code; returns the app install link carrying it. Throws unauthorized. */
+  workerInstallLink(token: string): Promise<{ install_url: string }>;
   getOffer(token: string): Promise<OfferView>;
   submitCapture(token: string, fields: CaptureFields, photo: PhotoUpload | null): Promise<CaptureResult>;
+  /** token: a 30-minute HERE token or the worker's long-lived location token. Throws unauthorized, invalid_input or rate_limited. */
+  updateWorkerLocation(token: string, input: WorkerLocationInput): Promise<void>;
+  /** code: the worker's location code. A 1-hour profile link to register an iPhone for ad hoc install, that worker's device state, and whether the app sent a fix in the last 10 minutes. Throws unauthorized. */
+  workerDevice(
+    code: string,
+  ): Promise<{ profile_url: string; registered: boolean; ready: boolean; app_connected: boolean }>;
+  /** ticket: from workerDevice's profile link. Stores the iPhone's UDID for that worker. Throws unauthorized. */
+  addWorkerDevice(
+    ticket: string,
+    device: { udid: string; product: string | null; version: string | null },
+  ): Promise<void>;
 
   expireOverdue(): Promise<{ expired: number }>;
   retryPayouts(): Promise<{ paid: number }>;
@@ -113,7 +132,28 @@ export interface EyesService {
     decision: "refund" | "release",
     note: string,
   ): Promise<{ task_id: string; status: TaskStatus }>;
+  resolveTicket(input: {
+    ticket_id: number;
+    outcome: "release" | "refund" | "close";
+    note: string;
+  }): Promise<{ ticket_id: number; task_id: string; status: "resolved" }>;
+  /** Ops confirms a dispute is fraud, once: refund the agent, reverse the payout, ban the worker. */
+  confirmFraud(input: { ticket_id: number; note: string }): Promise<DisputeOutcome>;
+  /** Ops rejects a dispute, once: the answer stands and the worker keeps (or gets) the pay. */
+  rejectDispute(input: { ticket_id: number; note: string }): Promise<DisputeOutcome>;
 }
+
+export type DisputeOutcome = {
+  ticket_id: number;
+  task_id: string;
+  dispute_status: "upheld" | "rejected";
+  agent_refund_cents: number;
+  /** Only reported on the first call; a repeat call says "none" unless money is still owed. */
+  reversal: "reversed" | "owed" | "none";
+  reversal_owed_cents: number | null;
+  worker_banned: boolean;
+  already_resolved: boolean;
+};
 
 export const AppConfig = z.object({
   public_api_url: z.url(),
@@ -124,11 +164,22 @@ export const AppConfig = z.object({
   dispatch_radius_m: z.int().min(100).default(3000),
   dispatch_max_workers: z.int().min(1).default(3),
   verify_radius_m: z.int().min(10).default(150),
+  location_max_age_h: z.int().min(1).default(24),
+  location_ping: z.boolean().default(false),
+  location_min_interval_s: z.int().min(1).default(30),
+  location_daily_max: z.int().min(1).default(1500),
   signup_grant_cents: z.int().min(0).default(2000),
   test_mode: z.boolean().default(true),
   email_domain: z.string().min(3).nullable().default(null),
   email_delivery: z.boolean().default(false),
   live_payouts: z.boolean().default(false),
+  testflight_url: z
+    .string()
+    .regex(
+      /^https:\/\/testflight\.apple\.com\/join\/[A-Za-z0-9]+\/?$/,
+      "EYES_TESTFLIGHT_URL must be https://testflight.apple.com/join/XXXX",
+    )
+    .optional(),
 });
 export type AppConfig = z.output<typeof AppConfig>;
 
