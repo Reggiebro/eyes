@@ -2,6 +2,8 @@
 
 MCP server URL: `https://api.eyes.pictures/mcp`
 
+Instinct: see [connect/instinct.md](connect/instinct.md).
+
 There are two ways to sign in. Both use the same Eyes API key.
 
 - **OAuth (ChatGPT, claude.ai, Claude Desktop):** the app opens an Eyes page. On that page, paste an API key or click **Create a key**. A new test key starts with a $20 balance, and the page shows the key once, so save it.
