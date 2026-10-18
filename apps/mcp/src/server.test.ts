@@ -2039,6 +2039,10 @@ describe("Claude sandbox domain", () => {
         },
       }),
     );
+    const { resources } = await client.listResources();
+    expect(resources.find((resource) => resource.uri === "ui://eyes/card.html")?._meta).toMatchObject({
+      "openai/widgetDomain": origin === "http://eyes.test" ? "http://api.eyes.test" : origin,
+    });
     const { contents } = await client.readResource({ uri: "ui://eyes/card.html" });
     return (contents[0] as unknown as { _meta: { ui: { domain?: string }; "openai/widgetDomain": string } })
       ._meta;

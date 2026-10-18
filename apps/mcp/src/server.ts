@@ -829,6 +829,13 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       return { contents: [{ uri: WIDGET_URI, mimeType: WIDGET_MIME, text: WIDGET_HTML, _meta }] };
     },
   );
+  server.use("mcp:resources/list", async (ctx, next) =>
+    (await next()).map((resource) =>
+      resource.uri === WIDGET_URI
+        ? { ...resource, _meta: widgetResourceMeta(mcpBase(ctx), false) }
+        : resource,
+    ),
+  );
   // mcp-use strips `_meta.ui` from tools that have no mcp-use `view` (a React build), so put the
   // MCP Apps link back on the tools that carry the ChatGPT template, and let the card's buttons call
   // WIDGET_CALLABLE (ChatGPT: openai/widgetAccessible; MCP Apps: ui.visibility includes "app").
