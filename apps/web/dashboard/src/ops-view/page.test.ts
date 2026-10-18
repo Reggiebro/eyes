@@ -121,6 +121,7 @@ const ok = (body: unknown, status = 200) => Response.json(body, { status });
 
 function leaflet() {
   const calls: string[] = [];
+  const clicks: Record<string, () => void> = {};
   const layer = {
     addTo: () => layer,
     clearLayers: () => calls.push("clear"),
@@ -138,12 +139,24 @@ function leaflet() {
     tileLayer: () => layer,
     layerGroup: () => layer,
     circleMarker: (at, o) => {
-      calls.push(`marker ${at.join(",")} ${"fillColor" in o ? o.fillColor : ""}`);
-      return layer;
+      const cls = "className" in o ? String(o.className) : "";
+      calls.push(`marker ${at.join(",")} ${cls}`);
+      const marker = {
+        ...layer,
+        on: (_e: string, fn: () => void) => {
+          clicks[`${at.join(",")} ${cls.split(" ")[0]}`] = fn;
+          return marker;
+        },
+        bindTooltip: (text: string) => {
+          calls.push(`tip ${text}`);
+          return marker;
+        },
+      };
+      return marker;
     },
     latLngBounds: (points) => ({ pad: (r) => ({ points, r }) }),
   };
-  return { L, calls };
+  return { L, calls, clicks };
 }
 
 const windows: Window[] = [];
@@ -173,6 +186,7 @@ async function setup(
     "GET /ops/ledger": () => ok({ ledger: [], total: 0, total_cents: 0, next_cursor: null }),
     "GET /ops/events": () => ok({ source: "db", events: [] }),
     "GET /ops/series": () => ok(SERIES),
+    "GET /ops/allowlist": () => ok({ entries: [] }),
     ...routes,
   };
   win.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -299,9 +313,11 @@ describe("ops page boot", () => {
     expect(calls).toEqual([
       "map map",
       "clear",
-      "marker 37.77,-122.42 #ffd60a",
-      "marker 37.78,-122.41 #8f8f8f",
-      'fit {"maxZoom":14}',
+      "marker 37.77,-122.42 wk is-on",
+      "tip worker w-avail-, available",
+      "marker 37.78,-122.41 wk is-off",
+      "tip worker w-out-00, opted out",
+      'fit {"maxZoom":15}',
     ]);
 
     expect(
@@ -1206,7 +1222,7 @@ describe("ops tasks, money and workers tabs", () => {
     calls.length = 0;
     pick(state, "available");
     expect([...$("workers").querySelectorAll("tbody tr")]).toHaveLength(1);
-    expect(calls).toEqual(["clear", "marker 37.77,-122.42 #ffd60a"]);
+    expect(calls).toEqual(["clear", "marker 37.77,-122.42 wk is-on", "tip worker w-avail-, available"]);
     pick(state, "");
     calls.length = 0;
     pick(location, "no location");
@@ -1456,7 +1472,7 @@ describe("ops event log and tabs", () => {
     expect(selected()).toEqual(["tab-tasks"]);
     expect(win.document.activeElement?.id).toBe("tab-tasks");
     key("End");
-    expect(selected()).toEqual(["tab-logs"]);
+    expect(selected()).toEqual(["tab-access"]);
     key("ArrowRight");
     expect(selected()).toEqual(["tab-overview"]);
     expect(key("Enter")).toBe(true);
@@ -1469,7 +1485,7 @@ describe("ops event log and tabs", () => {
     win.dispatchEvent(new happy.HashChangeEvent("hashchange") as unknown as Event);
     expect(selected()).toEqual(["tab-workers"]);
     expect(calls).toContain("invalidate");
-    expect(calls).toContain('fit {"maxZoom":14}');
+    expect(calls).toContain('fit {"maxZoom":15}');
     win.location.hash = "#nope";
     win.dispatchEvent(new happy.HashChangeEvent("hashchange") as unknown as Event);
     expect(selected()).toEqual(["tab-overview"]);
@@ -1492,6 +1508,343 @@ describe("ops event log and tabs", () => {
   });
 });
 
+describe("ops workers map, story and worker panel", () => {
+  const W = "w-avail-000-2";
+  const detail = {
+    worker: {
+      id: W,
+      available: true,
+      opted_in: true,
+      lat: 37.77,
+      lng: -122.42,
+      location_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      location_source: "shortcut",
+      created_at: "2026-10-01T00:00:00Z",
+    },
+    tasks: [
+      {
+        id: HELD,
+        status: "paid",
+        question: "Is the line long?",
+        place_label: "Mint Plaza",
+        bounty_cents: 300,
+        fee_cents: 60,
+        created_at: "2026-10-17T12:00:00Z",
+        claimed_at: "2026-10-17T12:01:00Z",
+        submitted_at: "2026-10-17T12:04:00Z",
+        photo_url: "https://storage.eyes.test/p.jpg",
+        workers_notified: 3,
+        gps_ok: true,
+        fresh_ok: true,
+        vision_ok: true,
+        confidence: 0.9,
+        money_at: { release: "2026-10-17T12:05:00Z", payout: "2026-10-17T12:06:00Z" },
+      },
+      {
+        id: TASK_ID,
+        status: "expired",
+        question: "Is the gate open?",
+        place_label: "Ferry Building",
+        bounty_cents: 300,
+        fee_cents: 60,
+        created_at: "2026-10-16T12:00:00Z",
+        money_at: { refund: "2026-10-16T12:30:00Z" },
+      },
+    ],
+    earnings: { paid_cents: 300, payouts: 1, released_cents: 300, last_paid_at: "2026-10-17T12:06:00Z" },
+  };
+  const pinned = () =>
+    feed(
+      {},
+      {
+        tasks: [
+          {
+            ...feed().tasks[0],
+            status: "claimed",
+            submitted_at: null,
+            money_at: null,
+            lat: 37.761,
+            lng: -122.386,
+          } as Task,
+          { ...feed().tasks[1], lat: 37.78, lng: -122.4 } as Task,
+        ],
+      },
+    );
+
+  it("pins tasks by status, tells the latest live task's story, and opens a worker from the map", async () => {
+    const { L, calls, clicks } = leaflet();
+    const page = await setup(
+      {
+        "GET /ops/feed": () => ok(pinned()),
+        [`GET /ops/workers/${W}`]: () => ok(detail),
+        [`GET /ops/tasks/${HELD}`]: () => ok({ ...pinned().tasks[0], fee_cents: 60 }),
+      },
+      { hash: "#workers", L },
+    );
+    const { $, win } = page;
+    expect(calls.filter((c) => c.startsWith("marker"))).toEqual([
+      "marker 37.78,-122.4 pin s-paid",
+      "marker 37.761,-122.386 pin s-claimed is-live",
+      "marker 37.77,-122.42 wk is-on",
+      "marker 37.78,-122.41 wk is-off",
+    ]);
+    expect(calls).toContain("tip Claimed: Near 37.761, -122.386");
+    // Story: the live task, its headline and its timeline.
+    expect($("story").querySelector(".story__head")?.textContent).toBe(
+      "Claimed A worker is on the way to 37.761, -122.386",
+    );
+    const story = [...$("story").querySelectorAll(".step")].map((li) => [
+      li.className,
+      li.querySelector("b")?.textContent,
+    ]);
+    expect(story.map(([, b]) => b)).toEqual([
+      "Asked",
+      "3 notified",
+      "Claimed",
+      "Photo",
+      "Verified",
+      "$5.00 paid",
+    ]);
+    expect(story.filter(([c]) => String(c).includes("is-next")).map(([, b]) => b)).toEqual(["Photo"]);
+
+    calls.length = 0;
+    clicks[`37.77,-122.42 wk`]?.();
+    await page.settle();
+    await page.settle();
+    const panel = $<HTMLDialogElement>("review-panel");
+    expect(panel.open).toBe(true);
+    expect(win.location.hash).toBe("#workers?sort=-state&w=w-avail-");
+    expect(calls).toContain("marker 37.77,-122.42 wk is-on is-selected");
+    expect(panel.querySelector("h2")?.textContent).toBe("Worker w-avail-");
+    const line = panel.querySelector(".line")?.textContent ?? "";
+    expect(line).toContain("Last spot 5m ago (shortcut), near 37.770, -122.420");
+    expect(line).toContain("earned $3.00 in 1 payout, last ");
+    expect(panel.querySelector("img")?.getAttribute("src")).toBe("https://storage.eyes.test/p.jpg");
+    expect(panel.querySelector(".flow-checks")?.textContent).toContain("90% sure");
+    expect(panel.querySelector(".panel__sub")?.textContent).toBe("Last 2 tasks");
+    const steps = [...panel.querySelectorAll(".wtasks > li")].map((li) =>
+      [...li.querySelectorAll(".step b")].map((b) => b.textContent).join(" > "),
+    );
+    expect(steps).toEqual([
+      "Asked > 3 notified > Claimed > Photo > Verified > $3.00 paid",
+      "Asked > 0 notified > Expired > $3.60 refunded",
+    ]);
+    // Close (or Esc): no worker selected, the hash forgets it.
+    calls.length = 0;
+    panel.close();
+    panel.dispatchEvent(new page.happy.Event("close") as unknown as Event);
+    expect(win.location.hash).toBe("#workers?sort=-state");
+    expect(calls).toContain("marker 37.77,-122.42 wk is-on");
+    // Task pins open the task panel.
+    clicks["37.761,-122.386 pin"]?.();
+    await page.settle();
+    expect(page.requests.at(-1)?.path).toBe(`/ops/tasks/${HELD}`);
+  });
+
+  it("opens a worker from the list and from a shared link, and says when it cannot load one", async () => {
+    const page = await setup(
+      {
+        [`GET /ops/workers/${W}`]: () => ok(detail),
+        "GET /ops/workers/w-out-0000-1": () =>
+          ok({
+            ...detail,
+            worker: {
+              ...detail.worker,
+              id: "w-out-0000-1",
+              available: false,
+              opted_in: false,
+              location_source: null,
+            },
+            earnings: { paid_cents: 300, payouts: 2, released_cents: 600, last_paid_at: null },
+          }),
+        "GET /ops/workers/w-in-00000-3": () =>
+          ok({ error: "worker_not_found", message: "No worker with this id." }, 404),
+      },
+      { hash: "#workers?w=w-avail-" },
+    );
+    const { $ } = page;
+    await page.settle();
+    await page.settle();
+    const panel = $<HTMLDialogElement>("review-panel");
+    expect(panel.querySelector("h2")?.textContent).toBe("Worker w-avail-");
+    (panel.querySelector(".task-head button") as HTMLElement).click();
+    panel.dispatchEvent(new page.happy.Event("close") as unknown as Event);
+    expect(panel.open).toBe(false);
+    const row = [...$("workers").querySelectorAll("tbody tr")].find((tr) =>
+      tr.textContent?.includes("w-out-00"),
+    ) as HTMLElement;
+    expect(row.getAttribute("aria-label")).toBe("Worker w-out-00, opted out");
+    row.click();
+    await page.settle();
+    await page.settle();
+    expect(panel.querySelector(".ui-badge")?.className).toBe("ui-badge");
+    expect(panel.querySelector(".line")?.textContent).toContain("ago, near 37.770");
+    expect(panel.querySelector(".line")?.textContent).toContain("earned $3.00 in 2 payouts, $6.00 released");
+    panel.close();
+    panel.dispatchEvent(new page.happy.Event("close") as unknown as Event);
+    const third = [...$("workers").querySelectorAll("tbody tr")].find((tr) =>
+      tr.textContent?.includes("w-in-000"),
+    ) as HTMLElement;
+    third.click();
+    await page.settle();
+    await page.settle();
+    expect(panel.textContent).toContain("Could not load the worker: No worker with this id.");
+  });
+
+  it("shows a worker with no location, no tasks and no earnings", async () => {
+    const page = await setup(
+      {
+        [`GET /ops/workers/${W}`]: () =>
+          ok({
+            ...detail,
+            worker: { ...detail.worker, lat: null, lng: null, banned: true },
+            tasks: [],
+            earnings: {},
+          }),
+      },
+      { hash: `#workers?w=${W.slice(0, 8)}` },
+    );
+    await page.settle();
+    await page.settle();
+    const panel = page.$("review-panel");
+    expect(panel.querySelector(".ui-badge")?.textContent).toBe("banned");
+    expect(panel.querySelector(".line")?.textContent).toContain("No location");
+    expect(panel.querySelector(".line")?.textContent).toContain("earned $0.00 in 0 payouts");
+    expect(panel.querySelector(".panel__sub")?.textContent).toBe("No tasks yet");
+    expect(panel.querySelector("img")).toBeNull();
+  });
+
+  it("says there is no story before the first task", async () => {
+    const page = await setup({ "GET /ops/feed": () => ok(feed({}, { tasks: [] })) }, { hash: "#workers" });
+    expect(page.$("story").textContent).toContain("No tasks yet.");
+  });
+});
+
+describe("ops access tab", () => {
+  const ENTRIES = [
+    {
+      id: "e1",
+      kind: "phone",
+      value: "***0100",
+      added_by: "break-glass",
+      added_at: "2026-10-17T12:00:00Z",
+      self: true,
+    },
+    {
+      id: "e2",
+      kind: "email",
+      value: "***@example.com",
+      added_by: "***0100",
+      added_at: "2026-10-17T13:00:00Z",
+      self: false,
+    },
+  ];
+  it("lists who can sign in, adds with a clear error, and removes after an inline confirm, never yourself", async () => {
+    let entries = [...ENTRIES];
+    let failRemove = true;
+    const page = await setup(
+      {
+        "GET /ops/allowlist": () => ok({ entries }),
+        "POST /ops/allowlist": (init) => {
+          const { identifier } = JSON.parse(String(init?.body)) as { identifier: string };
+          if (identifier === "nope")
+            return ok({ error: "invalid_input", message: "Enter a phone number." }, 400);
+          entries = [
+            ...entries,
+            { ...ENTRIES[1], id: "e3", value: "***0123", kind: "phone" } as (typeof ENTRIES)[number],
+          ];
+          return ok({ entry: {} });
+        },
+        "POST /ops/allowlist/remove": (init) => {
+          if (failRemove) return ok({ error: "invalid_input", message: "Reload the page." }, 400);
+          const { id } = JSON.parse(String(init?.body)) as { id: string };
+          entries = entries.filter((e) => e.id !== id);
+          return ok({ ok: true });
+        },
+      },
+      { hash: "#access" },
+    );
+    const { $, requests } = page;
+    await page.settle();
+    const rows = () => [...$("access-list").querySelectorAll("li")];
+    expect(rows().map((li) => li.querySelector("strong")?.textContent)).toEqual([
+      "***0100",
+      "***@example.com",
+    ]);
+    expect(rows()[0]?.textContent).toContain("You cannot remove yourself");
+    expect(rows()[0]?.querySelector("button")).toBeNull();
+    expect(requests.find((r) => r.path === "/ops/allowlist")).toBeTruthy();
+
+    const input = $<HTMLInputElement>("access-identifier");
+    const submit = async (value: string) => {
+      input.value = value;
+      $("access-add").dispatchEvent(new page.happy.Event("submit", { cancelable: true }) as unknown as Event);
+      await page.settle();
+      await page.settle();
+    };
+    await submit("nope");
+    expect([$("access-error").textContent, input.getAttribute("aria-invalid")]).toEqual([
+      "Enter a phone number.",
+      "true",
+    ]);
+    await submit("+14155550123");
+    expect([$("access-error").textContent, input.value, input.getAttribute("aria-invalid")]).toEqual([
+      "",
+      "",
+      null,
+    ]);
+    expect(rows()).toHaveLength(3);
+
+    const removeOf = (i: number) => rows()[i]?.querySelector("button") as HTMLButtonElement;
+    expect(removeOf(1).getAttribute("aria-label")).toBe("Remove ***@example.com");
+    removeOf(1).click();
+    expect(rows()[1]?.querySelector(".is-confirming")?.textContent).toContain(
+      "Remove ***@example.com? They can no longer sign in.",
+    );
+    // Cancel and Escape put the button back.
+    const cancel = rows()[1]?.querySelector(".is-confirming button + button") as HTMLElement;
+    cancel.click();
+    expect(rows()[1]?.querySelector(".is-confirming")).toBeNull();
+    removeOf(1).click();
+    rows()[1]
+      ?.querySelector(".is-confirming")
+      ?.dispatchEvent(
+        new page.happy.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event,
+      );
+    expect(rows()[1]?.querySelector(".is-confirming")).toBeNull();
+    removeOf(1).click();
+    const confirm = () => rows()[1]?.querySelector(".is-confirming button") as HTMLButtonElement;
+    confirm().click();
+    await page.settle();
+    await page.settle();
+    expect(rows()).toHaveLength(3);
+    expect(confirm().disabled).toBe(false);
+    failRemove = false;
+    confirm().click();
+    await page.settle();
+    await page.settle();
+    expect(rows().map((li) => li.querySelector("strong")?.textContent)).toEqual(["***0100", "***0123"]);
+  });
+
+  it("says when the list cannot load, and when it is empty", async () => {
+    let fail = true;
+    const page = await setup(
+      {
+        "GET /ops/allowlist": () =>
+          fail ? ok({ error: "unauthorized", message: "Sign in again." }, 401) : ok({ entries: [] }),
+      },
+      { hash: "#access" },
+    );
+    await page.settle();
+    expect(page.$("access-list").textContent).toBe("Could not load the list: Sign in again.");
+    fail = false;
+    page.win.location.hash = "#access";
+    page.win.dispatchEvent(new page.happy.HashChangeEvent("hashchange") as unknown as Event);
+    await page.settle();
+    expect(page.$("access-list").textContent).toBe("Nobody yet.");
+  });
+});
+
 describe("ops page on its own host", () => {
   it("fetches, links and signs out without the /ops prefix", async () => {
     const page = await setup(
@@ -1499,15 +1852,15 @@ describe("ops page on its own host", () => {
       { root: true },
     );
     expect(page.raw.slice(0, 5)).toEqual(["/feed", "/tickets", "/tickets", "/events", "/series"]);
-    expect(page.doc.querySelector('a[href="/live"]')?.textContent).toBe("Live map");
-    expect(page.doc.querySelector('a[href="/allowlist"]')).toBeTruthy();
+    // The header keeps only the signed-in label and Log out: the live map and allowlist are tabs now.
+    expect(page.doc.querySelectorAll(".bar a")).toHaveLength(1);
     await page.click(page.$("logout"));
     expect(page.assign).toHaveBeenCalledWith("/login");
   });
 
   it("keeps the /ops prefix on loopback", async () => {
-    const page = await setup();
-    expect(page.doc.querySelector('a[href="/ops/live"]')).toBeTruthy();
+    const page = await setup({}, { hash: "#access" });
+    expect(page.raw).toContain("/ops/allowlist");
   });
 });
 

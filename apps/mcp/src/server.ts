@@ -35,7 +35,6 @@ import { PAGE_CSS, PAGE_HEADER } from "@eyes/ui/page";
 import {
   buildSeries,
   type ClickHouseSink,
-  PAGE as DASHBOARD,
   type EventLog,
   type Feed,
   fallbackRows,
@@ -115,6 +114,7 @@ const LINK = '</llms.txt>; rel="describedby", </openapi.json>; rel="service-desc
 const CLIENT_KEY_CHARS = 64;
 const sha256 = (text: string) => createHash("sha256").update(text);
 const coarse = (degrees: number) => Math.round(degrees * 1000) / 1000;
+type OpsWorker = { lat: number | null; lng: number | null; [key: string]: unknown };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEED_HEADERS = { "Referrer-Policy": "no-referrer", "Cache-Control": "no-store" };
 function opsHeaders(page: string) {
@@ -1063,13 +1063,12 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       commit: env.EYES_COMMIT || null,
       node: process.version,
     };
-    for (const [path, page] of [
-      ["/ops", OPS_PAGE],
-      ["/ops/live", DASHBOARD],
-    ] as const) {
-      const headers = opsHeaders(page);
-      server.app.get(path, ops.operator, (c) => c.html(page, 200, headers));
-    }
+    const opsPageHeaders = opsHeaders(OPS_PAGE);
+    server.app.get("/ops", ops.operator, (c) => c.html(OPS_PAGE, 200, opsPageHeaders));
+    // The old live map is the Workers tab now.
+    server.app.get("/ops/live", ops.operator, (c) =>
+      c.redirect(`${opsSite.site(c).base || "/"}#workers`, 301),
+    );
     server.app.get("/ops/feed", ops.operator, async (c) => {
       const now = deps.providers.clock.now();
       let feed: Feed = { tasks: [], ledger: [], workers: [], totals: {} };
@@ -1156,6 +1155,32 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
           confidence: s?.confidence ?? null,
           submitted_at: s?.created_at ?? null,
           distance_m: s ? Math.round(distanceMeters(t, s)) : null,
+        },
+        200,
+        FEED_HEADERS,
+      );
+    });
+    // One worker for the Workers panel: state, rounded last fix, their tasks, what they earned.
+    server.app.get("/ops/workers/:id", ops.operator, async (c) => {
+      const id = c.req.param("id");
+      const [row] = UUID.test(id)
+        ? await rpc<{ worker: OpsWorker | null; tasks: unknown[]; earnings: Record<string, unknown> }>(
+            "eyes_ops_worker",
+            { p_id: id, p_limit: 10 },
+          )
+        : [];
+      if (!row?.worker)
+        return c.json({ error: "worker_not_found", message: "No worker with this id." }, 404, FEED_HEADERS);
+      const w = row.worker;
+      return c.json(
+        {
+          worker: {
+            ...w,
+            lat: w.lat == null ? null : coarse(w.lat),
+            lng: w.lng == null ? null : coarse(w.lng),
+          },
+          tasks: row.tasks,
+          earnings: row.earnings,
         },
         200,
         FEED_HEADERS,

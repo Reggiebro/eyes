@@ -72,12 +72,13 @@ describe("ops host routing", () => {
     const page = await fetch("internal.eyes.test", "/", { headers: session });
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toMatch(/script-src https:\/\/unpkg\.com 'sha256-/);
-    expect((await fetch("internal.eyes.test", "/live", { headers: session })).status).toBe(200);
+    const live = await fetch("internal.eyes.test", "/live", { headers: session });
+    expect([live.status, live.headers.get("location")]).toEqual([301, "/#workers"]);
     expect((await fetch("internal.eyes.test", "/feed", { headers: session })).status).toBe(200);
     const allowlist = await fetch("internal.eyes.test", "/allowlist", {
       headers: { ...session, accept: "text/html" },
     });
-    expect(await allowlist.text()).toContain('href="/">Back to the dashboard');
+    expect([allowlist.status, allowlist.headers.get("location")]).toEqual([301, "/#access"]);
   });
 
   it("checks posts against the ops origin there", async () => {

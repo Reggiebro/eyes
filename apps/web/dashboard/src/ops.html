@@ -80,8 +80,50 @@ code, pre { font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); 
 #map { height: 22rem; border-radius: var(--eyes-radius-lg); background: var(--eyes-surface-tertiary); z-index: 0; }
 #map.grow { height: auto; min-height: 22rem; overflow: hidden; }
 .filters.short { grid-template-columns: minmax(0, 24rem) minmax(0, 12rem); justify-content: start; }
+/* Map markers: tasks colored by status (live ones larger), workers yellow when available, the selected one ringed. */
+#map .pin { stroke: var(--eyes-surface); fill: var(--eyes-text-tertiary); fill-opacity: 0.9; }
+#map .pin.s-dispatched, #map .pin.s-claimed, #map .pin.s-submitted { fill: var(--eyes-accent); }
+#map .pin.s-verified, #map .pin.s-paid { fill: var(--eyes-success-text); }
+#map .pin.s-needs_review { fill: var(--eyes-warning-text); }
+#map .pin.s-disputed { fill: var(--eyes-danger-text); }
+#map .wk { stroke: var(--eyes-surface); fill-opacity: 1; cursor: pointer; }
+#map .wk.is-on { fill: var(--eyes-text); }
+#map .wk.is-off { fill: var(--eyes-text-tertiary); fill-opacity: 0.6; }
+#map .wk.is-selected { stroke: var(--eyes-accent); fill: var(--eyes-text); }
+/* The latest task, as the old live page told it: headline, question, then its timeline. */
+.story { display: grid; gap: var(--eyes-space-1); }
+.story p { margin: 0; }
+.story__head { font-weight: var(--eyes-weight-medium); }
+.story__q { font-size: var(--eyes-text-sm); }
+.steps { display: flex; flex-wrap: wrap; gap: var(--eyes-space-1) var(--eyes-space-3); margin: var(--eyes-space-1) 0 0; padding: 0; list-style: none; font-size: var(--eyes-text-xs); }
+.step { display: inline-flex; align-items: baseline; gap: var(--eyes-space-1); color: var(--eyes-text-tertiary); }
+.step::before { content: ""; align-self: center; width: 0.5rem; height: 0.5rem; border-radius: 999px; border: 1.5px solid currentColor; }
+.step + .step::after { order: -2; content: "→"; color: var(--eyes-text-tertiary); }
+.step.is-done { color: var(--eyes-text); }
+.step.is-done::before { background: currentColor; }
+.step.is-done.t-success { color: var(--eyes-success-text); }
+.step.is-done.t-warning { color: var(--eyes-warning-text); }
+.step.is-done.t-danger { color: var(--eyes-danger-text); }
+.step.is-next { color: var(--eyes-text-secondary); }
+.step.is-next::before { border-color: var(--eyes-accent); }
+.step b { font-weight: var(--eyes-weight-medium); }
+.step time { color: var(--eyes-text-tertiary); font-variant-numeric: tabular-nums; }
+.wtasks { display: grid; gap: var(--eyes-space-3); margin: 0; padding: 0; list-style: none; }
+.wtasks > li { display: grid; gap: 2px; padding-bottom: var(--eyes-space-3); border-bottom: 1px solid var(--eyes-border-subtle); }
+.wtasks p, .panel__sub { margin: 0; }
+.panel__sub { font-size: var(--eyes-text-sm); font-weight: var(--eyes-weight-semibold); }
+/* Access tab. */
+#access-list > .access__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--eyes-space-2); padding: var(--eyes-space-2) 0; border-bottom: 1px solid var(--eyes-border-subtle); }
+#access-list > .access__row > button, #access-list > .access__row > .tiny { margin-left: auto; }
+.access__who { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--eyes-space-1); }
+.access__add { display: flex; flex-wrap: wrap; align-items: end; gap: var(--eyes-space-2); margin-top: var(--eyes-space-4); }
+.access__add .ui-field { flex: 1 1 18rem; }
+.access__error { flex-basis: 100%; margin: 0; font-size: var(--eyes-text-sm); color: var(--eyes-danger-text); }
+.access__error:empty { display: none; }
 #map.nomap { display: grid; place-items: center; color: var(--eyes-text-secondary); font-size: var(--eyes-text-sm); }
-@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); } }
+/* Grey street tiles (inverted in dark mode), so the pins carry the color. */
+#map .leaflet-tile-pane { filter: grayscale(1) contrast(0.9); }
+@media (prefers-color-scheme: dark) { #map .leaflet-tile-pane { filter: grayscale(1) invert(1) brightness(0.75) contrast(0.8); } }
 .ui-status > li { padding: var(--eyes-space-2) 0; }
 .ui-notice { margin: 0; }
 #banner { grid-column: span 12; }
@@ -129,12 +171,11 @@ code, pre { font-family: var(--eyes-font-mono); font-size: var(--eyes-text-xs); 
 /* Words wrap only between words: "Needs review" takes two lines, "Dispatched" never splits. */
 .funnel__label { font-size: 0.6875rem; color: var(--eyes-text-secondary); overflow-wrap: normal; }
 .funnel__step.is-zero b { color: var(--eyes-text-tertiary); }
-.funnel__step.is-danger { background: var(--eyes-danger-bg); }
-.funnel__step.is-danger :is(b, .funnel__label) { color: var(--eyes-danger-text); }
-.funnel__step.is-danger .funnel__bar { background: var(--eyes-danger-text); box-shadow: none; }
-.funnel__step.is-warn { background: var(--eyes-warning-bg); }
-.funnel__step.is-warn :is(b, .funnel__label) { color: var(--eyes-warning-text); }
-.funnel__step.is-warn .funnel__bar { background: var(--eyes-warning-text); box-shadow: none; }
+/* Attention columns: no box, just a solid bar of the same shape (red, amber) and a colored count. */
+.funnel__step.is-danger:not(.is-zero) .funnel__bar { background: var(--eyes-danger-text); box-shadow: none; }
+.funnel__step.is-warn:not(.is-zero) .funnel__bar { background: var(--eyes-warning-text); box-shadow: none; }
+.funnel__step.is-danger b { color: var(--eyes-danger-text); }
+.funnel__step.is-warn b { color: var(--eyes-warning-text); }
 .lead { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--eyes-space-2); margin: 0; }
 .money { width: 100%; border-collapse: collapse; font-size: var(--eyes-text-sm); }
 .money tbody + tbody { border-top: 1px solid var(--eyes-border-subtle); }
@@ -339,8 +380,6 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
   <span id="updated" class="tiny"></span>
   <span class="spacer"></span>
   <span id="operator" class="tiny"></span>
-  <a href="/ops/live">Live map</a>
-  <a href="/ops/allowlist">Allowlist</a>
   <button id="logout" class="ui-button ui-button--ghost ui-button--sm" type="button">Log out</button>
 </header>
 <div id="tabs" class="tabs" role="tablist" aria-label="Ops sections">
@@ -351,6 +390,7 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
   <a role="tab" id="tab-workers" href="#workers" aria-controls="p-workers">Workers</a>
   <a role="tab" id="tab-money" href="#money" aria-controls="p-money">Money</a>
   <a role="tab" id="tab-logs" href="#logs" aria-controls="p-logs">Logs <span id="n-logs" class="count"></span></a>
+  <a role="tab" id="tab-access" href="#access" aria-controls="p-access">Access</a>
 </div>
 <main>
   <p id="banner" class="ui-notice ui-notice--danger" hidden></p>
@@ -408,6 +448,7 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
     <section class="ui-card c7 map-card fill">
       <header class="ui-card__header"><h2 class="ui-card__title">Workers</h2><span class="sub">positions rounded to about 100 m</span></header>
       <div id="worker-stats" class="stats"></div>
+      <div id="story" class="story" aria-live="polite"></div>
       <div id="map" class="grow"></div>
     </section>
     <section class="ui-card c5">
@@ -420,6 +461,19 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
     <section class="ui-card c12">
       <header class="ui-card__header"><h2 class="ui-card__title">Ledger</h2><span id="ledger-total" class="sub"></span></header>
       <div id="ledger"></div>
+    </section>
+  </div>
+
+  <div id="p-access" class="panel" role="tabpanel" aria-labelledby="tab-access" hidden>
+    <section class="ui-card c8">
+      <header class="ui-card__header"><h2 class="ui-card__title">Who can sign in</h2><span class="sub">phones and emails, masked; each signs in with a code</span></header>
+      <ul id="access-list" class="rows access"></ul>
+      <form id="access-add" class="access__add" novalidate>
+        <label class="ui-field"><span class="ui-field__label">Add a phone or email</span>
+        <input id="access-identifier" class="ui-input" name="identifier" required autocomplete="off" placeholder="+14155550123 or name@example.com" aria-describedby="access-error"></label>
+        <button class="ui-button ui-button--primary" type="submit">Add</button>
+        <p id="access-error" class="access__error" role="alert"></p>
+      </form>
     </section>
   </div>
 

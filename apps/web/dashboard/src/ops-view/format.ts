@@ -20,7 +20,7 @@ export const LEDGER_LABEL: Record<string, string> = {
   payout: "Payout",
   fee: "Fee",
 };
-export const TABS = ["overview", "review", "support", "tasks", "workers", "money", "logs"];
+export const TABS = ["overview", "review", "support", "tasks", "workers", "money", "logs", "access"];
 
 export const usd = (cents: number | null | undefined) => `$${((cents || 0) / 100).toFixed(2)}`;
 export const time = (iso: string | null | undefined) =>
@@ -157,3 +157,68 @@ export function eventQuery(fields: Record<string, string>, before: number | null
   if (before) p.set("before", String(before));
   return p;
 }
+
+/** What a task timeline needs; the feed, the Tasks list and the worker panel all carry these. */
+export type Timed = {
+  status: string;
+  created_at: string;
+  claimed_at?: string | null;
+  submitted_at?: string | null;
+  photo_url?: string | null;
+  workers_notified?: number | null;
+  bounty_cents?: number;
+  fee_cents?: number;
+  money_at?: Record<string, string> | null;
+  place_label?: string | null;
+};
+export type Step = { label: string; at: string | null; done: boolean; tone: string };
+
+/** The live map's timeline: Asked, N notified, Claimed, Photo, Verified, $ paid; or the refund. */
+export function taskSteps(t: Timed): Step[] {
+  const m = t.money_at ?? {};
+  const total = usd((t.bounty_cents ?? 0) + (t.fee_cents ?? 0));
+  const list: Omit<Step, "done">[] = [
+    { label: "Asked", at: t.created_at, tone: "accent" },
+    { label: `${t.workers_notified ?? 0} notified`, at: t.created_at, tone: "accent" },
+  ];
+  if (t.claimed_at || !m.refund) list.push({ label: "Claimed", at: t.claimed_at ?? null, tone: "accent" });
+  if (m.refund) {
+    list.push({ label: t.status === "expired" ? "Expired" : "Cancelled", at: m.refund, tone: "muted" });
+    list.push({ label: `${total} refunded`, at: m.refund, tone: "muted" });
+  } else {
+    list.push({
+      label: t.submitted_at && !t.photo_url ? "Answer" : "Photo",
+      at: t.submitted_at ?? null,
+      tone: "accent",
+    });
+    if (t.status === "needs_review")
+      list.push({ label: "Needs review", at: t.submitted_at ?? null, tone: "warning" });
+    else list.push({ label: "Verified", at: m.release ?? null, tone: "success" });
+    list.push({ label: `${usd(t.bounty_cents)} paid`, at: m.payout ?? null, tone: "success" });
+  }
+  const steps = list.map((s) => ({ ...s, done: Boolean(s.at) }));
+  if (t.status === "disputed") steps.push({ label: "Disputed", at: null, done: true, tone: "danger" });
+  return steps;
+}
+
+/** One line on what a task is doing now, as the live map said it. */
+export function taskHeadline(t: Timed) {
+  // "Near 37.761, -122.386" keeps both numbers; a named place keeps its first part.
+  const near = nearLabel(t.place_label);
+  const place = near.startsWith("Near ") ? near.slice(5) : near.split(",")[0];
+  const n = t.workers_notified ?? 0;
+  const total = usd((t.bounty_cents ?? 0) + (t.fee_cents ?? 0));
+  const lines: Record<string, string> = {
+    dispatched: `${n} ${n === 1 ? "worker" : "workers"} notified near ${place}`,
+    claimed: `A worker is on the way to ${place}`,
+    submitted: `Photo in from ${place}, checking it`,
+    verified: `Verified at ${place}, paying the worker`,
+    paid: `Answered at ${place}, worker paid ${usd(t.bounty_cents)}`,
+    needs_review: `Answer in from ${place}, it needs a human look`,
+    expired: `Nobody reached ${place} in time, ${total} refunded`,
+    refunded: `Cancelled before anyone claimed it, ${total} refunded`,
+    disputed: `The agent disputed the answer from ${place}`,
+  };
+  return lines[t.status] ?? `${statusWords(t.status)} at ${place}`;
+}
+const statusWords = (s: string) => s.replace(/_/g, " ");

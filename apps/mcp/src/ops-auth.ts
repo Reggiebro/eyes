@@ -121,28 +121,6 @@ ${
 }`,
   );
 
-const allowlistPage = (base: string, entries: Entry[], op: Operator, error?: string) =>
-  page(
-    "Eyes ops allowlist",
-    html`<h1 class="ui-h2">Who can sign in to ops</h1>
-<p class="ui-field__hint">Signed in as ${op.label}. <a class="ui-link" href="${base || "/"}">Back to the dashboard</a></p>
-${alert(error)}
-<ul class="rows">
-${entries.map(
-  (e) => html`<li><span><strong>${mask(e.value)}</strong> <span class="ui-badge">${e.kind}</span><br>
-<span class="ui-field__hint">added by ${mask(e.added_by)} on ${e.added_at.slice(0, 10)}</span></span>
-<form method="post" action="${base}/allowlist/remove"><input type="hidden" name="id" value="${e.id}">
-<button class="ui-button ui-button--sm ui-button--ghost"${e.id === op.id ? raw(" disabled") : ""}>Remove</button></form></li>`,
-)}
-</ul>
-<form class="ui-form" method="post" action="${base}/allowlist">
-<label class="ui-field"><span class="ui-field__label">Add a phone or email</span>
-<input class="ui-input" name="identifier" required placeholder="+14155550123 or name@example.com"></label>
-<button class="ui-button ui-button--primary">Add</button>
-</form>
-<form method="post" action="${base}/logout"><button class="ui-button ui-button--sm ui-button--ghost">Sign out</button></form>`,
-  );
-
 export function opsAuth(deps: {
   rpc: Rpc;
   providers: Providers;
@@ -298,25 +276,23 @@ export function opsAuth(deps: {
     return wantsHtml(c) ? c.redirect(`${base(c)}/login`, 303) : c.json({ ok: true }, 200, HEADERS);
   });
 
-  const allowlistError = async (c: Context<OpsEnv>, json: boolean, message: string) =>
-    json
-      ? c.json({ error: "invalid_input", message }, 400, HEADERS)
-      : c.html(allowlistPage(base(c), await allowlist(), c.get("operator"), message), 400, HEADERS);
+  const allowlistError = (c: Context<OpsEnv>, message: string) =>
+    c.json({ error: "invalid_input", message }, 400, HEADERS);
 
+  // The list lives in the dashboard's Access tab; the old page address goes there.
   routes.get("/ops/allowlist", operator, async (c) => {
+    if (wantsHtml(c)) return c.redirect(`${base(c) || "/"}#access`, 301);
+    const op = c.get("operator");
     const entries = await allowlist();
-    return wantsHtml(c)
-      ? c.html(allowlistPage(base(c), entries, c.get("operator")), 200, HEADERS)
-      : c.json({ entries: entries.map(view) }, 200, HEADERS);
+    return c.json({ entries: entries.map((e) => ({ ...view(e), self: e.id === op.id })) }, 200, HEADERS);
   });
 
   routes.post("/ops/allowlist", operator, sameOrigin, async (c) => {
-    const { json, body } = await readBody(c);
+    const { body } = await readBody(c);
     const who = normalize(body.identifier);
     if (!who) {
       return allowlistError(
         c,
-        json,
         "Enter a phone number with its country code, like +14155550123, or an email address.",
       );
     }
@@ -327,12 +303,11 @@ export function opsAuth(deps: {
       p_added_by: by,
     });
     auth("allowlist add", { entry: mask(who.value), by });
-    if (!json) return c.redirect(`${base(c)}/allowlist`, 303);
     return c.json({ entry: entry && view(entry) }, 200, HEADERS);
   });
 
   routes.post("/ops/allowlist/remove", operator, sameOrigin, async (c) => {
-    const { json, body } = await readBody(c);
+    const { body } = await readBody(c);
     const op = c.get("operator");
     const entries = await allowlist();
     const entry = entries.find((e) => e.id === body.id);
@@ -345,10 +320,10 @@ export function opsAuth(deps: {
         : entries.length <= 1
           ? "You cannot remove the last entry: nobody could sign in."
           : null;
-    if (problem || !entry) return allowlistError(c, json, problem ?? "");
+    if (problem || !entry) return allowlistError(c, problem ?? "");
     await rpc("eyes_ops_allowlist_remove", { p_id: entry.id });
     auth("allowlist remove", { entry: mask(entry.value), by: op.label });
-    return json ? c.json({ ok: true }, 200, HEADERS) : c.redirect(`${base(c)}/allowlist`, 303);
+    return c.json({ ok: true }, 200, HEADERS);
   });
 
   // After the static /ops/* routes; 32+ chars so it never shadows /ops/live, /ops/feed and the like.

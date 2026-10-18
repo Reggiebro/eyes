@@ -10,6 +10,7 @@ import {
   datedQuery,
   eventQuery,
   LEDGER_LABEL,
+  LIVE,
   nearLabel,
   nextTab,
   POLL_MS,
@@ -18,7 +19,10 @@ import {
   sum,
   TABS,
   type TicketFields,
+  type Timed,
   tabFor,
+  taskHeadline,
+  taskSteps,
   ticketOpen,
   time,
   uptime,
@@ -43,6 +47,7 @@ import {
   renderMoney,
   type SeriesData,
   seriesCharts,
+  statusLabel,
 } from "./overview.ts";
 import {
   createTable,
@@ -78,6 +83,21 @@ export type Task = Checked & {
   money_at?: Record<string, string> | null;
   /** From the paged /ops/tasks list. */
   agent?: string | null;
+  /** From the feed: where the task is, for its map marker. */
+  lat?: number;
+  lng?: number;
+  fee_cents?: number;
+};
+/** GET /ops/workers/:id: one worker for the Workers panel. */
+type WorkerDetail = {
+  worker: Worker & {
+    banned?: boolean;
+    location_at: string;
+    location_source?: string | null;
+    created_at: string;
+  };
+  tasks: (Task & Checked & Timed)[];
+  earnings: { paid_cents?: number; payouts?: number; released_cents?: number; last_paid_at?: string | null };
 };
 type TaskDetail = Task & {
   fee_cents: number;
@@ -140,6 +160,10 @@ type Series = SeriesData & { source: string; dropped?: number };
 type Reply = { message?: string; error?: string; [key: string]: unknown };
 
 type Layer = { addTo(target: unknown): Layer; clearLayers(): void };
+type Marker = Layer & {
+  on(event: string, fn: () => void): Marker;
+  bindTooltip(text: string, options?: object): Marker;
+};
 type LeafletMap = {
   setView(center: [number, number], zoom: number): LeafletMap;
   fitBounds(bounds: unknown, options: object): void;
@@ -149,7 +173,7 @@ export type Leaflet = {
   map(id: string, options: object): LeafletMap;
   tileLayer(url: string, options: object): Layer;
   layerGroup(): Layer;
-  circleMarker(at: [number, number], options: object): Layer;
+  circleMarker(at: [number, number], options: object): Marker;
   latLngBounds(points: [number, number][]): { pad(ratio: number): unknown };
 };
 export type OpsWindow = Window & { L?: Leaflet; qTimer?: number };
@@ -349,9 +373,14 @@ export function boot(win: OpsWindow) {
     if (!review.open) review.showModal();
   }
 
+  // Workers map: dark street tiles in dark mode, task pins colored by status, workers you can click.
   let map: LeafletMap | null = null;
   let layer: Layer | null = null;
   let fitted = false;
+  let mapTasks: Task[] = [];
+  /** The worker shown in the panel (full id), kept in the hash as `w=<8 chars>`. */
+  let selected: string | null = null;
+  let wanted: string | null = null;
   function renderMap(all: Worker[]) {
     // STOP deletes a worker's location
     const workers = all.filter((w): w is Worker & { lat: number; lng: number } => w.lat != null);
@@ -362,31 +391,183 @@ export function boot(win: OpsWindow) {
       return;
     }
     if (!map || !layer) {
-      map = L.map("map", { zoomControl: false, attributionControl: true }).setView([37.7749, -122.4194], 12);
+      map = L.map("map", { zoomControl: false, attributionControl: true }).setView([37.7749, -122.4194], 13);
+      // Street tiles, greyed (and inverted in dark mode) by CSS so the pins carry the color.
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         // The page is Referrer-Policy same-origin; OSM blocks tile requests with no Referer.
         referrerPolicy: "strict-origin-when-cross-origin",
-        maxZoom: 16,
+        maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
       layer = L.layerGroup().addTo(map);
     }
     layer.clearLayers();
+    const pinned = mapTasks.filter((t) => t.lat != null && t.lng != null);
+    // Older tasks first, so the live ones draw on top.
+    for (const t of [...pinned].reverse()) {
+      const live = LIVE.includes(t.status);
+      L.circleMarker([t.lat as number, t.lng as number], {
+        radius: live ? 9 : 5,
+        weight: 2,
+        className: `pin s-${t.status}${live ? " is-live" : ""}`,
+      })
+        .bindTooltip(`${statusLabel(t.status)}: ${cut(nearLabel(t.place_label), 60)}`, { direction: "top" })
+        .on("click", () => openReview(t.id, t))
+        .addTo(layer);
+    }
     for (const w of workers) {
       const on = w.available && w.opted_in;
-      L.circleMarker([w.lat, w.lng], {
-        radius: 7,
-        weight: 2,
-        color: "#0d0d0d",
-        fillColor: on ? "#ffd60a" : "#8f8f8f",
-        fillOpacity: on ? 0.95 : 0.5,
-      }).addTo(layer);
+      const marker = L.circleMarker([w.lat, w.lng], {
+        radius: w.id === selected ? 11 : 7,
+        weight: w.id === selected ? 4 : 2,
+        className: `wk ${on ? "is-on" : "is-off"}${w.id === selected ? " is-selected" : ""}`,
+      });
+      marker
+        .bindTooltip(`worker ${w.id.slice(0, 8)}, ${RANK[rank(w)]}`, { direction: "top" })
+        .on("click", () => openWorker(w.id))
+        .addTo(layer);
     }
-    if (!fitted && workers.length) {
-      map.fitBounds(L.latLngBounds(workers.map((w) => [w.lat, w.lng])).pad(0.3), { maxZoom: 14 });
+    // City zoom around what is there: the live tasks if any, else every marker.
+    const live = pinned.filter((t) => LIVE.includes(t.status));
+    const points = [...(live.length ? live : pinned), ...workers].map(
+      (p) => [p.lat, p.lng] as [number, number],
+    );
+    if (!fitted && points.length) {
+      map.fitBounds(L.latLngBounds(points).pad(0.2), { maxZoom: 15 });
       fitted = true;
     }
   }
+
+  // The latest task, told the way the live map did: one headline and its timeline.
+  function steps(t: Timed, mini = false) {
+    const all = taskSteps(t);
+    const next = LIVE.includes(t.status) ? all.find((x) => !x.done) : undefined;
+    return h(
+      "ol",
+      mini ? "steps steps--mini" : "steps",
+      ...all.map((x) =>
+        h(
+          "li",
+          `step t-${x.tone}${x.done ? " is-done" : ""}${x === next ? " is-next" : ""}`,
+          h("b", null, x.label),
+          h("time", null, x.done && x.at ? time(x.at) : ""),
+        ),
+      ),
+    );
+  }
+  function renderStory(tasks: Task[]) {
+    const t = tasks.find((x) => LIVE.includes(x.status)) ?? tasks[0];
+    $("story").replaceChildren(
+      ...(t
+        ? [
+            h("p", "story__head", badge(statusLabel(t.status), STATUS_TONE[t.status]), " ", taskHeadline(t)),
+            h("p", "story__q muted", cut(t.question, 140)),
+            steps(t),
+          ]
+        : [h("p", "muted", "No tasks yet. When an agent asks about a place, its story shows here.")]),
+    );
+  }
+
+  // A link with #workers?w=<8 chars> opens that worker, once the feed has the workers.
+  function openWanted() {
+    const want = wanted && workers.visible().find((x) => x.id.startsWith(wanted as string));
+    if (!want) return;
+    wanted = null;
+    void openWorker(want.id);
+  }
+  const workerHash = () => (selected ? `w=${selected.slice(0, 8)}` : "");
+  function selectWorker(id: string | null) {
+    selected = id;
+    history.replaceState(null, "", hashOf("workers", workers.state()));
+    renderMap(workers.visible());
+  }
+  // One worker in the side panel: state, last fix, earnings, the latest photo and their tasks.
+  async function openWorker(id: string) {
+    const panel = $<HTMLDialogElement>("review-panel");
+    const close = h("button", "ui-button ui-button--ghost ui-button--sm", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => panel.close());
+    selectWorker(id);
+    const res = await fetch(`/workers/${id}`, { cache: "no-store" });
+    const d = await json<WorkerDetail & Reply>(res);
+    panel.dataset.worker = id;
+    if (res.ok) showWorker(d, close);
+    else panel.replaceChildren(h("p", null, `Could not load the worker: ${d.message ?? res.status}`), close);
+    if (!panel.open) panel.showModal();
+  }
+  function showWorker(d: WorkerDetail, close: HTMLElement) {
+    const w = d.worker;
+    const state = w.banned ? "banned" : (RANK[rank(w)] as string);
+    const e = d.earnings;
+    const shot = d.tasks.find((t) => t.submitted_at);
+    $("review-panel").replaceChildren(
+      ...[
+        h(
+          "div",
+          "task-head",
+          h("h2", "ui-card__title", `Worker ${w.id.slice(0, 8)}`),
+          badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+          close,
+        ),
+        h(
+          "div",
+          "line",
+          h(
+            "span",
+            null,
+            w.lat == null
+              ? "No location (texted STOP or never shared)"
+              : `Last spot ${ago(w.location_at, Date.now())} ago${w.location_source ? ` (${w.location_source})` : ""}, near ${w.lat.toFixed(3)}, ${w.lng?.toFixed(3)}`,
+          ),
+          h(
+            "span",
+            null,
+            "earned ",
+            h("strong", null, usd(e.paid_cents)),
+            ` in ${e.payouts ?? 0} payout${e.payouts === 1 ? "" : "s"}`,
+            e.last_paid_at ? `, last ${stamp(e.last_paid_at)}` : "",
+            e.released_cents && e.released_cents !== e.paid_cents
+              ? `, ${usd(e.released_cents)} released`
+              : "",
+          ),
+        ),
+        shot ? photoOf(shot) : null,
+        shot ? checks(shot) : null,
+        h("h3", "panel__sub", d.tasks.length ? `Last ${d.tasks.length} tasks` : "No tasks yet"),
+        h(
+          "ul",
+          "wtasks",
+          ...d.tasks.map((t) =>
+            h(
+              "li",
+              null,
+              h(
+                "p",
+                "wtasks__head",
+                badge(statusLabel(t.status), STATUS_TONE[t.status]),
+                " ",
+                cut(t.question, 120),
+              ),
+              h(
+                "p",
+                "tiny",
+                `${cut(nearLabel(t.place_label), 70)} · ${usd(t.bounty_cents)} · ${stamp(t.created_at)}`,
+              ),
+              steps(t, true),
+            ),
+          ),
+        ),
+        h("span", "tiny", w.id),
+      ].filter((x) => x != null),
+    );
+  }
+  // Esc or Close: the worker is no longer selected.
+  $("review-panel").addEventListener("close", () => {
+    const panel = $("review-panel");
+    if (!panel.dataset.worker) return;
+    delete panel.dataset.worker;
+    selectWorker(null);
+  });
 
   function render(feed: OpsFeed) {
     const o = feed.ops;
@@ -426,7 +607,10 @@ export function boot(win: OpsWindow) {
       h("div", "stat", h("b", null, String(w.total)), h("span", null, "signed up")),
     );
     workers.setRows(feed.workers);
+    mapTasks = feed.tasks;
     renderMap(workers.visible());
+    renderStory(feed.tasks);
+    openWanted();
     // The list tabs refresh with the feed while they are shown.
     const tab = tabFor(location.hash);
     if (tab === "tasks") taskPager.load();
@@ -828,6 +1012,12 @@ export function boot(win: OpsWindow) {
   };
   // Each tab's table keeps its state in the hash while it is shown, and in memory when it is not.
   const remembered: Record<string, TableState> = {};
+  // The Workers tab also keeps the selected worker in its hash.
+  const hashOf = (tab: string, state: TableState) => {
+    const hash = hashFor(tab, state);
+    const extra = tab === "workers" ? workerHash() : "";
+    return extra ? `${hash}${hash.includes("?") ? "&" : "?"}${extra}` : hash;
+  };
   const restore: Record<string, (params: URLSearchParams) => void> = {};
   // Today, yesterday, the last 7 days, or custom days; the server filters (see datedQuery).
   const dateFilters = <T>(): Filter<T>[] => [
@@ -844,7 +1034,7 @@ export function boot(win: OpsWindow) {
       onChange: (state) => {
         remembered[tab] = state;
         // Only the shown tab owns the hash.
-        if (tabFor(location.hash) === tab) history.replaceState(null, "", hashFor(tab, state));
+        if (tabFor(location.hash) === tab) history.replaceState(null, "", hashOf(tab, state));
         options.onState?.();
       },
     });
@@ -857,7 +1047,7 @@ export function boot(win: OpsWindow) {
       if (!state) return;
       remembered[tab] = state;
       table.setState(state);
-      history.replaceState(null, "", hashFor(tab, state));
+      history.replaceState(null, "", hashOf(tab, state));
       options.onState?.();
     };
     return table;
@@ -1218,6 +1408,9 @@ export function boot(win: OpsWindow) {
     empty: "No workers yet.",
     initial: { q: "", sort: "-state", f: {} },
     onState: () => renderMap(workers.visible()),
+    key: (w) => w.id,
+    label: (w) => `Worker ${w.id.slice(0, 8)}, ${RANK[rank(w)]}`,
+    open: (w) => openWorker(w.id),
     columns: [
       { key: "worker", label: "Worker", text: (w) => `worker ${w.id.slice(0, 8)}` },
       {
@@ -1254,9 +1447,114 @@ export function boot(win: OpsWindow) {
 
   const toast = createToaster(document, later);
 
+  // Access: who can sign in to ops. The JSON routes the old /allowlist page used (same CSRF/Origin checks).
+  type AccessEntry = {
+    id: string;
+    kind: string;
+    value: string;
+    added_by: string;
+    added_at: string;
+    self?: boolean;
+  };
+  const post = (path: string, body: object) =>
+    fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+  function accessRow(e: AccessEntry) {
+    const li = h(
+      "li",
+      "access__row",
+      h(
+        "span",
+        "access__who",
+        h("strong", null, e.value),
+        " ",
+        badge(e.kind),
+        e.self ? badge("you", "success") : null,
+        h("span", "tiny", ` added by ${e.added_by} on ${e.added_at.slice(0, 10)}`),
+      ),
+    );
+    if (e.self) {
+      li.append(h("span", "tiny muted", "You cannot remove yourself"));
+      return li;
+    }
+    const remove = h("button", "ui-button ui-button--ghost ui-button--sm", "Remove");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${e.value}`);
+    // Inline confirm: the row asks once, Cancel or Escape puts the button back.
+    remove.addEventListener("click", () => {
+      const yes = h("button", "ui-button ui-button--danger ui-button--sm", "Remove");
+      const no = h("button", "ui-button ui-button--ghost ui-button--sm", "Cancel");
+      yes.type = "button";
+      no.type = "button";
+      const ask = h(
+        "span",
+        "decide__row is-confirming",
+        h("span", null, `Remove ${e.value}? They can no longer sign in.`),
+        yes,
+        no,
+      );
+      const back = () => {
+        ask.replaceWith(remove);
+        remove.focus();
+      };
+      no.addEventListener("click", back);
+      ask.addEventListener("keydown", (k) => k.key === "Escape" && back());
+      yes.addEventListener("click", async () => {
+        yes.disabled = true;
+        const res = await post("/allowlist/remove", { id: e.id });
+        const body = await json<Reply>(res);
+        if (!res.ok) {
+          yes.disabled = false;
+          toast(`Not removed: ${body.message ?? res.status}`);
+          return;
+        }
+        toast(`Removed ${e.value}`);
+        await loadAccess();
+      });
+      remove.replaceWith(ask);
+      no.focus();
+    });
+    li.append(remove);
+    return li;
+  }
+  async function loadAccess() {
+    const res = await fetch("/allowlist", { cache: "no-store", headers: { accept: "application/json" } });
+    const body = await json<{ entries?: AccessEntry[] } & Reply>(res);
+    const list = $("access-list");
+    if (!res.ok || !body.entries) {
+      list.replaceChildren(empty(`Could not load the list: ${body.message ?? res.status}`));
+      return;
+    }
+    list.replaceChildren(...(body.entries.length ? body.entries.map(accessRow) : [empty("Nobody yet.")]));
+  }
+  $<HTMLFormElement>("access-add").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = $<HTMLInputElement>("access-identifier");
+    const error = $("access-error");
+    const res = await post("/allowlist", { identifier: input.value });
+    const body = await json<Reply>(res);
+    if (!res.ok) {
+      error.textContent = body.message ?? `Failed: ${res.status}`;
+      input.setAttribute("aria-invalid", "true");
+      return;
+    }
+    error.textContent = "";
+    input.removeAttribute("aria-invalid");
+    input.value = "";
+    toast("Added. They can sign in with a code now.");
+    await loadAccess();
+  });
+
   function showTab() {
     const name = tabFor(location.hash);
-    restore[name]?.(parseHash(location.hash).params);
+    const params = parseHash(location.hash).params;
+    if (name === "workers" && params.get("w") && params.get("w") !== selected?.slice(0, 8))
+      wanted = params.get("w");
+    restore[name]?.(params);
+    openWanted();
     for (const t of TABS) {
       $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
       $(`tab-${t}`).tabIndex = t === name ? 0 : -1;
@@ -1265,6 +1563,7 @@ export function boot(win: OpsWindow) {
     $(`tab-${name}`).scrollIntoView({ block: "nearest", inline: "nearest" });
     if (name === "tasks") taskPager.load();
     if (name === "money") ledgerPager.load();
+    if (name === "access") void loadAccess();
     // Leaflet measured a hidden box; size it again and refit.
     if (name === "workers" && map) {
       map.invalidateSize();
@@ -1277,7 +1576,7 @@ export function boot(win: OpsWindow) {
     if (!t) return;
     e.preventDefault();
     $(`tab-${t}`).focus();
-    history.replaceState(null, "", remembered[t] ? hashFor(t, remembered[t]) : `#${t}`);
+    history.replaceState(null, "", remembered[t] ? hashOf(t, remembered[t]) : `#${t}`);
     showTab();
   });
   win.addEventListener("hashchange", showTab);
