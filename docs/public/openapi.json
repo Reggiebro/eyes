@@ -1077,6 +1077,47 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "retry_context": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "location": {
+                          "type": "object",
+                          "properties": {
+                            "lat": {
+                              "type": "number"
+                            },
+                            "lng": {
+                              "type": "number"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["lat", "lng", "label"],
+                          "additionalProperties": false
+                        },
+                        "task_type": {
+                          "type": "string",
+                          "enum": [
+                            "is_open",
+                            "line_length",
+                            "in_stock",
+                            "photo_of_place",
+                            "price_check",
+                            "crowd_level",
+                            "other_public"
+                          ]
+                        },
+                        "bounty_usd": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["question", "location", "task_type", "bounty_usd"],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -1258,6 +1299,7 @@
                   },
                   "required": [
                     "task_id",
+                    "retry_context",
                     "status",
                     "question",
                     "task_type",
@@ -1455,11 +1497,52 @@
                       "type": "string",
                       "const": "disputed"
                     },
+                    "retry_context": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "location": {
+                          "type": "object",
+                          "properties": {
+                            "lat": {
+                              "type": "number"
+                            },
+                            "lng": {
+                              "type": "number"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["lat", "lng", "label"],
+                          "additionalProperties": false
+                        },
+                        "task_type": {
+                          "type": "string",
+                          "enum": [
+                            "is_open",
+                            "line_length",
+                            "in_stock",
+                            "photo_of_place",
+                            "price_check",
+                            "crowd_level",
+                            "other_public"
+                          ]
+                        },
+                        "bounty_usd": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["question", "location", "task_type", "bounty_usd"],
+                      "additionalProperties": false
+                    },
                     "next_step": {
                       "type": "string"
                     }
                   },
-                  "required": ["task_id", "status", "next_step"],
+                  "required": ["task_id", "status", "retry_context", "next_step"],
                   "additionalProperties": false
                 }
               }
