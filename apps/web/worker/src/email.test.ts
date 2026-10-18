@@ -66,11 +66,11 @@ describe("emailRow", () => {
     });
   });
 
-  it("asks to check the inbox while pending, or to text START when no link went out yet", () => {
+  it("asks to send the email again while pending, or to text START when no link went out yet", () => {
     expect(emailRow(setup({ email_status: "pending", email_masked: "a…@example.com" }))).toEqual({
       status: "pending",
-      title: "Check your inbox",
-      detail: "Tap the link we sent to a…@example.com to confirm it.",
+      title: "Finish adding your email",
+      detail: "Tap Send again, then send the email we open from a…@example.com.",
       actions: ["resend", "remove"],
     });
     expect(emailRow(setup({ opted_in: false, email_status: "pending", email_masked: null }))).toMatchObject({

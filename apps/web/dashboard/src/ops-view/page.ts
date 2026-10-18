@@ -215,6 +215,95 @@ export function boot(win: OpsWindow) {
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
   const json = <T>(res: Response) => res.json().catch(() => ({})) as Promise<T>;
 
+  const safety = $("safety-settings");
+  const safetyControls = $<HTMLFieldSetElement>("safety-controls");
+  const safetyInput = $<HTMLInputElement>("safety-threshold");
+  const safetySave = $<HTMLButtonElement>("safety-save");
+  const safetyRetry = $<HTMLButtonElement>("safety-retry");
+  const safetyStatus = $("safety-status");
+  let safetySaved: number | null = null;
+  let safetyPending = false;
+  const validThreshold = (value: number) => Number.isFinite(value) && value >= 0.5 && value <= 1;
+  function safetyMessage(message: string, state = "") {
+    safetyStatus.textContent = message;
+    safetyStatus.dataset.state = state;
+    safetyStatus.setAttribute("role", state === "error" ? "alert" : "status");
+  }
+  function updateSafety() {
+    const value = safetyInput.valueAsNumber;
+    $("safety-value").textContent = safetySaved === null ? "—" : value.toFixed(2);
+    $("safety-saved").textContent = safetySaved === null ? "" : `Saved: ${safetySaved.toFixed(2)}`;
+    safetySave.disabled =
+      safetyPending || safetySaved === null || !validThreshold(value) || value === safetySaved;
+    safetyControls.disabled = safetyPending || safetySaved === null;
+    safety.setAttribute("aria-busy", String(safetyPending));
+  }
+  async function thresholdResponse(res: Response) {
+    const body = await json<{ classifier_block_min: number; message?: string; error?: string }>(res);
+    if (!res.ok) throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+    if (!validThreshold(body.classifier_block_min)) throw new Error("Invalid threshold from server");
+    return body.classifier_block_min;
+  }
+  async function loadSafety() {
+    safetyPending = true;
+    safetyRetry.hidden = true;
+    safetyMessage("Loading settings…");
+    updateSafety();
+    try {
+      const res = await fetch("/api/settings", {
+        cache: "no-store",
+        headers: { accept: "application/json" },
+      });
+      if (res.status === 404) {
+        safety.hidden = true;
+        return;
+      }
+      safetySaved = await thresholdResponse(res);
+      safetyInput.value = String(safetySaved);
+      safetyMessage("");
+    } catch (error) {
+      safetyMessage(
+        `Could not load settings: ${error instanceof Error ? error.message : "Request failed"}`,
+        "error",
+      );
+      safetyRetry.hidden = false;
+    } finally {
+      safetyPending = false;
+      updateSafety();
+    }
+  }
+  safetyInput.addEventListener("input", () => {
+    safetyMessage("");
+    updateSafety();
+  });
+  safetyRetry.addEventListener("click", () => void loadSafety());
+  $("safety-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const value = safetyInput.valueAsNumber;
+    if (safetyPending || safetySaved === null || !validThreshold(value) || value === safetySaved) return;
+    safetyPending = true;
+    safetySave.textContent = "Saving…";
+    safetyMessage("Saving…");
+    updateSafety();
+    try {
+      safetySaved = await thresholdResponse(
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ classifier_block_min: value }),
+        }),
+      );
+      safetyInput.value = String(safetySaved);
+      safetyMessage("Saved.", "success");
+    } catch (error) {
+      safetyMessage(`Not saved: ${error instanceof Error ? error.message : "Request failed"}`, "error");
+    } finally {
+      safetyPending = false;
+      safetySave.textContent = "Save";
+      updateSafety();
+    }
+  });
+
   function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string | null, ...kids: Kid[]) {
     const el = document.createElement(tag);
     if (cls) el.className = cls;
@@ -1987,5 +2076,5 @@ export function boot(win: OpsWindow) {
   win.addEventListener("resize", measure);
   measure();
   showTab();
-  return poll();
+  return Promise.all([loadSafety(), poll()]);
 }

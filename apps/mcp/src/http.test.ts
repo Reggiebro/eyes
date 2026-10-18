@@ -50,6 +50,17 @@ async function listenOn(fetch: (request: Request) => Promise<Response>) {
   return `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
 }
 
+async function listenOnSecret(seen: Request[], secret: string | undefined) {
+  http = createHttpServer(
+    toNodeListener(async (request) => {
+      seen.push(request);
+      return new Response("ok");
+    }, secret),
+  );
+  await new Promise<void>((resolve) => http?.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+}
+
 function start(service: Partial<EyesService>, seen: Request[] = []) {
   const server = createServer({
     service: service as EyesService,
@@ -413,6 +424,57 @@ describe("node adapter on a real socket", () => {
       "198.51.100.7, 203.0.113.9",
       "127.0.0.1",
     ]);
+  });
+
+  it("trusts x-eyes-client-ip and x-eyes-host only with the matching EDGE_SECRET", async () => {
+    const seen: Request[] = [];
+    const base = await listenOnSecret(seen, "edge-secret");
+    const edge = { "x-eyes-client-ip": "203.0.113.9", "x-eyes-host": "internal.eyes.pictures" };
+    const direct = {
+      "x-forwarded-for": "198.51.100.7",
+      "x-forwarded-host": "internal.eyes.pictures",
+      "cf-connecting-ip": "6.6.6.6",
+    };
+
+    await fetch(`${base}/healthz`, { headers: { ...direct, ...edge, "x-eyes-edge-secret": "edge-secret" } });
+    await fetch(`${base}/healthz`, { headers: { ...direct, ...edge, "x-eyes-edge-secret": "wrong" } });
+    await fetch(`${base}/healthz`, { headers: { ...direct, "x-eyes-edge-secret": "edge-secret" } });
+
+    const view = (r: Request) =>
+      [
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "cf-connecting-ip",
+        "x-eyes-edge-secret",
+        "x-eyes-client-ip",
+        "x-eyes-host",
+      ].map((name) => r.headers.get(name));
+    expect(seen.map(view)).toEqual([
+      ["203.0.113.9", "internal.eyes.pictures", null, null, null, null],
+      ["198.51.100.7", null, null, null, null, null],
+      ["198.51.100.7", "internal.eyes.pictures", null, null, null, null],
+    ]);
+  });
+
+  it("leaves forwarded headers as they were without EDGE_SECRET, dropping the x-eyes ones", async () => {
+    const seen: Request[] = [];
+    const base = await listenOnSecret(seen, undefined);
+
+    await fetch(`${base}/healthz`, {
+      headers: {
+        "x-forwarded-host": "internal.eyes.pictures",
+        "cf-connecting-ip": "6.6.6.6",
+        "x-eyes-client-ip": "1.2.3.4",
+        "x-eyes-edge-secret": "",
+      },
+    });
+
+    const r = seen[0];
+    expect([
+      r?.headers.get("x-forwarded-host"),
+      r?.headers.get("cf-connecting-ip"),
+      r?.headers.get("x-eyes-client-ip"),
+    ]).toEqual(["internal.eyes.pictures", "6.6.6.6", null]);
   });
 
   it("keeps the ops key out of the request log", async () => {

@@ -35,11 +35,14 @@ interface FakeContainer {
   setInactivityTimeout: Mock<(ms: number) => Promise<void>>;
   monitor: () => Promise<void>;
   getTcpPort: Mock<() => FakePort>;
+  signal: Mock<(signo: number) => void>;
+  destroy: Mock<() => Promise<void>>;
 }
 
 interface FakeStub {
   fetch: Mock<(request: Request) => Promise<Response>>;
   ensure: Mock<() => Promise<boolean>>;
+  stop: Mock<() => Promise<boolean>>;
 }
 
 function fakePort(): FakePort {
@@ -56,6 +59,10 @@ function fakeContainer(options: FakeContainerOptions = {}): FakeContainer {
     setInactivityTimeout: vi.fn(async (_ms: number) => {}),
     monitor: options.monitor ?? (() => Promise.resolve()),
     getTcpPort: vi.fn(() => container.port),
+    signal: vi.fn((_signo: number) => {}),
+    destroy: vi.fn(async () => {
+      container.running = false;
+    }),
   };
   return container;
 }
@@ -68,6 +75,7 @@ function fakeStub(): FakeStub {
   return {
     fetch: vi.fn(async (_request: Request) => new Response("routed", { status: 200 })),
     ensure: vi.fn(async () => false),
+    stop: vi.fn(async () => false),
   };
 }
 
@@ -85,31 +93,252 @@ afterEach(() => {
 });
 
 describe("api worker routing", () => {
-  it("proxies to ORIGIN when set and the host is not workers.dev", async () => {
+  it("forwards every host and path to ORIGIN with method, body, and edge headers, redirect manual", async () => {
     const stub = fakeStub();
-    const upstream = vi.fn(async (_input: URL | string, _init?: RequestInit) => new Response("from mac"));
+    const upstream = vi.fn(async (_input: URL | string, _init?: RequestInit) => new Response("from origin"));
     vi.stubGlobal("fetch", upstream);
-    const env = fakeEnv(stub, { ORIGIN: "https://eyes-dispatch.inkboxwire.com" });
+    const env = fakeEnv(stub, { ORIGIN: "https://eyes.run.mcp-use.com", EDGE_SECRET: "s3cret" });
 
     const res = await worker.fetch(new Request("https://api.eyes.pictures/v1/tasks?limit=2"), env);
+    await worker.fetch(new Request("https://eyes-api.someone.workers.dev/healthz?x=1"), env);
+    await worker.fetch(
+      new Request("https://internal.eyes.pictures/login", {
+        method: "POST",
+        body: "a=1",
+        headers: { "cf-connecting-ip": "203.0.113.9", "x-eyes-client-ip": "6.6.6.6" },
+      }),
+      env,
+    );
 
-    expect(await res.text()).toBe("from mac");
-    expect(upstream).toHaveBeenCalledOnce();
-    expect(String(upstream.mock.calls[0]?.[0])).toBe("https://eyes-dispatch.inkboxwire.com/v1/tasks?limit=2");
+    expect(await res.text()).toBe("from origin");
+    expect(upstream.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://eyes.run.mcp-use.com/v1/tasks?limit=2",
+      "https://eyes.run.mcp-use.com/healthz?x=1",
+      "https://eyes.run.mcp-use.com/login",
+    ]);
+    const init = upstream.mock.calls[2]?.[1] as RequestInit;
+    const headers = init.headers as Headers;
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("manual");
+    expect(await new Response(init.body).text()).toBe("a=1");
+    expect(headers.get("x-forwarded-host")).toBe("internal.eyes.pictures");
+    expect(headers.get("x-eyes-host")).toBe("internal.eyes.pictures");
+    expect(headers.get("x-eyes-client-ip")).toBe("203.0.113.9");
+    expect(headers.get("x-eyes-edge-secret")).toBe("s3cret");
     expect(stub.fetch).not.toHaveBeenCalled();
   });
 
-  it("sends workers.dev traffic to the container even when ORIGIN is set", async () => {
+  it("passes a streamed ORIGIN response through untouched", async () => {
+    const body = new ReadableStream({ start: (c) => c.close() });
+    const upstream = new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+
+    expect(res).toBe(upstream);
+  });
+
+  it("undoes the gateway's host rewrite in protected-resource metadata and WWW-Authenticate", async () => {
+    const env = fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" });
+    const metadata = {
+      resource: "https://eyes.run.mcp-use.com/mcp",
+      authorization_servers: ["https://api.eyes.pictures"],
+      _original_resource: "https://api.eyes.pictures/mcp",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(metadata)),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"),
+      env,
+    );
+    expect(await res.json()).toEqual({
+      resource: "https://api.eyes.pictures/mcp",
+      authorization_servers: ["https://api.eyes.pictures"],
+    });
+
+    const { _original_resource, ...plain } = metadata;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(plain)),
+    );
+    const unchanged = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource"),
+      env,
+    );
+    expect(await unchanged.json()).toEqual({ ...plain, resource: "https://api.eyes.pictures/mcp" });
+
+    const auth =
+      'Bearer resource_metadata="https://eyes.run.mcp-use.com/.well-known/oauth-protected-resource/mcp"';
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("no", {
+            status: 401,
+            statusText: "Unauthorized",
+            headers: { "www-authenticate": auth },
+          }),
+      ),
+    );
+    const denied = await worker.fetch(new Request("https://api.eyes.pictures/mcp", { method: "POST" }), env);
+    expect(denied.status).toBe(401);
+    expect(denied.statusText).toBe("Unauthorized");
+    expect(await denied.text()).toBe("no");
+    expect(denied.headers.get("www-authenticate")).toBe(
+      'Bearer resource_metadata="https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
+  it.each(["https://evil.example/mcp", null, 42])(
+    "does not trust _original_resource %s",
+    async (original) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            resource: "https://eyes.run.mcp-use.com",
+            _original_resource: original,
+            authorization_servers: ["https://api.eyes.pictures"],
+          }),
+        ),
+      );
+      const res = await worker.fetch(
+        new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource"),
+        fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+      );
+      expect(await res.json()).toEqual({
+        resource: "https://api.eyes.pictures/mcp",
+        authorization_servers: ["https://api.eyes.pictures"],
+      });
+    },
+  );
+
+  it("clears stale encoding and validators only when rewriting metadata", async () => {
+    const upstream = Response.json({ resource: "https://eyes.run.mcp-use.com" });
+    for (const name of [
+      "content-length",
+      "content-encoding",
+      "etag",
+      "content-md5",
+      "content-digest",
+      "repr-digest",
+    ])
+      upstream.headers.set(name, "stale");
+    upstream.headers.set("x-preserved", "yes");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/.well-known/oauth-protected-resource/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(await res.json()).toEqual({ resource: "https://api.eyes.pictures/mcp" });
+    for (const name of [
+      "content-length",
+      "content-encoding",
+      "etag",
+      "content-md5",
+      "content-digest",
+      "repr-digest",
+    ])
+      expect(res.headers.has(name)).toBe(false);
+    expect(res.headers.get("x-preserved")).toBe("yes");
+  });
+
+  it.each([
+    [200, "{", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "null", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "[]", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "{}", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "plain", "text/plain", "/.well-known/oauth-protected-resource"],
+    [500, "{}", "application/json", "/.well-known/oauth-protected-resource"],
+    [200, "{}", "application/json", "/.well-known/oauth-protected-resource/other"],
+  ])("preserves unexpected metadata response %s %s %s %s", async (status, body, contentType, path) => {
+    const upstream = new Response(body, {
+      status: Number(status),
+      headers: { "content-type": String(contentType) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request(`https://api.eyes.pictures${path}`),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(res).toBe(upstream);
+    expect(await res.text()).toBe(body);
+  });
+
+  it.each([
+    "https://eyes.run.mcp-use.com.evil.example/.well-known/oauth-protected-resource",
+    "https://evil.example/.well-known/oauth-protected-resource",
+    "https://eyes.run.mcp-use.com/other",
+    "not a URL",
+  ])("does not rewrite unrelated challenge URL %s", async (value) => {
+    const upstream = new Response("denied", {
+      status: 401,
+      headers: { "www-authenticate": `Bearer resource_metadata="${value}"` },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    expect(
+      await worker.fetch(
+        new Request("https://api.eyes.pictures/mcp"),
+        fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+      ),
+    ).toBe(upstream);
+  });
+
+  it("preserves body and encoding when rewriting only an authentication header", async () => {
+    const bytes = new Uint8Array([31, 139, 8, 0]);
+    const upstream = new Response(bytes, {
+      status: 401,
+      headers: {
+        "content-encoding": "gzip",
+        "content-length": "4",
+        etag: "original",
+        "www-authenticate":
+          'Bearer resource_metadata="https://eyes.run.mcp-use.com/.well-known/oauth-protected-resource"',
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => upstream),
+    );
+    const res = await worker.fetch(
+      new Request("https://api.eyes.pictures/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    expect(res.headers.get("content-length")).toBe("4");
+    expect(res.headers.get("etag")).toBe("original");
+    expect(res.headers.get("www-authenticate")).toBe(
+      'Bearer resource_metadata="https://api.eyes.pictures/.well-known/oauth-protected-resource"',
+    );
+  });
+
+  it("sends an empty edge secret when EDGE_SECRET is unset, overriding a client-sent one", async () => {
     const stub = fakeStub();
-    const upstream = vi.fn();
-    vi.stubGlobal("fetch", upstream);
-    const env = fakeEnv(stub, { ORIGIN: "https://eyes-dispatch.inkboxwire.com" });
+    const req = new Request("https://api.eyes.pictures/v1/agents", {
+      headers: { "x-eyes-edge-secret": "guess" },
+    });
 
-    const res = await worker.fetch(new Request("https://eyes-api.someone.workers.dev/healthz?x=1"), env);
+    await worker.fetch(req, fakeEnv(stub));
 
-    expect(await res.text()).toBe("routed");
-    expect(upstream).not.toHaveBeenCalled();
-    expect(stub.fetch.mock.calls[0]?.[0].url).toBe("http://eyes/healthz?x=1");
+    expect(stub.fetch.mock.calls[0]?.[0].headers.get("x-eyes-edge-secret")).toBe("");
   });
 
   it("sends everything to the container when ORIGIN is not set", async () => {
@@ -157,6 +386,27 @@ describe("api worker routing", () => {
     expect(stub.fetch.mock.calls[0]?.[0].headers.get("host")).toBeNull();
   });
 
+  it("scheduled() with ORIGIN pings ORIGIN /healthz and stops, never ensures, the container", async () => {
+    const stub = fakeStub();
+    const upstream = vi.fn(async (_input: URL | string) => new Response("ok"));
+    vi.stubGlobal("fetch", upstream);
+    const env = fakeEnv(stub, { ORIGIN: "https://eyes.run.mcp-use.com" });
+
+    await worker.scheduled({}, env);
+    upstream.mockRejectedValueOnce(new Error("down"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await worker.scheduled({}, env);
+
+    expect(upstream.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://eyes.run.mcp-use.com/healthz",
+      "https://eyes.run.mcp-use.com/healthz",
+    ]);
+    expect(error).toHaveBeenCalledWith("origin ping failed", expect.any(Error));
+    expect(env.EYES.idFromName).toHaveBeenCalledWith("main");
+    expect(stub.stop).toHaveBeenCalledTimes(2);
+    expect(stub.ensure).not.toHaveBeenCalled();
+  });
+
   it("scheduled() calls ensure() on the main Durable Object", async () => {
     const stub = fakeStub();
     const env = fakeEnv(stub);
@@ -179,6 +429,26 @@ describe("EyesServer", () => {
     const ctx = fakeCtx(idle);
     new EyesServer(ctx, {});
     expect(ctx.blockConcurrencyWhile).not.toHaveBeenCalled();
+  });
+
+  it("stop() does nothing when no container runs, else SIGTERM first and destroy on a later call", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const idle = fakeContainer();
+    expect(await new EyesServer(fakeCtx(idle), {}).stop()).toBe(false);
+    expect(idle.signal).not.toHaveBeenCalled();
+    expect(idle.destroy).not.toHaveBeenCalled();
+
+    const container = fakeContainer({ running: true });
+    const server = new EyesServer(fakeCtx(container), {});
+
+    expect(await server.stop()).toBe(true);
+    expect(container.signal).toHaveBeenCalledWith(15);
+    expect(container.destroy).not.toHaveBeenCalled();
+    expect(await server.stop()).toBe(true);
+    expect(container.destroy).toHaveBeenCalledOnce();
+    expect(await server.stop()).toBe(false);
+    expect(container.signal).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledTimes(2);
   });
 
   it("ensure() does nothing and returns false when the container is already running", async () => {
