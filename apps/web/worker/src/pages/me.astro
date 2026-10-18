@@ -92,7 +92,7 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     </li>
   </template>
 
-  <!-- Email: the optional second channel. One row, three inline modes: buttons, the address form, or the remove confirm. -->
+  <!-- Email: the optional second channel. One row, two inline modes: buttons or the remove confirm. -->
   <template id="email-row">
     <li class="ui-check me-row me-email">
       <span class="ui-check__mark"><Icon name="mail" /></span>
@@ -102,21 +102,10 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
       </span>
       <div class="me-email__actions" data-mode="idle">
         <button type="button" class="ui-button" data-act="add"><Icon name="mail" />Add email</button>
-        <button type="button" class="ui-button" data-act="resend">Resend link</button>
+        <button type="button" class="ui-button" data-act="resend">Send again</button>
         <button type="button" class="ui-button" data-act="change">Change</button>
         <button type="button" class="ui-button ui-button--ghost" data-act="remove">Remove</button>
       </div>
-      <form class="me-email__form" data-mode="form" novalidate hidden>
-        <label class="ui-field">
-          <span class="ui-field__label">Email</span>
-          <input class="ui-input" name="email" type="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" />
-          <span class="ui-field__hint">We'll email you a link to confirm it.</span>
-        </label>
-        <div class="me-email__actions">
-          <button type="submit" class="ui-button ui-button--primary">Send link</button>
-          <button type="button" class="ui-button ui-button--ghost" data-act="cancel">Cancel</button>
-        </div>
-      </form>
       <div class="me-email__confirm" data-mode="confirm" role="group" aria-label="Remove email" hidden>
         <span class="ui-text-sm">Stop sending tasks to this email? Texts keep coming.</span>
         <div class="me-email__actions">
@@ -156,12 +145,12 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
   }
 
   .me-row > .ui-button,
-  .me-email > :is(.me-email__actions, .me-email__form, .me-email__confirm, .me-email__error) {
+  .me-email > :is(.me-email__actions, .me-email__confirm, .me-email__error) {
     grid-column: 2;
     justify-self: start;
   }
 
-  .me-email > :is(.me-email__form, .me-email__confirm, .me-email__error) {
+  .me-email > :is(.me-email__confirm, .me-email__error) {
     justify-self: stretch;
   }
 
@@ -171,7 +160,6 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     gap: var(--eyes-space-2);
   }
 
-  .me-email__form,
   .me-email__confirm {
     display: grid;
     gap: var(--eyes-space-3);
@@ -413,7 +401,7 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
 
 <script>
   import { $, call, Problem, showError } from "../api.ts";
-  import { type EmailAction, type EmailRow, emailRow, saveEmail, startEmail, validEmail } from "../email.ts";
+  import { type EmailAction, type EmailRow, emailRow, saveEmail, startEmail } from "../email.ts";
   import {
     FILTERS,
     type Filter,
@@ -479,9 +467,6 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     return li;
   }
 
-  // The address typed this session: Resend re-sends to it, since the API only ever returns it masked.
-  let typed = "";
-
   function emailEl(row: EmailRow, i: number): HTMLElement {
     const li = ($<HTMLTemplateElement>("email-row").content.firstElementChild as HTMLElement).cloneNode(true) as HTMLElement;
     li.classList.add(row.status === "verified" ? "ui-check--pass" : "me-row--todo", "me-enter");
@@ -493,22 +478,16 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
       b.hidden = !row.actions.includes(b.dataset.act as EmailAction);
     }
     part(li, ".me-email__actions[data-mode]").hidden = row.actions.length === 0;
-    const form = part(li, "form") as HTMLFormElement;
-    const input = part(li, "input") as HTMLInputElement;
     const error = part(li, ".me-email__error");
-    const mode = (m: "idle" | "form" | "confirm", hint = "We'll email you a link to confirm it.") => {
+    const mode = (m: "idle" | "confirm") => {
       for (const el of li.querySelectorAll<HTMLElement>(":scope > [data-mode]")) el.hidden = el.dataset.mode !== m;
       error.hidden = true;
-      input.removeAttribute("aria-invalid");
-      part(form, ".ui-field__hint").textContent = hint;
-      if (m === "form") input.focus();
-      else if (m === "confirm") part(li, "[data-act=confirm-remove]").focus();
+      if (m === "confirm") part(li, "[data-act=confirm-remove]").focus();
     };
-    const save = async (email: string | null, button: HTMLElement) => {
+    const remove = async (button: HTMLElement) => {
       button.setAttribute("aria-busy", "true");
       try {
-        const next = emailRow(await saveEmail(code as string, email, call));
-        if (email) typed = email;
+        const next = emailRow(await saveEmail(code as string, null, call));
         const fresh = next && emailEl(next, 0);
         li.replaceWith(...(fresh ? [fresh] : []));
         (fresh?.querySelector<HTMLElement>(".me-email__actions button:not([hidden])") ?? $("title")).focus();
@@ -518,7 +497,8 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
         showError(error, err);
       }
     };
-    // Add: the API hands back a mailto; the worker sends that email and the sender's address connects, verified.
+    // Add, Change and Send again: the API hands back a mailto; the worker sends that email and the sender's
+    // address connects, verified. Nothing here makes Eyes send a confirmation link.
     const start = async (button: HTMLElement) => {
       button.setAttribute("aria-busy", "true");
       try {
@@ -536,22 +516,10 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
       const button = (e.target as Element).closest<HTMLElement>("button[data-act]");
       const act = button?.dataset.act;
       if (!button || button.hasAttribute("aria-busy")) return;
-      if (act === "add") void start(button);
-      else if (act === "change") mode("form");
-      else if (act === "resend") typed ? void save(typed, button) : mode("form", "Enter it again to resend the link.");
+      if (act === "add" || act === "change" || act === "resend") void start(button);
       else if (act === "remove") mode("confirm");
-      else if (act === "confirm-remove") void save(null, button);
+      else if (act === "confirm-remove") void remove(button);
       else if (act === "cancel") mode("idle");
-    });
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const email = input.value.trim();
-      if (!validEmail(email)) {
-        input.setAttribute("aria-invalid", "true");
-        input.focus();
-        return showError(error, new Problem("That email does not look right.", "Check it, then tap Send link."));
-      }
-      void save(email, part(form, "[type=submit]"));
     });
     return li;
   }
