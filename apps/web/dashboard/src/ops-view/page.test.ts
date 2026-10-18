@@ -1031,6 +1031,51 @@ describe("ops support tickets", () => {
     },
   );
 
+  it("falls back for incomplete classifier reports and opens resolved details without decision controls", async () => {
+    const pending = classifierTicket({
+      classifier_status: undefined,
+      question: null,
+      place_label: null,
+      agent_id: undefined,
+      reported_context: undefined,
+      request: null,
+      request_fingerprint: undefined,
+      message: null,
+    });
+    const page = await withTickets([
+      pending,
+      {
+        ...pending,
+        id: 11,
+        status: "resolved",
+        request: { location: "Mint Plaza" },
+        resolved_at: "2026-10-18T13:00:00Z",
+      },
+    ]);
+    const panel = await page.open(10);
+    expect(panel.textContent).toContain("Pending review");
+    expect([...panel.querySelectorAll(".classifier-review__text")].map((el) => el.textContent)).toEqual([
+      "(not supplied)",
+      "null",
+      "Agent: (not supplied)",
+      "(no report message)",
+      "(not supplied)",
+    ]);
+    expect([...panel.querySelectorAll("pre")].map((el) => el.textContent)).toEqual(["null", "null"]);
+    expect([...panel.querySelectorAll(".decide__row button")].map((el) => el.textContent)).toEqual([
+      "Approve",
+      "Reject",
+    ]);
+    await page.open(11);
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector("h2")?.textContent).toBe("Classifier review #11");
+    expect(panel.textContent).toContain('"Mint Plaza"');
+    expect(panel.textContent).toMatch(/Decision: resolved\. {2}Oct 18/);
+    expect(panel.textContent).not.toMatch(/Decision reason:|Approval expires|undefined/);
+    expect(panel.querySelector(".decide")).toBeNull();
+    expect(page.requests.filter((r) => r.method === "POST")).toEqual([]);
+  });
+
   it("needs a note, then releases a held ticket, says so, and reloads the list", async () => {
     const page = await withTickets([helpTicket()], () => ok({}));
     const { open, click, button, requests } = page;
