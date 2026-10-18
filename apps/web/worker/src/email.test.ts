@@ -1,7 +1,18 @@
 import type { WorkerSetup } from "@eyes/core";
 import { describe, expect, it, vi } from "vitest";
 import { Problem } from "./api.ts";
-import { emailOn, emailRow, saveEmail, sendLink, signIn, startEmail, validEmail } from "./email.ts";
+import {
+  composeLinks,
+  emailOn,
+  emailRow,
+  onPhone,
+  parseMailto,
+  saveEmail,
+  sendLink,
+  signIn,
+  startEmail,
+  validEmail,
+} from "./email.ts";
 
 // No email fields by default: what an API that predates worker email sends.
 const setup = (over: Partial<WorkerSetup> = {}) =>
@@ -183,5 +194,85 @@ describe("signIn", () => {
     const navigate = vi.fn();
     await expect(signIn("x", { send: refuse(401), navigate })).rejects.toMatchObject({ status: 401 });
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseMailto", () => {
+  it("reads the address, subject and body", () => {
+    const m = "mailto:work%2Bx@e.test?subject=Eyes%20abc&BODY=Hi+there%0Ayou";
+    expect(parseMailto(m)).toEqual({
+      to: "work+x@e.test",
+      subject: "Eyes abc",
+      body: "Hi there\nyou",
+      mailto: m,
+    });
+  });
+
+  it("leaves missing parts empty", () => {
+    expect(parseMailto("mailto:w@e.test")).toMatchObject({ to: "w@e.test", subject: "", body: "" });
+    expect(parseMailto("mailto:w@e.test?subject&")).toMatchObject({ subject: "", body: "" });
+  });
+
+  it("preserves literal plus, equals, question marks and Unicode without truncation", () => {
+    expect(parseMailto("MAILTO:work+x@e.test?subject=Eyes+a=b?c%2Bd&body=%E2%9C%93%0D%0A")).toMatchObject({
+      to: "work+x@e.test",
+      subject: "Eyes a=b?c+d",
+      body: "✓\r\n",
+    });
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "https://evil.test/?subject=Eyes",
+    "mailto://work@e.test",
+    "mailto:",
+    "mailto:work@e.test,other@e.test",
+    "mailto:work@e.test?bcc=other@e.test",
+    "mailto:work@e.test?to=other@e.test",
+    "mailto:work@e.test?subject=one&SUBJECT=two",
+    "mailto:work@e.test?subject=x%0D%0ABcc:other@e.test",
+    "mailto:work@e.test?body=%00",
+    "mailto:work@e.test?body=%FF",
+    "mailto:work@e.test?body=%ZZ",
+    "mailto:work@e.test#fragment",
+    " mailto:work@e.test",
+    "mailto:work@e.test\n?subject=Eyes",
+    undefined,
+  ])("rejects unexpected or unsafe mailto input %# without echoing it", (input) => {
+    expect(() => parseMailto(input as string)).toThrow("Eyes returned an invalid connect email.");
+  });
+});
+
+describe("onPhone", () => {
+  it("is true for a narrow screen or iOS, false for a wide desktop", () => {
+    expect(onPhone("Mozilla/5.0 (Macintosh)", 390)).toBe(true);
+    expect(onPhone("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)", 1024)).toBe(true);
+    expect(onPhone("Mozilla/5.0 (Macintosh)", 1440)).toBe(false);
+  });
+});
+
+describe("composeLinks", () => {
+  const c = parseMailto("mailto:work@e.test?subject=Eyes%20a%26b&body=Hi");
+
+  it("puts Gmail first on desktop, with every field encoded", () => {
+    expect(composeLinks(c, false)).toEqual([
+      {
+        id: "gmail",
+        label: "Open Gmail",
+        href: "https://mail.google.com/mail/?view=cm&fs=1&to=work%40e.test&su=Eyes%20a%26b&body=Hi",
+        newTab: true,
+      },
+      {
+        id: "outlook",
+        label: "Open Outlook",
+        href: "https://outlook.live.com/mail/0/deeplink/compose?to=work%40e.test&subject=Eyes%20a%26b&body=Hi",
+        newTab: true,
+      },
+      { id: "mail", label: "Open Mail app", href: c.mailto, newTab: false },
+    ]);
+  });
+
+  it("puts the Mail app first on a phone", () => {
+    expect(composeLinks(c, true).map((l) => l.id)).toEqual(["mail", "gmail", "outlook"]);
   });
 });
