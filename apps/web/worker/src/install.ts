@@ -42,6 +42,7 @@ export type InstallDeps = {
   send: (path: string, init: RequestInit) => Promise<unknown>;
   show: (step: InstallStep) => void;
   setHref: (id: "profile" | "itms" | "open", href: string) => void;
+  setReady?: (ready: boolean) => void;
   report: (err: unknown) => void;
   store: Store;
   now: number;
@@ -63,7 +64,14 @@ export function readCode(hash: string): string | null {
  */
 export const SAVED_KEY = "eyes-install";
 const SAVED_MS = 24 * 3_600_000;
-export type Saved = { code: string; savedAt: number; done?: number };
+export type Saved = {
+  code: string;
+  savedAt: number;
+  done?: number;
+  openAfter?: number;
+  installPending?: boolean;
+  installAway?: boolean;
+};
 
 export function loadSaved(store: Store, now: number): Saved | null {
   let saved: Saved | null | undefined; // undefined: unparsable
@@ -85,6 +93,81 @@ export function markDone(store: Store, now: number, done: number) {
 
 /** The app connected with the code: it has it now. */
 export const forgetCode = (store: Store) => store.removeItem(SAVED_KEY);
+
+// A registration grace period, not a measurement of iOS installation progress.
+export const OPEN_WAIT_MS = 3_000;
+
+export function installOpenGate(d: {
+  code: string | null;
+  store: Store;
+  doc: EventTarget & { hidden: boolean };
+  win: EventTarget;
+  render: (left: number, enabled: boolean) => void;
+}) {
+  let ready = false;
+  let timer: number | NodeJS.Timeout | undefined;
+  const saved = () => {
+    const s = loadSaved(d.store, Date.now());
+    return s?.code === d.code ? s : null;
+  };
+  const left = () => Math.max(0, (saved()?.openAfter ?? 0) - Date.now());
+  const canOpen = () => ready && !!saved() && !saved()?.installAway && !d.doc.hidden && left() === 0;
+  function render() {
+    clearTimeout(timer);
+    d.render(left(), canOpen());
+    if (left() > 0 && !d.doc.hidden) timer = setTimeout(render, Math.min(100, left()));
+  }
+  function away() {
+    const s = saved();
+    if (s?.installPending) {
+      d.store.setItem(SAVED_KEY, JSON.stringify({ ...s, installAway: true }));
+      render();
+    }
+  }
+  function returned() {
+    if (d.doc.hidden) return;
+    const s = saved();
+    if (s?.installAway)
+      d.store.setItem(
+        SAVED_KEY,
+        JSON.stringify({ ...s, installAway: false, openAfter: Date.now() + OPEN_WAIT_MS }),
+      );
+    render();
+  }
+  d.doc.addEventListener("visibilitychange", () => (d.doc.hidden ? away() : returned()));
+  d.win.addEventListener("pagehide", away);
+  d.win.addEventListener("blur", away);
+  d.win.addEventListener("pageshow", returned);
+  d.win.addEventListener("focus", returned);
+  returned();
+  return {
+    begin() {
+      const s = saved();
+      if (s)
+        d.store.setItem(
+          SAVED_KEY,
+          JSON.stringify({
+            ...s,
+            installPending: true,
+            installAway: false,
+            openAfter: Date.now() + OPEN_WAIT_MS,
+          }),
+        );
+      render();
+    },
+    setReady(value: boolean) {
+      ready = value;
+      render();
+    },
+    open(navigate: () => void) {
+      if (!canOpen()) return;
+      const s = saved();
+      d.store.setItem(SAVED_KEY, JSON.stringify({ ...s, installPending: false }));
+      // Keep the custom-scheme navigation in the click's user gesture: no promise or timer here.
+      navigate();
+    },
+  };
+}
 
 /** Link that makes iOS install the ad hoc build described by the manifest. */
 export const itmsUrl = (manifest = import.meta.env.VITE_ADHOC_MANIFEST_URL || DEFAULT_MANIFEST_URL) =>
@@ -109,6 +192,7 @@ export function deviceStep(
 
 /** One look at the server with the saved code; shows and resolves to the step. */
 export async function checkInstall(d: InstallDeps, manifest?: string): Promise<InstallStep> {
+  d.setReady?.(false);
   const saved = loadSaved(d.store, d.now);
   const registered = new URLSearchParams(d.search).get("registered") === "1";
   let step: InstallStep;
@@ -123,6 +207,7 @@ export async function checkInstall(d: InstallDeps, manifest?: string): Promise<I
       d.setHref("open", `eyes://connect#c=${saved.code}`);
       if (step === "register") d.setHref("profile", status.profile_url);
       if (status.ready) d.setHref("itms", itmsUrl(manifest));
+      d.setReady?.(status.ready);
       if (step === "connected") forgetCode(d.store);
     } catch (err) {
       step = err instanceof Problem && err.status === 401 ? "expired" : "error";

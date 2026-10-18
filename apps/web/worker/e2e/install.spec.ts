@@ -74,3 +74,69 @@ test("I already did this on Open Eyes ends the steps, keeping the code", async (
   await expect(page.getByText("All steps done. You can close this page.")).toBeVisible();
   await shot(page, "done");
 });
+
+for (const width of [390, 1280]) {
+  test(`post-install return waits three seconds with a filling native button at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.clock.install({ time: new Date("2026-10-18T12:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-10-18T12:00:01Z"));
+    await mockDevice(page, () => ({ registered: true, ready: true }));
+    await page.goto(`/install.html#c=${CODE}`);
+    await page.locator("#itms").evaluate((a) => a.removeAttribute("href"));
+    await page.locator("#itms").click();
+    const open = page.locator("#open");
+    await expect(open).toBeDisabled();
+    await expect(open).toHaveAttribute("aria-busy", "true");
+    // Simulate time in iOS, not an actual installation or a device write.
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await page.clock.runFor(60_000);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(open).toHaveText("Open Eyes in 3s");
+    await open.dispatchEvent("click"); // programmatic events cannot bypass the native disabled state
+    await open.press("Enter");
+    expect(
+      await page.evaluate(() => JSON.parse(localStorage.getItem("eyes-install") ?? "null")?.installPending),
+    ).toBe(true);
+    await page.clock.runFor(1_500);
+    await expect(open).toBeDisabled();
+    await expect(page.locator("#open-fill")).toHaveAttribute("style", "transform: scaleX(0.5);");
+    if (process.env.SHOTS)
+      await page.screenshot({ path: `${process.env.SHOTS}/cooldown-${width}-progress.png`, fullPage: true });
+    await page.clock.runFor(1_499);
+    await expect(open).toBeDisabled();
+    await page.clock.runFor(1);
+    await expect(open).toBeEnabled();
+    await expect(open).toHaveAttribute("aria-busy", "false");
+    await expect(page.locator("#open-status")).toHaveText("Ready to open Eyes.");
+    if (process.env.SHOTS)
+      await page.screenshot({ path: `${process.env.SHOTS}/cooldown-${width}-ready.png`, fullPage: true });
+    await open.click();
+    expect(
+      await page.evaluate(() => JSON.parse(localStorage.getItem("eyes-install") ?? "null")?.installPending),
+    ).toBe(false);
+  });
+}
+
+test("reduced motion preserves the full delay and server readiness gate after reload", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.clock.install({ time: new Date("2026-10-18T12:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-10-18T12:00:01Z"));
+  let ready = true;
+  await mockDevice(page, () => ({ registered: true, ready }));
+  await page.goto(`/install.html#c=${CODE}`);
+  await page.locator("#itms").evaluate((a) => a.removeAttribute("href"));
+  await page.locator("#itms").click();
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  ready = false;
+  await page.reload();
+  const open = page.locator("#open");
+  await expect(open).toBeDisabled();
+  await page.clock.runFor(3_000);
+  await expect(open).toBeDisabled();
+  await expect(page.locator("#open-status")).toHaveText("Waiting for this iPhone to be ready.");
+  ready = true;
+  await page.clock.runFor(2_000);
+  await expect(open).toBeEnabled();
+});
