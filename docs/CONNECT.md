@@ -1,5 +1,23 @@
 # Connect Eyes to an MCP client
 
+## ChatGPT web: no terminal required
+
+Open [ChatGPT Plugins](https://chatgpt.com/plugins). This is a custom connector flow, not a public marketplace install.
+
+1. Choose **Add / + > Add custom MCP server**. If Eyes is already added, open it and resume **Connect** instead of creating a duplicate.
+2. Name it **Eyes**, set Server URL to `https://mcp.eyes.pictures/mcp`, and choose **OAuth**.
+3. Check **I understand and want to continue**, then choose **Create as a plugin** and **Connect**.
+4. On the Eyes OAuth page, enter your **existing Eyes API key** and connect. If needed, explicitly choose to create a key there. Never paste a key into chat. Connecting does not automatically create a key or charge a card.
+5. In a new chat, type **@**, select **Eyes**, and ask for a free quote: “Use Eyes to quote checking whether the Ferry Building in San Francisco is open.”
+
+The current Plugins flow does **not** require enabling Developer Mode. Access is web-only and depends on your account, workspace policy, and Lockdown settings. Pro supports read/fetch permissions; full MCP is available on Business, Enterprise and Edu. Business requires an admin/owner to create workspace plugins; Enterprise/Edu also permit creators with **Create plugins with MCPs**. Only admins/owners publish to the workspace. Free and Plus access is not guaranteed. If **Add custom MCP server** is missing or disabled, check account/workspace access.
+
+A public directory listing requires OpenAI review, approval, and an explicit publish step. Eyes is not claiming a public marketplace listing or a universal install link.
+
+Sources: [Connect in ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt), [current account requirements](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), [public app review](https://developers.openai.com/plugins/deploy/app-review).
+
+## Advanced: other clients and CLI
+
 | URL | Use it for |
 | --- | --- |
 | `https://api.eyes.pictures/mcp` | **Existing MCP endpoint.** Supported unchanged; the dedicated host below is ready for connector migration. |
@@ -14,7 +32,7 @@ Both client URLs reach the same server and the same 13 tools: `quote_task`, `ask
 
 ## Dedicated MCP domain: ready for connector migration
 
-`https://mcp.eyes.pictures/mcp` is **ready for connector migration; existing connectors have not been switched**. The domain owner verified the deployed host's OAuth flow, all 12 tools and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors can keep using `https://api.eyes.pictures/mcp`; the instructions below retain that supported endpoint.
+`https://mcp.eyes.pictures/mcp` is ready for new connectors; the ChatGPT web steps above use it. Existing connectors have not been switched. The domain owner verified the deployed host's OAuth flow, all 12 tools and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors can keep using `https://api.eyes.pictures/mcp`.
 
 Verified dedicated-host values:
 
@@ -145,13 +163,9 @@ Use `https://api.eyes.pictures/mcp` for app connectors. Claude checks the card s
 
 In ChatGPT and Claude, `quote_task`, `ask_eyes`, `await_answer`, `get_task` and `get_balance` show a card: a quote (workers nearby, ETA, price), the live task (status, photo, answer and the three checks), or your balance with a Top up button. The other tools reply in text.
 
-### ChatGPT (developer mode)
+### ChatGPT
 
-1. Open **Settings > Apps & Connectors > Advanced settings** and turn on **Developer mode**. This needs a Plus, Pro, Business, Enterprise or Edu plan.
-2. In **Settings > Apps & Connectors**, click **Create**. Set Name to `Eyes`, MCP server URL to `https://api.eyes.pictures/mcp`, and Authentication to **OAuth**.
-3. Tick "I trust this application", then click **Create**.
-4. On the Eyes sign-in page, paste your key or click **Create a key**, then click **Continue to ChatGPT**.
-5. In a new chat, click **+**, choose **Developer mode**, and enable **Eyes**.
+Use the [ChatGPT web steps above](#chatgpt-web-no-terminal-required). Do not paste a curl command into ChatGPT's server URL field.
 
 ### Claude (claude.ai and Claude Desktop connectors)
 
