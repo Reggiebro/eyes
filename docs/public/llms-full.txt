@@ -281,6 +281,7 @@ Every error is JSON: {"error": "<code>", "message": "...", "fix": "...", ...cont
 - task_not_found (HTTP 404): No task with that task_id belongs to this API key. Fix: Use the task_id returned by ask_eyes. Lost it? Call list_tasks to see your tasks and their task_ids. Tasks from other API keys are not visible.
 - task_not_cancellable (HTTP 409): Only unclaimed (dispatched) tasks can be cancelled. Fix: A worker is already on it. Call await_answer to get the result, or dispute_answer if the answer is wrong.
 - task_not_disputable (HTTP 409): Only answered tasks (verified, paid or needs_review) can be disputed. Fix: Call get_task to see the current status. Unanswered tasks can be cancelled instead.
+- email_taken (HTTP 409): Another Eyes account already uses this email. Fix: Use a different email, or text HELP to the Eyes number if it is yours.
 - idempotency_conflict (HTTP 409): This idempotency_key was already used with different parameters. Fix: Reuse an idempotency_key only for an identical retry. Use a new key for a new question.
 - offer_invalid (HTTP 404): This task link is invalid or has expired. Fix: Open the newest link Eyes texted you. Expired tasks cannot be submitted.
 - task_already_claimed (HTTP 409): Another worker already claimed this task. Fix: No action needed. Watch for the next task text.

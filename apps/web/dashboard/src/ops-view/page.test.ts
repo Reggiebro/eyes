@@ -17,7 +17,7 @@ function feed(over: Partial<OpsFeed["ops"]> = {}, rest: Partial<OpsFeed> = {}): 
     status: "needs_review",
     question: "Is the line at Blue Bottle longer than 5 people?",
     place_label: "37.76123456, -122.38598765",
-    bounty_cents: 500,
+    bounty_cents: 300,
     workers_notified: 3,
     gps_ok: true,
     fresh_ok: false,
@@ -78,10 +78,6 @@ function feed(over: Partial<OpsFeed["ops"]> = {}, rest: Partial<OpsFeed> = {}): 
       money_24h: { escrow: 600, release: 500, refund: 0, fee: 100, payout: 500, topup: 10000 },
       queue: [held],
       workers: { opted_in: 2, online: 1, total: 3 },
-      errors: [
-        { level: "error", at: "2026-10-17T12:00:00Z", summary: "boom" },
-        { level: "warn", at: "2026-10-17T12:01:00Z", summary: "slow" },
-      ],
       ...over,
     },
     ...rest,
@@ -97,7 +93,7 @@ const helpTicket = (over: Partial<Ticket> = {}): Ticket => ({
   task_id: HELD,
   task_status: "needs_review",
   place_label: "Mint Plaza",
-  bounty_cents: 500,
+  bounty_cents: 300,
   distance_m: 12,
   radius_m: 50,
   created_at: "2026-10-17T12:00:00Z",
@@ -187,6 +183,8 @@ async function setup(
     "GET /ops/events": () => ok({ source: "db", events: [] }),
     "GET /ops/series": () => ok(SERIES),
     "GET /ops/allowlist": () => ok({ entries: [] }),
+    "GET /ops/issues": () => ok({ issues: [] }),
+    "GET /ops/map/tasks": () => ok({ tasks: [] }),
     ...routes,
   };
   win.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -262,6 +260,7 @@ describe("ops page boot", () => {
       "/ops/tickets?state=open&limit=1",
       "/ops/events?limit=100",
       "/ops/series",
+      "/ops/issues",
     ]);
     expect(text("state")).toBe("Live");
     expect($("state").className).toBe("ui-badge ui-badge--success");
@@ -287,7 +286,7 @@ describe("ops page boot", () => {
       "0",
       "0",
     ]);
-    expect($("statuses").querySelector(".is-danger .funnel__label")?.textContent).toBe("Needs review");
+    expect($("statuses").querySelector(".is-danger .funnel__label")?.textContent).toBe("Review");
 
     expect(text("escrowed")).toBe("$12.34");
     expect(text("money-kv")).toContain("InTop-ups$100.00");
@@ -300,7 +299,7 @@ describe("ops page boot", () => {
     expect([...decision.querySelectorAll("td")].map((td) => td.textContent).slice(0, 3)).toEqual([
       "Is the line at Blue Bottle longer than 5 people?",
       "Near 37.761, -122.386",
-      "$5.00",
+      "$3.00",
     ]);
     expect(row().getAttribute("aria-label")).toBe("Review: Is the line at Blue Bottle longer than 5 people?");
 
@@ -320,11 +319,8 @@ describe("ops page boot", () => {
       'fit {"maxZoom":15}',
     ]);
 
-    expect(
-      [...$("errors").children].map((li) => li.textContent?.replace(/Oct.*?(AM|PM)?(?=boom|slow)/, "")),
-    ).toEqual(["Errorboom", "Warningslow"]);
-    expect(text("n-logs")).toBe("2");
-    expect($("n-logs").classList.contains("hot")).toBe(true);
+    // The Logs tab is only the event stream; errors are grouped in the Errors tab.
+    expect($("errors")).toBeNull();
 
     expect(text("events-source")).toBe("Newest first");
     const rows = [...$("events").querySelectorAll("tbody tr")];
@@ -395,7 +391,6 @@ describe("ops page boot", () => {
               money_24h: {},
               queue: [],
               workers: { opted_in: 0, online: 0, total: 0 },
-              errors: [{ level: "warn", at: "2026-10-17T12:00:00Z", summary: "slow" }],
             },
             { tasks: [], ledger: [], workers: [], totals: {} },
           ),
@@ -430,8 +425,6 @@ describe("ops page boot", () => {
     expect($("workers").querySelector(".tbl-empty")?.textContent).toBe("No workers yet.");
     expect($("map").classList.contains("nomap")).toBe(true);
     expect(text("map")).toBe("Map needs Leaflet from unpkg.com.");
-    expect(text("n-logs")).toBe("1");
-    expect($("n-logs").classList.contains("hot")).toBe(false);
     expect(text("events-source")).toBe("Database unreachable: this process's memory only");
     expect($("events").querySelector(".tbl-empty")?.textContent).toBe("No events match.");
     expect($("events").querySelector(".tbl-end")?.textContent).toBe("");
@@ -465,6 +458,7 @@ describe("ops page boot", () => {
       "/ops/tickets?state=open&limit=1",
       "/ops/events?limit=100",
       "/ops/series",
+      "/ops/issues",
     ]);
   });
 
@@ -506,7 +500,7 @@ describe("ops page boot", () => {
 describe("ops review panel", () => {
   const detail = {
     ...feed().tasks[0],
-    fee_cents: 100,
+    fee_cents: 50,
     photo_url: "https://cdn.eyes.test/p.jpg",
     answer_text: "Yes, about 8 people",
     distance_m: 14,
@@ -530,7 +524,7 @@ describe("ops review panel", () => {
     expect(img.referrerPolicy).toBe("no-referrer");
     expect(review.textContent).toContain("Answer: Yes, about 8 people");
     expect(review.textContent).toContain("worker 14 m away (radius 50 m)");
-    expect(review.textContent).toContain("bounty $5.00 + fee $1.00 in escrow");
+    expect(review.textContent).toContain("bounty $3.00 + fee $0.50 in escrow");
     expect([...review.querySelectorAll(".checklist li")].map((li) => li.textContent)).toEqual([
       "✓ At the place (GPS)",
       "✗ Taken just now",
@@ -545,13 +539,13 @@ describe("ops review panel", () => {
     expect(review.querySelector("label")?.textContent).toBe("Note (optional)");
     await click(release);
     expect(review.querySelector(".decide__question")?.textContent).toBe(
-      "Pay the worker $5.00? The task is marked verified.",
+      "Pay the worker $3.00? The task is marked verified.",
     );
     await click(button(review, "Cancel"));
     expect(review.querySelector(".decide__question")).toBeNull();
     expect(requests.some((r) => r.method === "POST")).toBe(false);
     await click(button(review, "Release to the worker"));
-    await click(button(review, "Release $5.00"));
+    await click(button(review, "Release $3.00"));
     expect(requests.at(-1)).toEqual({
       method: "POST",
       path: `/ops/tasks/${HELD}/resolve`,
@@ -584,7 +578,7 @@ describe("ops review panel", () => {
     const refund = async () => {
       await click(button(review, "More actions"));
       await click(button(review, "Refund the agent"));
-      await click(button(review, "Refund $6.00"));
+      await click(button(review, "Refund $3.50"));
     };
     (review.querySelector("textarea") as HTMLTextAreaElement).value = "  worker was at the wrong cafe ";
     reply = () => new Response("not json", { status: 502 });
@@ -725,7 +719,7 @@ describe("ops support tickets", () => {
       "Dispute",
       "open",
       "Mint Plaza",
-      "$5.00",
+      "$3.00",
       "12 m",
       expect.stringMatching(/^(now|\d+[mhd])$/),
     ]);
@@ -751,10 +745,10 @@ describe("ops support tickets", () => {
     expect(note.hasAttribute("aria-invalid")).toBe(false);
     await click(button(panel, "Release to the worker"));
     expect(panel.querySelector(".decide__question")?.textContent).toBe(
-      "Pay the worker $5.00? They get your note by text.",
+      "Pay the worker $3.00? They get your note by text.",
     );
     const before = requests.length;
-    await click(button(panel, "Release $5.00"));
+    await click(button(panel, "Release $3.00"));
     expect(requests.slice(before).map((r) => r.path)).toEqual([
       "/ops/tickets/7/release",
       "/ops/tickets?state=open&limit=50",
@@ -1047,13 +1041,13 @@ describe("ops tasks, money and workers tabs", () => {
             total: 3,
             next_cursor: url.searchParams.get("cursor") ? null : "c1",
           }),
-        [`GET /ops/tasks/${HELD}`]: () => ok({ ...feed().tasks[0], fee_cents: 100 }),
+        [`GET /ops/tasks/${HELD}`]: () => ok({ ...feed().tasks[0], fee_cents: 50 }),
         "GET /ops/tasks/33333333-2222-4333-8444-555555555555": () =>
           ok({
             ...feed().tasks[0],
             id: "33333333-2222-4333-8444-555555555555",
             status: "paid",
-            fee_cents: 100,
+            fee_cents: 50,
           }),
       },
       { hash: "#tasks" },
@@ -1064,7 +1058,7 @@ describe("ops tasks, money and workers tabs", () => {
     expect([...(rows()[0]?.querySelectorAll("td") ?? [])].map((td) => td.textContent)).toEqual([
       "Is the line at Blue Bottle longer than 5 people?",
       "Near 37.761, -122.386",
-      "$5.00",
+      "$3.00",
       "14 m",
       "needs review",
       expect.stringMatching(/^(now|\d+[mhd])$/),
@@ -1392,12 +1386,12 @@ describe("ops event log and tabs", () => {
     };
     reply = { source: "database", events: [ev(7), ev(6)], next_cursor: null, newest_cursor: "n7" };
     await tick();
-    expect(requests.at(-2)?.path).toBe("/ops/events?since=n5");
+    expect(requests.find((r) => r.path.includes("since="))?.path).toBe("/ops/events?since=n5");
     expect([pill.hidden, pill.textContent]).toEqual([false, "2 new events"]);
     expect(ids()).toEqual(["e5"]);
     reply = { source: "database", events: [ev(7), ev(5)], next_cursor: null, newest_cursor: null };
     await tick();
-    expect(requests.at(-2)?.path).toBe("/ops/events?since=n7");
+    expect(requests.filter((r) => r.path.includes("since=")).at(-1)?.path).toBe("/ops/events?since=n7");
     expect(pill.textContent).toBe("2 new events");
     reply = { source: "database", events: [ev(8)], next_cursor: null, newest_cursor: "n8" };
     await tick();
@@ -1485,6 +1479,7 @@ describe("ops event log and tabs", () => {
     win.dispatchEvent(new happy.HashChangeEvent("hashchange") as unknown as Event);
     expect(selected()).toEqual(["tab-workers"]);
     expect(calls).toContain("invalidate");
+    await page.settle();
     expect(calls).toContain('fit {"maxZoom":15}');
     win.location.hash = "#nope";
     win.dispatchEvent(new happy.HashChangeEvent("hashchange") as unknown as Event);
@@ -1528,7 +1523,7 @@ describe("ops workers map, story and worker panel", () => {
         question: "Is the line long?",
         place_label: "Mint Plaza",
         bounty_cents: 300,
-        fee_cents: 60,
+        fee_cents: 50,
         created_at: "2026-10-17T12:00:00Z",
         claimed_at: "2026-10-17T12:01:00Z",
         submitted_at: "2026-10-17T12:04:00Z",
@@ -1546,13 +1541,22 @@ describe("ops workers map, story and worker panel", () => {
         question: "Is the gate open?",
         place_label: "Ferry Building",
         bounty_cents: 300,
-        fee_cents: 60,
+        fee_cents: 50,
         created_at: "2026-10-16T12:00:00Z",
         money_at: { refund: "2026-10-16T12:30:00Z" },
       },
     ],
     earnings: { paid_cents: 300, payouts: 1, released_cents: 300, last_paid_at: "2026-10-17T12:06:00Z" },
   };
+  const OLD_REVIEW = {
+    ...feed().tasks[1],
+    id: "old-review",
+    status: "needs_review",
+    question: "Is the north gate open?",
+    created_at: new Date(Date.now() - 30 * 3_600_000).toISOString(),
+    lat: 37.78,
+    lng: -122.4,
+  } as Task;
   const pinned = () =>
     feed(
       {},
@@ -1576,19 +1580,53 @@ describe("ops workers map, story and worker panel", () => {
     const page = await setup(
       {
         "GET /ops/feed": () => ok(pinned()),
+        "GET /ops/map/tasks": () =>
+          ok({
+            tasks: [
+              ...pinned().tasks,
+              OLD_REVIEW,
+              { ...OLD_REVIEW, id: "p2", status: "paid" },
+              { ...OLD_REVIEW, id: "x1", status: "expired", lat: 37.75, lng: -122.43 },
+              { ...OLD_REVIEW, id: "nolat", lat: undefined, lng: undefined },
+            ],
+          }),
         [`GET /ops/workers/${W}`]: () => ok(detail),
-        [`GET /ops/tasks/${HELD}`]: () => ok({ ...pinned().tasks[0], fee_cents: 60 }),
+        [`GET /ops/tasks/${HELD}`]: () => ok({ ...pinned().tasks[0], fee_cents: 50 }),
+        "GET /ops/tasks/old-review": () => ok({ ...OLD_REVIEW, fee_cents: 50 }),
       },
       { hash: "#workers", L },
     );
     const { $, win } = page;
-    expect(calls.filter((c) => c.startsWith("marker"))).toEqual([
-      "marker 37.78,-122.4 pin s-paid",
+    // The last drawing: a needs-review task 30 h old shares a spot with a paid one; it colors the
+    // shared pin and draws on top, the live one under it.
+    const drawn = () => calls.slice(calls.lastIndexOf("clear"));
+    expect(drawn().filter((c) => c.startsWith("marker"))).toEqual([
+      "marker 37.75,-122.43 pin s-expired",
       "marker 37.761,-122.386 pin s-claimed is-live",
+      "marker 37.78,-122.4 pin s-needs_review is-live",
       "marker 37.77,-122.42 wk is-on",
       "marker 37.78,-122.41 wk is-off",
     ]);
-    expect(calls).toContain("tip Claimed: Near 37.761, -122.386");
+    expect(drawn()).toContain("tip Claimed: Near 37.761, -122.386");
+    expect(drawn()).toContain("tip 3 tasks at Mint Plaza: needs review, paid ×2");
+    expect(page.requests.find((r) => r.path.startsWith("/ops/map/tasks"))?.path).toBe("/ops/map/tasks");
+    expect($("map-scope").textContent).toBe("6 tasks: the last 24 h and every open one");
+    // A shared pin lists its tasks; picking one opens the task panel.
+    clicks["37.78,-122.4 pin"]?.();
+    const spot = $("review-panel");
+    expect(spot.querySelector("h2")?.textContent).toBe("3 tasks at Mint Plaza");
+    const picks = [...spot.querySelectorAll(".spot__task")] as HTMLElement[];
+    expect(picks.map((b) => b.textContent?.replace(/ \d+[dhm] ago$/, ""))).toEqual([
+      "Needs review Is the north gate open?",
+      "Paid Is the gate open?",
+      "Paid Is the north gate open?",
+    ]);
+    (spot.querySelector(".task-head button") as HTMLElement).click();
+    expect((spot as HTMLDialogElement).open).toBe(false);
+    clicks["37.78,-122.4 pin"]?.();
+    ([...spot.querySelectorAll(".spot__task")][0] as HTMLElement).click();
+    await page.settle();
+    expect(page.requests.at(-1)?.path).toBe("/ops/tasks/old-review");
     // Story: the live task, its headline and its timeline.
     expect($("story").querySelector(".story__head")?.textContent).toBe(
       "Claimed A worker is on the way to 37.761, -122.386",
@@ -1603,7 +1641,7 @@ describe("ops workers map, story and worker panel", () => {
       "Claimed",
       "Photo",
       "Verified",
-      "$5.00 paid",
+      "$3.00 paid",
     ]);
     expect(story.filter(([c]) => String(c).includes("is-next")).map(([, b]) => b)).toEqual(["Photo"]);
 
@@ -1627,7 +1665,7 @@ describe("ops workers map, story and worker panel", () => {
     );
     expect(steps).toEqual([
       "Asked > 3 notified > Claimed > Photo > Verified > $3.00 paid",
-      "Asked > 0 notified > Expired > $3.60 refunded",
+      "Asked > 0 notified > Expired > $3.50 refunded",
     ]);
     // Close (or Esc): no worker selected, the hash forgets it.
     calls.length = 0;
@@ -1714,9 +1752,332 @@ describe("ops workers map, story and worker panel", () => {
     expect(panel.querySelector("img")).toBeNull();
   });
 
+  it("draws the tasks the Tasks tab's filters pick, and keeps the last ones when a load fails", async () => {
+    let fail = false;
+    const page = await setup(
+      {
+        "GET /ops/map/tasks": () => (fail ? new Response("", { status: 500 }) : ok({ tasks: [OLD_REVIEW] })),
+      },
+      { hash: "#tasks?status=needs_review&when=today" },
+    );
+    page.win.location.hash = "#workers";
+    page.win.dispatchEvent(new page.happy.HashChangeEvent("hashchange") as unknown as Event);
+    await page.settle();
+    const sent = new URLSearchParams(
+      page.requests
+        .filter((r) => r.path.startsWith("/ops/map/tasks"))
+        .at(-1)
+        ?.path.split("?")[1],
+    );
+    expect([sent.get("status"), Boolean(sent.get("from")), Boolean(sent.get("to"))]).toEqual([
+      "needs_review",
+      true,
+      true,
+    ]);
+    expect(page.$("map-scope").textContent).toBe(
+      "1 task: needs review, the Tasks tab's dates and every open one",
+    );
+    fail = true;
+    page.timers.at(-1)?.fn();
+    await page.settle();
+    await page.settle();
+    expect(page.$("map-scope").textContent).toBe(
+      "1 task: needs review, the Tasks tab's dates and every open one",
+    );
+  });
+
+  it("shows each task's own photo, tags test runs, and warns when two tasks share one photo", async () => {
+    const photo = (v: string, n: number) => `https://storage.eyes.test/photos/${n}.jpg?v=${v}`;
+    const t = detail.tasks[0] as (typeof detail.tasks)[number];
+    const page = await setup(
+      {
+        [`GET /ops/workers/${W}`]: () =>
+          ok({
+            ...detail,
+            worker: { ...detail.worker, test: true },
+            tasks: [
+              { ...t, id: "c89a5c9a-0000", photo_url: photo("ea00", 9), test: true },
+              { ...t, id: "ef593d4f-0000", photo_url: photo("ea00", 6), test: true },
+              { ...t, id: "91460d11-0000", photo_url: photo("1f94", 5) },
+              { ...t, id: "d45bb0cb-0000", photo_url: null, submitted_at: null, gps_ok: null },
+            ],
+          }),
+      },
+      { hash: `#workers?w=${W.slice(0, 8)}` },
+    );
+    await page.settle();
+    await page.settle();
+    const panel = page.$("review-panel");
+    expect([...panel.querySelectorAll(".task-head .ui-badge")].map((b) => b.textContent)).toEqual([
+      "available",
+      "test",
+    ]);
+    const rows = [...panel.querySelectorAll(".wtasks > li")];
+    expect(rows.map((li) => li.querySelector("img.thumb")?.getAttribute("src") ?? null)).toEqual([
+      photo("ea00", 9),
+      photo("ea00", 6),
+      photo("1f94", 5),
+      null,
+    ]);
+    expect(
+      rows.map((li) =>
+        [...li.querySelectorAll(".ui-badge")]
+          .map((b) => b.textContent)
+          .filter((x) => /test|same/.test(x ?? "")),
+      ),
+    ).toEqual([["test run", "same photo as task ef593d4f"], ["test run"], [], []]);
+    const img = rows[0]?.querySelector("img.thumb") as HTMLElement;
+    img.click();
+    expect(img.classList.contains("is-big")).toBe(true);
+    img.dispatchEvent(new page.happy.KeyboardEvent("keydown", { key: "Enter" }) as unknown as Event);
+    expect(img.classList.contains("is-big")).toBe(false);
+  });
+
+  it("never maps a worker without a real location or a test worker, and tags test workers in the list", async () => {
+    const { L, calls } = leaflet();
+    const page = await setup(
+      {
+        "GET /ops/feed": () =>
+          ok(
+            feed(
+              {},
+              {
+                workers: [
+                  { id: "w-real-0001", lat: 37.77, lng: -122.42, available: true, opted_in: true },
+                  { id: "w-null-0002", lat: 0, lng: 0, available: true, opted_in: true },
+                  {
+                    id: "w-test-0003",
+                    lat: 37.78,
+                    lng: -122.41,
+                    available: false,
+                    opted_in: true,
+                    test: true,
+                  },
+                ],
+              },
+            ),
+          ),
+      },
+      { hash: "#workers", L },
+    );
+    await page.settle();
+    expect(calls.slice(calls.lastIndexOf("clear")).filter((c) => c.startsWith("marker"))).toEqual([
+      "marker 37.77,-122.42 wk is-on",
+    ]);
+    const rows = [...page.$("workers").querySelectorAll("tbody tr")].map((tr) => tr.textContent);
+    expect(rows).toContain("worker w-null-0availableno location");
+    expect(rows).toContain("worker w-test-0opted intesttest, not mapped");
+  });
+
   it("says there is no story before the first task", async () => {
     const page = await setup({ "GET /ops/feed": () => ok(feed({}, { tasks: [] })) }, { hash: "#workers" });
     expect(page.$("story").textContent).toContain("No tasks yet.");
+  });
+});
+
+describe("ops errors tab", () => {
+  const FP = "0123456789abcdef";
+  const now = Date.now();
+  const issue = (over: Record<string, unknown> = {}) => ({
+    fingerprint: FP,
+    level: "error",
+    title: "TypeError: Cannot read properties of undefined (reading 'lat')",
+    culprit: "packages/engine/src/dispatch.ts:88",
+    status: "unresolved",
+    regressed: false,
+    ignore_until: null,
+    count: 12,
+    first_seen: new Date(now - 3 * 86_400_000).toISOString(),
+    last_seen: new Date(now - 5 * 60_000).toISOString(),
+    message: "TypeError: Cannot read properties of undefined (reading 'lat')",
+    stack:
+      "    at offer (/app/packages/engine/src/dispatch.ts:88:14)\n    at x (/app/node_modules/hono/index.js:1:1)",
+    spark: Array.from({ length: 24 }, (_, i) => (i === 23 ? 3 : 0)),
+    affected: { workers: 2, agents: 1, tasks: 0 },
+    ...over,
+  });
+  const WARN = issue({
+    fingerprint: "fedcba9876543210",
+    level: "warn",
+    title: "clef slow: <n> ms",
+    culprit: null,
+    stack: null,
+    message: "clef slow: 4120 ms",
+    status: "ignored",
+    ignore_until: 40,
+    regressed: true,
+    count: 30,
+    affected: { workers: 1, agents: 0, tasks: 3 },
+  });
+
+  it("lists unresolved issues with counts, who they touched, a sparkline and the tab badge; filters and sorts", async () => {
+    const page = await setup(
+      { "GET /ops/issues": () => ok({ issues: [issue(), WARN] }) },
+      { hash: "#errors" },
+    );
+    const { $, text } = page;
+    expect(text("n-errors")).toBe("1");
+    expect($("n-errors").classList.contains("hot")).toBe(true);
+    const rows = () => [...$("issues").querySelectorAll("tbody tr")];
+    expect(rows().map((tr) => [...tr.querySelectorAll("td")].map((td) => td.textContent))).toEqual([
+      [
+        "Error",
+        "TypeError: Cannot read properties of undefined (reading 'lat')packages/engine/src/dispatch.ts:88",
+        "12",
+        "2 workers, 1 agent",
+        "5m",
+        "3d",
+        "",
+        "unresolved",
+      ],
+    ]);
+    expect(rows()[0]?.querySelector(".spark polyline")?.getAttribute("points")).toMatch(/^0,12 .* 46,1$/);
+    const [status] = [...$("issues").querySelectorAll(".tbl-bar select")] as HTMLSelectElement[];
+    (status as HTMLSelectElement).value = "ignored";
+    status?.dispatchEvent(new page.happy.Event("change") as unknown as Event);
+    expect(rows()[0]?.textContent).toContain("ignored until 40regressed");
+    expect(rows()[0]?.textContent).toContain("1 worker, 3 tasks");
+    expect(rows()[0]?.textContent).toContain("no stack");
+    expect(page.win.location.hash).toBe("#errors?sort=-last&status=ignored");
+  });
+
+  it("searches, sorts and filters issues by level", async () => {
+    const page = await setup(
+      { "GET /ops/issues": () => ok({ issues: [issue(), { ...WARN, status: "unresolved" }] }) },
+      { hash: "#errors" },
+    );
+    const { $ } = page;
+    const titles = () => [...$("issues").querySelectorAll("tbody .issue b")].map((b) => b.textContent);
+    const sortBy = (label: string) =>
+      (
+        [...$("issues").querySelectorAll("th button")].find((b) => b.textContent === label) as HTMLElement
+      ).click();
+    sortBy("Events");
+    expect(titles()).toEqual([
+      "clef slow: <n> ms",
+      "TypeError: Cannot read properties of undefined (reading 'lat')",
+    ]);
+    sortBy("First seen");
+    sortBy("Level");
+    sortBy("24 h");
+    sortBy("Issue");
+    expect(titles()).toHaveLength(2);
+    const [, level] = [...$("issues").querySelectorAll(".tbl-bar select")] as HTMLSelectElement[];
+    (level as HTMLSelectElement).value = "warn";
+    level?.dispatchEvent(new page.happy.Event("change") as unknown as Event);
+    expect(titles()).toEqual(["clef slow: <n> ms"]);
+    (level as HTMLSelectElement).value = "";
+    level?.dispatchEvent(new page.happy.Event("change") as unknown as Event);
+    const search = $("issues").querySelector("input[type=search]") as HTMLInputElement;
+    search.value = "dispatch.ts";
+    search.dispatchEvent(new page.happy.Event("input") as unknown as Event);
+    page.timers.at(-1)?.fn();
+    expect(titles()).toEqual(["TypeError: Cannot read properties of undefined (reading 'lat')"]);
+  });
+
+  it("opens an issue: message, stack with our frames marked, masked tags, occurrences, a Logs link, and status actions", async () => {
+    let current = issue();
+    let failNext = true;
+    const page = await setup(
+      {
+        "GET /ops/issues": () => ok({ issues: [current] }),
+        [`GET /ops/issues/${FP}`]: () =>
+          ok({
+            events: [
+              {
+                id: 2,
+                at: "2026-10-17T12:05:00Z",
+                message: "TypeError: Cannot read properties of undefined (reading 'lat')\nmore",
+                tags: { route: "/v1/tasks", task_id: "3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b" },
+              },
+            ],
+          }),
+        [`POST /ops/issues/${FP}/status`]: (init) => {
+          if (failNext) {
+            failNext = false;
+            return ok({ error: "issue_not_found", message: "No issue with this id." }, 404);
+          }
+          const body = JSON.parse(String(init?.body)) as { status: string; more?: number };
+          current = issue({ status: body.status, ignore_until: body.more ? 22 : null });
+          return ok({ issue: current });
+        },
+      },
+      { hash: "#errors" },
+    );
+    const { $, requests } = page;
+    ($("issues").querySelector("tbody tr") as HTMLElement).click();
+    await page.settle();
+    await page.settle();
+    const panel = $<HTMLDialogElement>("review-panel");
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector("h2")?.textContent).toBe(
+      "TypeError: Cannot read properties of undefined (reading 'lat')",
+    );
+    expect(panel.querySelector(".line")?.textContent).toContain(
+      "packages/engine/src/dispatch.ts:8812 events, first",
+    );
+    expect([...panel.querySelectorAll(".stack span")].map((s) => s.className)).toEqual(["in-app", ""]);
+    expect([...panel.querySelectorAll(".tags .ui-badge")].map((b) => b.textContent)).toEqual([
+      "route: /v1/tasks",
+      "task_id: 3f0e8c1a…",
+    ]);
+    expect(panel.querySelector(".occurrences li")?.textContent).toContain(
+      "TypeError: Cannot read properties of undefined (reading 'lat')",
+    );
+    expect(panel.querySelector(".occurrences li")?.textContent).not.toContain("more");
+    const link = [...panel.querySelectorAll("a")].find(
+      (a) => a.textContent === "Show in Logs",
+    ) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(
+      "#logs?q=TypeError%3A+Cannot+read+properties+of+undefined+%28reading+%27lat&kind=log&level=error",
+    );
+    const buttons = () => [...panel.querySelectorAll(".decide__row button")] as HTMLButtonElement[];
+    expect(buttons().map((b) => b.textContent)).toEqual([
+      "Resolve",
+      "Ignore until 10 more",
+      "Ignore until 100 more",
+      "Ignore forever",
+    ]);
+    buttons()[1]?.click();
+    await page.settle();
+    await page.settle();
+    expect(buttons()[1]?.disabled).toBe(false);
+    buttons()[1]?.click();
+    await page.settle();
+    await page.settle();
+    await page.settle();
+    expect(requests.filter((r) => r.method === "POST").at(-1)?.body).toEqual({ status: "ignored", more: 10 });
+    expect(buttons().map((b) => b.textContent)).toEqual(["Reopen"]);
+    expect(panel.querySelector(".task-head .ui-badge")?.textContent).toBe("ignored until 22");
+    link.click();
+    expect(panel.open).toBe(false);
+  });
+
+  it("shows an issue without a stack or kept occurrences, and keeps the last list when a load fails", async () => {
+    let fail = false;
+    const page = await setup(
+      {
+        "GET /ops/issues": () => (fail ? new Response("", { status: 500 }) : ok({ issues: [WARN] })),
+        [`GET /ops/issues/${WARN.fingerprint}`]: () => new Response("", { status: 500 }),
+      },
+      { hash: "#errors?status=ignored" },
+    );
+    const { $ } = page;
+    expect($("n-errors").textContent).toBe("");
+    ($("issues").querySelector("tbody tr") as HTMLElement).click();
+    await page.settle();
+    await page.settle();
+    const panel = $("review-panel");
+    expect(panel.querySelector(".stack")).toBeNull();
+    expect(panel.querySelector(".tags")).toBeNull();
+    expect(panel.querySelector(".panel__sub")?.textContent).toBe("No occurrences kept (older than 14 days)");
+    expect([...panel.querySelectorAll(".decide__row button")].map((b) => b.textContent)).toEqual(["Reopen"]);
+    (panel.querySelector(".task-head button") as HTMLElement).click();
+    fail = true;
+    page.timers.at(-1)?.fn();
+    await page.settle();
+    await page.settle();
+    expect($("issues").querySelectorAll("tbody tr")).toHaveLength(1);
   });
 });
 
@@ -1795,7 +2156,8 @@ describe("ops access tab", () => {
     ]);
     expect(rows()).toHaveLength(3);
 
-    const removeOf = (i: number) => rows()[i]?.querySelector("button") as HTMLButtonElement;
+    const removeOf = (i: number) =>
+      rows()[i]?.querySelector('button[aria-label^="Remove"]') as HTMLButtonElement;
     expect(removeOf(1).getAttribute("aria-label")).toBe("Remove ***@example.com");
     removeOf(1).click();
     expect(rows()[1]?.querySelector(".is-confirming")?.textContent).toContain(
@@ -1824,6 +2186,94 @@ describe("ops access tab", () => {
     await page.settle();
     await page.settle();
     expect(rows().map((li) => li.querySelector("strong")?.textContent)).toEqual(["***0100", "***0123"]);
+  });
+
+  it("shows each invite's outcome, copies the link when email was refused, and resends up to the daily limit", async () => {
+    const base = { kind: "phone", added_by: "***0100", added_at: "2026-10-17T13:00:00Z", self: false };
+    let entries = [
+      {
+        ...base,
+        id: "a",
+        value: "***0123",
+        invite_status: "sent",
+        invite_at: new Date(Date.now() - 120_000).toISOString(),
+        invites_left: 2,
+      },
+      {
+        ...base,
+        id: "b",
+        kind: "email",
+        value: "***@example.org",
+        invite_status: "copy",
+        invite_at: null,
+        invites_left: 2,
+      },
+      { ...base, id: "c", value: "***0124", invite_status: "failed", invite_at: null, invites_left: 0 },
+      { ...base, id: "d", value: "***0125", invite_status: null, invite_at: null, invites_left: 3 },
+    ];
+    const replies: Response[] = [];
+    const page = await setup(
+      {
+        "GET /ops/allowlist": () => ok({ entries, login_url: "https://internal.eyes.test/login" }),
+        "POST /ops/allowlist/invite": () => replies.shift() ?? ok({}),
+        "POST /ops/allowlist": () => replies.shift() ?? ok({}),
+      },
+      { hash: "#access" },
+    );
+    const copied: string[] = [];
+    Object.defineProperty(page.win.navigator, "clipboard", {
+      value: { writeText: async (t: string) => void copied.push(t) },
+      configurable: true,
+    });
+    await page.settle();
+    const line = (i: number) => page.$("access-list").querySelectorAll(".access__invite")[i] as HTMLElement;
+    expect([0, 1, 2, 3].map((i) => line(i).textContent)).toEqual([
+      "Invite sent 2m ago Resend invite",
+      "Couldn't email them: send them this link yourself Copy link Resend invite",
+      "Invite failed Resend invite",
+      "No invite sent Resend invite",
+    ]);
+    const button = (i: number, label: string) =>
+      [...line(i).querySelectorAll("button")].find((b) => b.textContent === label) as HTMLButtonElement;
+    expect([button(2, "Resend invite").disabled, button(2, "Resend invite").title]).toEqual([
+      true,
+      "3 invites a day; try tomorrow",
+    ]);
+    button(1, "Copy link").click();
+    await page.settle();
+    expect(copied).toEqual(["https://internal.eyes.test/login"]);
+    replies.push(
+      ok({ error: "rate_limited", message: "Already 3 invites today for this entry. Try tomorrow." }, 429),
+    );
+    button(0, "Resend invite").click();
+    await page.settle();
+    await page.settle();
+    expect(button(0, "Resend invite").disabled).toBe(false);
+    for (const status of ["sent", "copy", "failed"]) {
+      entries = entries.map((e) => (e.id === "d" ? { ...e, invite_status: status } : e));
+      replies.push(ok({ entry: { ...entries[3], invite_status: status } }));
+      button(3, "Resend invite").click();
+      await page.settle();
+      await page.settle();
+    }
+    expect(line(3).textContent).toBe("Invite failed Resend invite");
+    // Adding someone says how their invite went.
+    const input = page.$<HTMLInputElement>("access-identifier");
+    for (const status of ["sent", "copy", "failed"]) {
+      replies.push(ok({ entry: { ...entries[0], invite_status: status } }));
+      input.value = "+14155550126";
+      page
+        .$("access-add")
+        .dispatchEvent(new page.happy.Event("submit", { cancelable: true }) as unknown as Event);
+      await page.settle();
+      await page.settle();
+    }
+    expect(page.requests.filter((r) => r.path === "/ops/allowlist/invite").map((r) => r.body)).toEqual([
+      { id: "a" },
+      { id: "d" },
+      { id: "d" },
+      { id: "d" },
+    ]);
   });
 
   it("says when the list cannot load, and when it is empty", async () => {
@@ -1907,7 +2357,7 @@ describe("ops review table", () => {
   it("filters by created day and bounty, and sorts by age", async () => {
     const page = await setup({
       "GET /ops/feed": () => ok(two()),
-      [`GET /ops/tasks/${HELD}`]: () => ok({ ...feed().tasks[0], fee_cents: 100 }),
+      [`GET /ops/tasks/${HELD}`]: () => ok({ ...feed().tasks[0], fee_cents: 50 }),
     });
     const { $, timers, cleared } = page;
     const rows = () =>

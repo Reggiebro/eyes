@@ -88,7 +88,7 @@ function makeOffer(overrides: Record<string, unknown> = {}) {
   return {
     question: "Is the shop open?",
     task_type: "is_open",
-    bounty_usd: 2,
+    bounty_usd: 3,
     place_label: "Market St",
     lat: 37.77,
     lng: -122.42,
@@ -507,11 +507,11 @@ describe("capture page", () => {
     }));
     try {
       await loadWithFix({
-        offer: makeOffer({ bounty_usd: 2.5 }),
+        offer: makeOffer({ bounty_usd: 3 }),
         result: { ...RESULT, status: "paid", message: "Verified and paid. Funds on the way." },
       });
       await submit();
-      expect(byId("bounty").textContent).toBe("$2.50 for this task");
+      expect(byId("bounty").textContent).toBe("$3.00 for this task");
       expect(byId("outcome").textContent).toBe("Verified and paid");
       expect(byId("message").textContent).toBe("Funds on the way.");
       await loadWithFix({

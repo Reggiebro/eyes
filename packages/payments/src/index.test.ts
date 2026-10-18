@@ -549,6 +549,7 @@ describe("outbound Stripe requests", () => {
     const out = await payments.createWorkerAccount({
       worker_id: "wkr_7",
       phone: "+14155550123",
+      email: null,
       name: "Sam",
     });
     expect(out).toEqual({ account_id: "acct_1" });

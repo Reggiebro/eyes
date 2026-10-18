@@ -31,6 +31,7 @@ export {
   readClickHouseSeries,
   type Series,
 } from "./clickhouse.ts";
+export { createIssueSink, occurrenceOf } from "./issues.ts";
 export {
   captureConsole,
   createEventLog,

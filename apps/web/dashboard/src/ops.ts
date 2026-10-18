@@ -15,9 +15,16 @@ export const STATUSES = [
   "refunded",
 ] as const;
 
-type Task = { id: string; status: string; created_at: string; [k: string]: unknown };
-type LedgerRow = { type: string; amount_cents: number; created_at: string };
-type Worker = { lat: number; lng: number; available: boolean; opted_in: boolean };
+// `test`: smoke and end-to-end runs, App Review accounts (migration 030). They never count.
+type Task = { id: string; status: string; created_at: string; test?: boolean; [k: string]: unknown };
+type LedgerRow = { type: string; amount_cents: number; created_at: string; test?: boolean };
+type Worker = {
+  lat: number | null;
+  lng: number | null;
+  available: boolean;
+  opted_in: boolean;
+  test?: boolean;
+};
 export type Feed = { tasks: Task[]; ledger: LedgerRow[]; workers: Worker[]; totals: Record<string, number> };
 
 // ponytail: counts come from the newest `limit` rows of eyes_dashboard_feed; `partial` says when the
@@ -26,8 +33,13 @@ export function summarize(feed: Feed, limit: number, now: Date) {
   const since = now.getTime() - DAY_MS;
   const recent = <T extends { created_at: string }>(rows: T[]) =>
     rows.filter((r) => Date.parse(r.created_at) >= since);
-  const tasks24h = recent(feed.tasks);
-  const ledger24h = recent(feed.ledger);
+  const real = {
+    tasks: feed.tasks.filter((t) => !t.test),
+    ledger: feed.ledger.filter((l) => !l.test),
+    workers: feed.workers.filter((w) => !w.test),
+  };
+  const tasks24h = recent(real.tasks);
+  const ledger24h = recent(real.ledger);
   const statuses = Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<string, number>;
   for (const t of tasks24h) statuses[t.status] = (statuses[t.status] ?? 0) + 1;
   const money24h: Record<string, number> = { escrow: 0, release: 0, refund: 0, fee: 0, payout: 0, topup: 0 };
@@ -42,11 +54,11 @@ export function summarize(feed: Feed, limit: number, now: Date) {
     statuses,
     money_24h: money24h,
     workers: {
-      total: feed.workers.length,
-      opted_in: feed.workers.filter((w) => w.opted_in).length,
-      online: feed.workers.filter((w) => w.opted_in && w.available).length,
+      total: real.workers.length,
+      opted_in: real.workers.filter((w) => w.opted_in).length,
+      online: real.workers.filter((w) => w.opted_in && w.available).length,
     },
-    queue: feed.tasks
+    queue: real.tasks
       .filter((t) => REVIEW.includes(t.status))
       .map((t) => ({
         ...t,
@@ -69,7 +81,8 @@ const REDACTIONS: [RegExp, string | ((m: string) => string)][] = [
   ],
   [/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "[email]"],
   [/\b(?:sk|rk|pk)_(?:live|test)_\w+|\bwhsec_\w+/g, "[secret]"],
-  [/[\w-]{32,}/g, (m) => (UUID.test(m) ? m : "[secret]")],
+  // Lowercase snake_case words are identifiers (send_to_primitive_managed_domains), not random tokens.
+  [/[\w-]{32,}/g, (m) => (UUID.test(m) || /^[a-z]+(?:_[a-z]+)+$/.test(m) ? m : "[secret]")],
   [/\+\d[\d ().-]{7,}\d|\(?\b\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b/g, "[phone]"],
 ];
 

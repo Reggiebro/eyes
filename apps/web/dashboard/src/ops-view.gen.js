@@ -22,7 +22,17 @@ const LEDGER_LABEL                         = {
   payout: "Payout",
   fee: "Fee",
 };
-const TABS = ["overview", "review", "support", "tasks", "workers", "money", "logs", "access"];
+const TABS = [
+  "overview",
+  "review",
+  "support",
+  "tasks",
+  "workers",
+  "money",
+  "errors",
+  "logs",
+  "access",
+];
 
 const usd = (cents                           ) => `$${((cents || 0) / 100).toFixed(2)}`;
 const time = (iso                           ) =>
@@ -772,10 +782,13 @@ function renderFunnel(doc          , root             , statuses                
         `funnel__step${n ? "" : " is-zero"}${LIVE.includes(s) && n ? " is-live" : ""}${n ? (TINT[s] ?? "") : ""}${s === AFTER[0] ? " is-first-after" : ""}`,
         node(doc, "span", "funnel__track", bar),
         node(doc, "b", null, String(n)),
-        node(doc, "span", "funnel__label", statusLabel(s)),
+        node(doc, "span", "funnel__label", s === "needs_review" ? "Review" : statusLabel(s)),
       );
       link.href = `#tasks?status=${s}`;
-      link.setAttribute("aria-label", `${statusLabel(s)}: ${n}. Show in Tasks`);
+      link.setAttribute(
+        "aria-label",
+        `${s === "needs_review" ? "Review" : statusLabel(s)}: ${n}. Show in Tasks`,
+      );
       return node(doc, "li", null, link);
     }),
   );
@@ -1315,6 +1328,8 @@ function createToaster(doc          , later                                     
                                            
                                         
                         
+                                                                          
+                 
                                                               
                
                
@@ -1353,7 +1368,15 @@ function createToaster(doc          , later                                     
                      
                      
                     
+                                                                                             
+                 
   
+/** A real position: not missing, not the 0,0 placeholder. */
+const located = (p                                              ) =>
+  p.lat != null && p.lng != null && !(p.lat === 0 && p.lng === 0);
+/** The content hash in an InsForge photo URL (?v=<md5>); two tasks with the same one share a photo. */
+const photoHash = (url                           ) =>
+  url ? new URL(url).searchParams.get("v") || url : null;
                   
              
                
@@ -1362,7 +1385,24 @@ function createToaster(doc          , later                                     
                        
                               
   
+/** GET /ops/issues: one issue, with 24 hourly counts and how many it touched. */
+              
+                      
+                
+                
+                         
+                                                
+                     
+                              
+                
+                     
+                    
+                  
+                       
+                  
                                                                
+  
+                                                                                            
                        
                 
                       
@@ -1385,7 +1425,6 @@ function createToaster(doc          , later                                     
                                       
                   
                                                                  
-                       
     
   
                                                                 
@@ -1479,6 +1518,19 @@ function boot(win           ) {
           h("span", null, i === 0 ? `${label} ${stamp(at)}` : `${label} ${after(t.created_at, at)}`),
         ),
     );
+  }
+
+  // A small photo that opens full width on click (and on Enter), and closes the same way.
+  function thumb(url        ) {
+    const img = h("img", "thumb");
+    img.src = url;
+    img.alt = "Worker photo; select to enlarge";
+    img.referrerPolicy = "no-referrer";
+    img.tabIndex = 0;
+    const toggle = () => img.classList.toggle("is-big");
+    img.addEventListener("click", toggle);
+    img.addEventListener("keydown", (e) => e.key === "Enter" && toggle());
+    return img;
   }
 
   function photoOf(t         ) {
@@ -1610,12 +1662,66 @@ function boot(win           ) {
   let layer               = null;
   let fitted = false;
   let mapTasks         = [];
+  // Attention first, then live, then done, then ended: the order pins stack and spots pick a color.
+  const URGENCY = (t      ) =>
+    ({ needs_review: 5, disputed: 5, dispatched: 4, claimed: 4, submitted: 4, verified: 3, paid: 2 })[
+      t.status
+    ] ?? 1;
+  // The map's tasks follow the Tasks tab's filters (status, dates); no dates means the last 24 h.
+  // Open and attention tasks always show, whatever their age.
+  async function loadMapTasks(refit         ) {
+    const st = tasks.state();
+    const query = new URLSearchParams(
+      [["status", st.f.status ?? ""], ...datedQuery(st.f, "", new Date())].filter(([, v]) => v),
+    );
+    const res = await fetch(`/map/tasks?${query}`, { cache: "no-store" });
+    if (!res.ok) return;
+    mapTasks = ((await res.json())                     ).tasks;
+    const window = st.f.when || st.f.date_min || st.f.date_max ? "the Tasks tab's dates" : "the last 24 h";
+    $("map-scope").textContent =
+      `${mapTasks.length} task${mapTasks.length === 1 ? "" : "s"}: ${st.f.status ? `${statusLabel(st.f.status).toLowerCase()}, ` : ""}${window} and every open one`;
+    if (refit) fitted = false;
+    renderMap(workers.visible());
+  }
+  // Several tasks at one spot: pick one.
+  function openSpot(ts        ) {
+    const panel = $                   ("review-panel");
+    const close = h("button", "ui-button ui-button--ghost ui-button--sm", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => panel.close());
+    panel.replaceChildren(
+      h(
+        "div",
+        "task-head",
+        h("h2", "ui-card__title", `${ts.length} tasks at ${cut(nearLabel(ts[0]?.place_label), 60)}`),
+        close,
+      ),
+      h(
+        "ul",
+        "spot",
+        ...ts.map((t) => {
+          const b = h(
+            "button",
+            "spot__task",
+            badge(statusLabel(t.status), STATUS_TONE[t.status]),
+            " ",
+            cut(t.question, 100),
+            h("span", "tiny", ` ${ago(t.created_at, Date.now())} ago`),
+          );
+          b.type = "button";
+          b.addEventListener("click", () => openReview(t.id, t));
+          return h("li", null, b);
+        }),
+      ),
+    );
+    panel.showModal();
+  }
   /** The worker shown in the panel (full id), kept in the hash as `w=<8 chars>`. */
   let selected                = null;
   let wanted                = null;
   function renderMap(all          ) {
     // STOP deletes a worker's location
-    const workers = all.filter((w)                                             => w.lat != null);
+    const workers = all.filter((w)                                             => located(w) && !w.test);
     const L = win.L;
     if (!L) {
       $("map").classList.add("nomap");
@@ -1634,17 +1740,35 @@ function boot(win           ) {
       layer = L.layerGroup().addTo(map);
     }
     layer.clearLayers();
-    const pinned = mapTasks.filter((t) => t.lat != null && t.lng != null);
-    // Older tasks first, so the live ones draw on top.
-    for (const t of [...pinned].reverse()) {
-      const live = LIVE.includes(t.status);
+    // Tasks at the same spot share one pin: the most urgent status colors it, the size counts them,
+    // and urgent pins draw last (on top). Clicking opens the task, or a list when there are several.
+    const spots = new Map                ();
+    for (const t of mapTasks) {
+      if (!located(t)) continue;
+      const key = `${(t.lat          ).toFixed(5)},${(t.lng          ).toFixed(5)}`;
+      spots.set(key, [...(spots.get(key) ?? []), t]);
+    }
+    const groups = [...spots.values()].map((ts) => ts.toSorted((a, b) => URGENCY(b) - URGENCY(a)));
+    for (const ts of groups.toSorted((a, b) => URGENCY(a[0]        ) - URGENCY(b[0]        ))) {
+      const t = ts[0]        ;
+      const big = URGENCY(t) >= 4;
+      const counts = new Map                ();
+      for (const x of ts) counts.set(x.status, (counts.get(x.status) ?? 0) + 1);
+      const what = [...counts]
+        .map(([st, n]) => `${statusLabel(st).toLowerCase()}${n > 1 ? ` ×${n}` : ""}`)
+        .join(", ");
       L.circleMarker([t.lat          , t.lng          ], {
-        radius: live ? 9 : 5,
+        radius: (big ? 9 : 6) + Math.min(ts.length - 1, 4),
         weight: 2,
-        className: `pin s-${t.status}${live ? " is-live" : ""}`,
+        className: `pin s-${t.status}${big ? " is-live" : ""}`,
       })
-        .bindTooltip(`${statusLabel(t.status)}: ${cut(nearLabel(t.place_label), 60)}`, { direction: "top" })
-        .on("click", () => openReview(t.id, t))
+        .bindTooltip(
+          ts.length === 1
+            ? `${statusLabel(t.status)}: ${cut(nearLabel(t.place_label), 60)}`
+            : `${ts.length} tasks at ${cut(nearLabel(t.place_label), 50)}: ${what}`,
+          { direction: "top" },
+        )
+        .on("click", () => (ts.length === 1 ? openReview(t.id, t) : openSpot(ts)))
         .addTo(layer);
     }
     for (const w of workers) {
@@ -1659,10 +1783,9 @@ function boot(win           ) {
         .on("click", () => openWorker(w.id))
         .addTo(layer);
     }
-    // City zoom around what is there: the live tasks if any, else every marker.
-    const live = pinned.filter((t) => LIVE.includes(t.status));
-    const points = [...(live.length ? live : pinned), ...workers].map(
-      (p) => [p.lat, p.lng]                    ,
+    // City zoom around every task pin and worker, so nothing starts off screen.
+    const points = [...groups.map((ts) => ts[0]        ), ...workers].map(
+      (p) => [p.lat          , p.lng          ]                    ,
     );
     if (!fitted && points.length) {
       map.fitBounds(L.latLngBounds(points).pad(0.2), { maxZoom: 15 });
@@ -1731,14 +1854,24 @@ function boot(win           ) {
     const w = d.worker;
     const state = w.banned ? "banned" : (RANK[rank(w)]          );
     const e = d.earnings;
-    const shot = d.tasks.find((t) => t.submitted_at);
+    // Each task shows its own photo; a photo seen on an earlier task here gets a warning chip.
+    const firstWith = new Map                ();
+    for (const t of d.tasks.toReversed()) {
+      const hash = photoHash(t.photo_url);
+      if (hash && !firstWith.has(hash)) firstWith.set(hash, t.id);
+    }
     $("review-panel").replaceChildren(
       ...[
         h(
           "div",
           "task-head",
           h("h2", "ui-card__title", `Worker ${w.id.slice(0, 8)}`),
-          badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+          h(
+            "span",
+            null,
+            badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+            w.test ? badge("test") : null,
+          ),
           close,
         ),
         h(
@@ -1763,31 +1896,34 @@ function boot(win           ) {
               : "",
           ),
         ),
-        shot ? photoOf(shot) : null,
-        shot ? checks(shot) : null,
         h("h3", "panel__sub", d.tasks.length ? `Last ${d.tasks.length} tasks` : "No tasks yet"),
         h(
           "ul",
           "wtasks",
-          ...d.tasks.map((t) =>
-            h(
+          ...d.tasks.map((t) => {
+            const same = firstWith.get(photoHash(t.photo_url) ?? "");
+            return h(
               "li",
               null,
               h(
                 "p",
                 "wtasks__head",
                 badge(statusLabel(t.status), STATUS_TONE[t.status]),
+                t.test ? badge("test run") : null,
                 " ",
                 cut(t.question, 120),
               ),
+              t.photo_url ? thumb(t.photo_url) : null,
+              checks(t),
+              same && same !== t.id ? badge(`same photo as task ${same.slice(0, 8)}`, "warning") : null,
               h(
                 "p",
                 "tiny",
                 `${cut(nearLabel(t.place_label), 70)} · ${usd(t.bounty_cents)} · ${stamp(t.created_at)}`,
               ),
               steps(t, true),
-            ),
-          ),
+            );
+          }),
         ),
         h("span", "tiny", w.id),
       ].filter((x) => x != null),
@@ -1839,37 +1975,14 @@ function boot(win           ) {
       h("div", "stat", h("b", null, String(w.total)), h("span", null, "signed up")),
     );
     workers.setRows(feed.workers);
-    mapTasks = feed.tasks;
     renderMap(workers.visible());
     renderStory(feed.tasks);
     openWanted();
     // The list tabs refresh with the feed while they are shown.
     const tab = tabFor(location.hash);
     if (tab === "tasks") taskPager.load();
+    if (tab === "workers") void loadMapTasks(false);
     if (tab === "money") ledgerPager.load();
-
-    $("errors").replaceChildren(
-      ...(o.errors.length
-        ? o.errors.map((e) =>
-            h(
-              "li",
-              null,
-              h(
-                "div",
-                "line",
-                badgeIcon(document, levelOf(e.level), `ev-level ev-level--${e.level}`),
-                h("span", "tiny", stamp(e.at)),
-              ),
-              h("pre", "err", e.summary),
-            ),
-          )
-        : [empty("No errors or warnings since the server started.")]),
-    );
-    count(
-      "n-logs",
-      o.errors.length,
-      o.errors.some((e) => e.level === "error"),
-    );
   }
 
   // Ticket decisions. Dispute actions (confirm_fraud, reject_dispute) take only a note; the others also send the task id.
@@ -2223,7 +2336,7 @@ function boot(win           ) {
       if (res.status === 401) return location.assign(`${base}/login`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       render(await res.json());
-      await Promise.all([loadTickets(), countOpenTickets(), pollEvents(), loadSeries()]);
+      await Promise.all([loadTickets(), countOpenTickets(), pollEvents(), loadSeries(), loadIssues()]);
       state.className = "ui-badge ui-badge--success";
       state.textContent = "Live";
       $("updated").textContent = `updated ${new Date().toLocaleTimeString()}, every ${POLL_MS / 1000} s`;
@@ -2651,9 +2764,19 @@ function boot(win           ) {
         desc: true,
         text: (w) => RANK[rank(w)]          ,
         sort: rank,
-        cell: (w) => badge(RANK[rank(w)]          , rank(w) === 2 ? "success" : ""),
+        cell: (w) =>
+          h(
+            "span",
+            null,
+            badge(RANK[rank(w)]          , rank(w) === 2 ? "success" : ""),
+            w.test ? badge("test") : null,
+          ),
       },
-      { key: "location", label: "Location", text: (w) => (w.lat == null ? "no location" : "on the map") },
+      {
+        key: "location",
+        label: "Location",
+        text: (w) => (!located(w) ? "no location" : w.test ? "test, not mapped" : "on the map"),
+      },
     ],
     filters: [
       {
@@ -2671,13 +2794,244 @@ function boot(win           ) {
           ["on the map", "On the map"],
           ["no location", "No location"],
         ],
-        value: (w) => (w.lat == null ? "no location" : "on the map"),
+        value: (w) => (located(w) && !w.test ? "on the map" : "no location"),
       },
     ],
   });
   $("workers").replaceChildren(workers.el);
 
   const toast = createToaster(document, later);
+
+  // Errors: console errors grouped into issues (fingerprinted on the server, kept in Postgres).
+  let issueRows          = [];
+  const affectedText = (a                   ) =>
+    [
+      a.workers ? `${a.workers} worker${a.workers === 1 ? "" : "s"}` : "",
+      a.agents ? `${a.agents} agent${a.agents === 1 ? "" : "s"}` : "",
+      a.tasks ? `${a.tasks} task${a.tasks === 1 ? "" : "s"}` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const issueState = (i       ) =>
+    i.status === "ignored" && i.ignore_until != null ? `ignored until ${i.ignore_until}` : i.status;
+  function spark(values          ) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "spark");
+    svg.setAttribute("viewBox", "0 0 48 12");
+    svg.setAttribute("aria-hidden", "true");
+    const top = Math.max(1, ...values);
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("points", values.map((v, i) => `${i * 2},${12 - (v / top) * 11}`).join(" "));
+    svg.append(line);
+    return svg;
+  }
+  const issues = tableFor       ("errors", {
+    name: "issues",
+    empty: "No errors or warnings recorded. Console errors on the server show up here, grouped.",
+    initial: { q: "", sort: "-last", f: { status: "unresolved" } },
+    key: (i) => i.fingerprint,
+    label: (i) => `${levelOf(i.level)[0]}: ${cut(i.title, 80)}, ${i.count} events`,
+    open: (i) => openIssue(i),
+    columns: [
+      {
+        key: "level",
+        label: "Level",
+        text: (i) => levelOf(i.level)[0],
+        cell: (i) => badgeIcon(document, levelOf(i.level), `ev-level ev-level--${i.level}`),
+      },
+      {
+        key: "issue",
+        label: "Issue",
+        text: (i) => `${i.title} ${i.culprit ?? ""}`,
+        cell: (i) =>
+          h("span", "issue", h("b", null, cut(i.title, 140)), h("code", "tiny", i.culprit ?? "no stack")),
+      },
+      {
+        key: "count",
+        label: "Events",
+        num: true,
+        desc: true,
+        text: (i) => String(i.count),
+        sort: (i) => i.count,
+      },
+      { key: "affected", label: "Affected", text: (i) => affectedText(i.affected) },
+      {
+        key: "last",
+        label: "Last seen",
+        num: true,
+        desc: true,
+        text: (i) => ago(i.last_seen, Date.now()),
+        sort: (i) => Date.parse(i.last_seen),
+      },
+      {
+        key: "first",
+        label: "First seen",
+        num: true,
+        desc: true,
+        text: (i) => ago(i.first_seen, Date.now()),
+        sort: (i) => Date.parse(i.first_seen),
+      },
+      { key: "spark", label: "24 h", text: (i) => String(sum(i.spark)), cell: (i) => spark(i.spark) },
+      {
+        key: "status",
+        label: "Status",
+        text: issueState,
+        cell: (i) =>
+          h(
+            "span",
+            null,
+            badge(issueState(i), i.status === "unresolved" ? "danger" : ""),
+            i.regressed ? badge("regressed", "warning") : null,
+          ),
+      },
+    ],
+    filters: [
+      {
+        kind: "select",
+        key: "status",
+        label: "Statuses",
+        options: [
+          ["unresolved", "Unresolved"],
+          ["resolved", "Resolved"],
+          ["ignored", "Ignored"],
+        ],
+        value: (i) => i.status,
+      },
+      {
+        kind: "select",
+        key: "level",
+        label: "Levels",
+        options: [
+          ["error", "Error"],
+          ["warn", "Warning"],
+        ],
+        value: (i) => i.level,
+      },
+    ],
+  });
+  $("issues").replaceChildren(issues.el);
+  async function loadIssues() {
+    const res = await fetch("/issues", { cache: "no-store" });
+    if (!res.ok) return;
+    issueRows = ((await res.json())                       ).issues;
+    issues.setRows(issueRows);
+    const open = issueRows.filter((i) => i.status === "unresolved");
+    count(
+      "n-errors",
+      open.length,
+      open.some((i) => i.level === "error"),
+    );
+  }
+  // One issue: message, stack with our frames marked, tags, latest occurrences, a link into Logs, status.
+  async function openIssue(i       ) {
+    const panel = $                   ("review-panel");
+    const close = h("button", "ui-button ui-button--ghost ui-button--sm", "Close");
+    close.type = "button";
+    close.addEventListener("click", () => panel.close());
+    const res = await fetch(`/issues/${i.fingerprint}`, { cache: "no-store" });
+    const occurrences = res.ok ? ((await res.json())                            ).events : [];
+    const tags = Object.entries(occurrences[0]?.tags ?? {}).map(([k, v]) =>
+      badge(`${k}: ${/_id$/.test(k) ? `${v.slice(0, 8)}…` : v}`),
+    );
+    const firstLine = i.message.split("\n")[0] ?? "";
+    const logs = h("a", "ui-link", "Show in Logs");
+    logs.href = hashFor("logs", { q: firstLine.slice(0, 60), sort: "", f: { kind: "log", level: i.level } });
+    logs.addEventListener("click", () => panel.close());
+    const setStatus = (status                 , more                    , label        ) => {
+      const b = h(
+        "button",
+        `ui-button ui-button--sm ${status === "resolved" ? "ui-button--primary" : "ui-button--ghost"}`,
+        label,
+      );
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        const r = await fetch(`/issues/${i.fingerprint}/status`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status, more }),
+        });
+        const body = await json                           (r);
+        if (!r.ok || !body.issue) {
+          b.disabled = false;
+          toast(`Not changed: ${body.message ?? r.status}`);
+          return;
+        }
+        toast(`Issue ${label.toLowerCase()}`);
+        await loadIssues();
+        void openIssue({ ...i, ...body.issue });
+      });
+      return b;
+    };
+    panel.replaceChildren(
+      ...[
+        h(
+          "div",
+          "task-head",
+          h("h2", "ui-card__title", cut(i.title, 200)),
+          h(
+            "span",
+            null,
+            badge(issueState(i), i.status === "unresolved" ? "danger" : ""),
+            i.regressed ? badge("regressed", "warning") : null,
+          ),
+          close,
+        ),
+        h(
+          "div",
+          "line",
+          badgeIcon(document, levelOf(i.level), `ev-level ev-level--${i.level}`),
+          h("code", null, i.culprit ?? "no stack"),
+          h("span", null, `${i.count} events, first ${stamp(i.first_seen)}, last ${stamp(i.last_seen)}`),
+          affectedText(i.affected) ? h("span", null, affectedText(i.affected)) : null,
+        ),
+        h(
+          "div",
+          "decide__row",
+          ...(i.status === "unresolved"
+            ? [
+                setStatus("resolved", undefined, "Resolve"),
+                setStatus("ignored", 10, "Ignore until 10 more"),
+                setStatus("ignored", 100, "Ignore until 100 more"),
+                setStatus("ignored", undefined, "Ignore forever"),
+              ]
+            : [setStatus("unresolved", undefined, "Reopen")]),
+        ),
+        h("pre", "err", i.message),
+        i.stack
+          ? h(
+              "pre",
+              "stack",
+              ...i.stack
+                .split("\n")
+                .map((line) =>
+                  h(
+                    "span",
+                    /(apps|packages)\//.test(line) && !line.includes("node_modules") ? "in-app" : null,
+                    `${line}\n`,
+                  ),
+                ),
+            )
+          : null,
+        tags.length ? h("p", "tags", ...tags) : null,
+        h(
+          "h3",
+          "panel__sub",
+          occurrences.length ? `Latest ${occurrences.length}` : "No occurrences kept (older than 14 days)",
+        ),
+        h(
+          "ul",
+          "occurrences",
+          ...occurrences.map((o) =>
+            h("li", null, h("span", "tiny", stamp(o.at)), " ", cut(o.message.split("\n")[0], 160)),
+          ),
+        ),
+        h("p", null, logs),
+        h("span", "tiny", i.fingerprint),
+      ].filter((x) => x != null),
+    );
+    if (!panel.open) panel.showModal();
+  }
 
   // Access: who can sign in to ops. The JSON routes the old /allowlist page used (same CSRF/Origin checks).
                       
@@ -2687,7 +3041,57 @@ function boot(win           ) {
                      
                      
                    
+                                                      
+                              
+                          
     
+  let loginUrl = "";
+  const INVITE_TEXT = { sent: "Invite sent", failed: "Invite failed", copy: "" };
+  // The invite line under a row: what happened last, a copy button when email was refused, and Resend.
+  function inviteLine(e             ) {
+    const line = h("span", "access__invite tiny");
+    if (e.invite_status === "copy") {
+      const copy = h("button", "ui-button ui-button--ghost ui-button--sm", "Copy link");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        await win.navigator.clipboard?.writeText(loginUrl);
+        toast("Sign-in link copied");
+      });
+      line.append(h("span", "access__warn", "Couldn't email them: send them this link yourself"), " ", copy);
+    } else if (e.invite_status)
+      line.append(
+        h(
+          "span",
+          e.invite_status === "failed" ? "access__warn" : null,
+          `${INVITE_TEXT[e.invite_status]}${e.invite_at ? ` ${ago(e.invite_at, Date.now())} ago` : ""}`,
+        ),
+      );
+    else line.append(h("span", null, "No invite sent"));
+    const resend = h("button", "ui-button ui-button--ghost ui-button--sm", "Resend invite");
+    resend.type = "button";
+    resend.disabled = e.invites_left === 0;
+    if (resend.disabled) resend.title = "3 invites a day; try tomorrow";
+    resend.addEventListener("click", async () => {
+      resend.disabled = true;
+      const res = await post("/allowlist/invite", { id: e.id });
+      const body = await json                                 (res);
+      if (!res.ok || !body.entry) {
+        resend.disabled = false;
+        toast(`Not sent: ${body.message ?? res.status}`);
+        return;
+      }
+      toast(
+        body.entry.invite_status === "sent"
+          ? "Invite sent"
+          : body.entry.invite_status === "copy"
+            ? "Couldn't email them: copy the link"
+            : "Invite failed",
+      );
+      await loadAccess();
+    });
+    line.append(" ", resend);
+    return line;
+  }
   const post = (path        , body        ) =>
     fetch(path, {
       method: "POST",
@@ -2708,6 +3112,7 @@ function boot(win           ) {
         h("span", "tiny", ` added by ${e.added_by} on ${e.added_at.slice(0, 10)}`),
       ),
     );
+    if (!e.self) li.append(inviteLine(e));
     if (e.self) {
       li.append(h("span", "tiny muted", "You cannot remove yourself"));
       return li;
@@ -2754,7 +3159,8 @@ function boot(win           ) {
   }
   async function loadAccess() {
     const res = await fetch("/allowlist", { cache: "no-store", headers: { accept: "application/json" } });
-    const body = await json                                     (res);
+    const body = await json                                                         (res);
+    loginUrl = body.login_url ?? loginUrl;
     const list = $("access-list");
     if (!res.ok || !body.entries) {
       list.replaceChildren(empty(`Could not load the list: ${body.message ?? res.status}`));
@@ -2767,7 +3173,7 @@ function boot(win           ) {
     const input = $                  ("access-identifier");
     const error = $("access-error");
     const res = await post("/allowlist", { identifier: input.value });
-    const body = await json       (res);
+    const body = await json                                 (res);
     if (!res.ok) {
       error.textContent = body.message ?? `Failed: ${res.status}`;
       input.setAttribute("aria-invalid", "true");
@@ -2776,7 +3182,14 @@ function boot(win           ) {
     error.textContent = "";
     input.removeAttribute("aria-invalid");
     input.value = "";
-    toast("Added. They can sign in with a code now.");
+    const sent = body.entry?.invite_status;
+    toast(
+      sent === "sent"
+        ? "Added and invited. They sign in with a code."
+        : sent === "copy"
+          ? "Added. Couldn't email them: copy the link from their row."
+          : "Added. The invite did not go out: resend it from their row.",
+    );
     await loadAccess();
   });
 
@@ -2797,10 +3210,9 @@ function boot(win           ) {
     if (name === "money") ledgerPager.load();
     if (name === "access") void loadAccess();
     // Leaflet measured a hidden box; size it again and refit.
-    if (name === "workers" && map) {
-      map.invalidateSize();
-      fitted = false;
-      renderMap(workers.visible());
+    if (name === "workers") {
+      map?.invalidateSize();
+      void loadMapTasks(true);
     }
   }
   $("tabs").addEventListener("keydown", (e) => {

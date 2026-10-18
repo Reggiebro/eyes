@@ -9,10 +9,11 @@ import {
   TASK_TYPES,
 } from "@eyes/core";
 import { InkboxAPIError } from "@inkbox/sdk";
-import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   alreadyClaimedText,
   captureLinkText,
+  createInkboxEmail,
   createInkboxMessaging,
   inkboxRoutes,
   offerText,
@@ -771,5 +772,73 @@ describe("parseReplyIntent", () => {
     ["strat?", "unknown"],
   ])("typo %j -> %s", (text, intent) => {
     expect(parseReplyIntent(text)).toBe(intent);
+  });
+});
+
+describe("createInkboxEmail", () => {
+  const env = { INKBOX_API_KEY: "ik_test", INKBOX_AGENT_HANDLE: "eyes-dispatch" };
+  const msg = { to: "owner@gmail.test", subject: "Controls", text: "Your link", reply_to: "work@x.test" };
+  let fetchMock: MockInstance<typeof fetch>;
+  beforeEach(() => {
+    sdk.getIdentity.mockReset().mockResolvedValue({ emailAddress: "eyes-dispatch@inkboxmail.com" });
+    fetchMock = vi.spyOn(globalThis, "fetch");
+  });
+  afterEach(() => fetchMock.mockRestore());
+
+  it("needs the key and the handle", () => {
+    expect(() => createInkboxEmail({ INKBOX_API_KEY: "ik_test" })).toThrow(/INKBOX_AGENT_HANDLE/);
+  });
+
+  it("sends from the identity's mailbox with Reply-To, looking the mailbox up once", async () => {
+    fetchMock.mockImplementation(async () =>
+      Response.json({ id: "m_1", message_id: "<a@inkbox>" }, { status: 201 }),
+    );
+    const email = createInkboxEmail(env);
+    await expect(email.send(msg)).resolves.toEqual({ id: "m_1", message_id: "<a@inkbox>" });
+    await email.send({ to: "b@c.test", subject: "s", text: "t" });
+    expect(sdk.getIdentity).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://inkbox.ai/api/v1/mail/mailboxes/eyes-dispatch%40inkboxmail.com/messages");
+    expect(init?.headers).toMatchObject({ "X-API-Key": "ik_test" });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      recipients: { to: ["owner@gmail.test"] },
+      subject: "Controls",
+      body_text: "Your link",
+      reply_to: "work@x.test",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).not.toHaveProperty("reply_to");
+  });
+
+  it("names the Inkbox status and error code on a refused send, without the recipient", async () => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ detail: { error: "mail_rate_limited", retry_after_seconds: 120 } }, { status: 429 }),
+    );
+    const err = await createInkboxEmail(env)
+      .send(msg)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      name: "InkboxSendError(429 mail_rate_limited)",
+      message: "Inkbox email failed",
+    });
+    fetchMock.mockResolvedValueOnce(Response.json({ detail: "forbidden" }, { status: 403 }));
+    await expect(createInkboxEmail(env).send(msg)).rejects.toMatchObject({
+      name: "InkboxSendError(403 forbidden)",
+    });
+    fetchMock.mockResolvedValueOnce(new Response("bad gateway", { status: 502 }));
+    await expect(createInkboxEmail(env).send(msg)).rejects.toMatchObject({
+      name: "InkboxSendError(502 no error code)",
+    });
+    fetchMock.mockResolvedValueOnce(Response.json({ id: "m_2" }, { status: 201 }));
+    await expect(createInkboxEmail(env).send(msg)).resolves.toEqual({ id: "m_2", message_id: null });
+  });
+
+  it("retries the mailbox lookup after it fails, and refuses an identity without a mailbox", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ id: "m_3" }, { status: 201 }));
+    sdk.getIdentity.mockRejectedValueOnce(new InkboxAPIError(404, { error: "identity_not_found" }));
+    const email = createInkboxEmail(env);
+    await expect(email.send(msg)).rejects.toMatchObject({ name: "InkboxSendError(404 identity_not_found)" });
+    await expect(email.send(msg)).resolves.toMatchObject({ id: "m_3" });
+    sdk.getIdentity.mockResolvedValueOnce({ emailAddress: null });
+    await expect(createInkboxEmail(env).send(msg)).rejects.toThrow(/has no mailbox/);
   });
 });

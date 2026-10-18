@@ -155,7 +155,7 @@ SDK shortcut for HTTP endpoints: `primitive.receive(req, { secret })` verifies a
 - SDK `client.send` option names for attachments and threading (camelCase equivalents of `attachments`, `in_reply_to`, `references`). Fall back to raw REST per above. Confirm via openapi.json.
 - Whether Function `fetch()` to arbitrary external hosts is allowed (no restriction documented). Test with a one-line deploy early.
 - Signature timestamp tolerance, webhook retry schedule and attempt count, HTTP endpoint response timeout, `header_confirmed` header name.
-- How to enable `send_to_any_domain` / required entitlements; whether the hackathon sponsor can grant it. Ask Primitive staff on-site.
+- How to enable `send_to_any_domain`: not self-serve (no API/CLI operation; `account update-account` only sets spam threshold and content discard). Our org (developer plan) has every send gate except it, checked with `npx -y primitive account show` on 2026-10-18; requested by email to dev@agent.primitive.dev the same day. Until granted, set nothing; once granted set `PRIMITIVE_SEND_ANY_DOMAIN=1` (docs/DEPLOY.md section 4).
 - Whether the managed address is usable as `from` immediately on a fresh org (DKIM "active") without extra steps.
 - How an agent's own inbound reply threads: assumed standard Message-ID matching; `email.thread_id` exists but its derivation is undocumented.
 - General API rate limit of 120/60s is from a third-party listing (apis.io), not official.

@@ -1,0 +1,102 @@
+---
+import { smsHref } from "../api.ts";
+import Icon from "../components/Icon.astro";
+import Layout from "../layouts/Layout.astro";
+
+const helpSms = smsHref("HELP");
+---
+
+<Layout title="Sign in to Eyes" ogTitle="Sign in to Eyes" description="Open your Eyes page with a link by email." noindex>
+  <h1 id="title" class="ui-h1" tabindex="-1">Sign in with email</h1>
+
+  <section id="signing" aria-busy="true" hidden>
+    <p class="ui-notice" role="status"><span class="ui-spinner" aria-hidden="true"></span> Signing you in…</p>
+  </section>
+
+  <form id="ask" class="ui-form" novalidate hidden>
+    <p id="expired" class="ui-notice" hidden><Icon name="clock" /> This link expired or was used. Request a new one.</p>
+    <label class="ui-field">
+      <span class="ui-field__label">Email</span>
+      <input class="ui-input" id="email" name="email" type="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" required />
+      <span class="ui-field__hint">Use the email you confirmed on your Eyes page. Your mobile number stays your main sign-in.</span>
+    </label>
+    <p id="error" class="ui-notice ui-notice--danger" role="alert" hidden></p>
+    <button type="submit" id="send" class="ui-button ui-button--primary ui-button--block"><Icon name="mail" />Email me a sign-in link</button>
+  </form>
+
+  <section id="sent" hidden>
+    <p class="ui-notice" role="status"><Icon name="mail" /> <span><strong>Check your inbox.</strong><br />If that email is on an Eyes account, we sent a sign-in link. It works for 15 minutes.</span></p>
+    <button type="button" id="again" class="ui-button ui-button--block">Use a different email</button>
+  </section>
+
+  <section id="off" hidden>
+    <p class="ui-notice"><Icon name="message" /> Open your Eyes page with the link Eyes texts you.{!helpSms && " Text HELP to the Eyes number for a new one."}</p>
+    {helpSms && <a class="ui-button ui-button--primary ui-button--block" href={helpSms}>Text HELP for a new link</a>}
+  </section>
+</Layout>
+
+<script>
+  import { $, call, Problem, showError } from "../api.ts";
+  import { emailOn, sendLink, signIn, validEmail } from "../email.ts";
+  import { takeCode } from "../me.ts";
+
+  const show = (id: string) => {
+    for (const el of document.querySelectorAll<HTMLElement>("main > section, main > form")) el.hidden = el.id !== id;
+  };
+  const error = $("error");
+  const input = $<HTMLInputElement>("email");
+  const send = $("send");
+
+  // The emailed link carries a one-time code (43 base64url characters) in the fragment, never the query.
+  const code = takeCode(
+    {
+      hash: location.hash,
+      pathname: location.pathname,
+      search: location.search,
+      replaceUrl: (url) => history.replaceState(null, "", url),
+    },
+    /^[\w-]{43}$/,
+  );
+
+  if (code) {
+    show("signing");
+    signIn(code, { send: call, navigate: (url) => location.replace(url) }).catch((err) => {
+      if (err instanceof Problem && err.status === 401) $("expired").hidden = false;
+      else showError(error, err);
+      show("ask");
+    });
+  } else {
+    show((await emailOn(call)) ? "ask" : "off");
+  }
+
+  $("ask").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (send.hasAttribute("aria-busy")) return;
+    error.hidden = true;
+    input.removeAttribute("aria-invalid");
+    const email = input.value.trim();
+    if (!validEmail(email)) {
+      input.setAttribute("aria-invalid", "true");
+      input.setAttribute("aria-describedby", "error");
+      input.focus();
+      return showError(error, new Problem("That email does not look right.", "Check it, then try again."));
+    }
+    send.setAttribute("aria-busy", "true");
+    try {
+      await sendLink(email, call);
+      $("expired").hidden = true;
+      show("sent");
+      $("title").focus();
+    } catch (err) {
+      showError(error, err);
+    } finally {
+      send.removeAttribute("aria-busy");
+    }
+  });
+
+  $("again").addEventListener("click", () => {
+    input.value = "";
+    show("ask");
+    input.focus();
+  });
+</script>
