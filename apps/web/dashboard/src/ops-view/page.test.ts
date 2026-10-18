@@ -185,6 +185,7 @@ async function setup(
     "GET /ops/allowlist": () => ok({ entries: [] }),
     "GET /ops/issues": () => ok({ issues: [] }),
     "GET /ops/map/tasks": () => ok({ tasks: [] }),
+    "GET /ops/api/settings": () => ok({}, 404),
     ...routes,
   };
   win.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -229,6 +230,160 @@ async function setup(
   return { win, happy, doc, $, text, requests, raw, timers, cleared, assign, click, button, change, settle };
 }
 
+describe("Overview safety classifier", () => {
+  const settings = (value = 0.95) => ({
+    classifier_block_min: value,
+    default: 0.95,
+    updated_at: null,
+    updated_by: null,
+  });
+  const submit = (page: { doc: Document; happy: Window }) =>
+    page.doc
+      .getElementById("safety-form")
+      ?.dispatchEvent(new page.happy.Event("submit", { cancelable: true }) as unknown as Event);
+
+  it("loads the persisted value through the internal-host API helper, not the default", async () => {
+    const page = await setup({ "GET /ops/api/settings": () => ok(settings(0.87)) }, { root: true });
+    expect(page.raw).toContain("/api/settings");
+    expect(page.text("safety-value")).toBe("0.87");
+    expect(page.text("safety-saved")).toBe("Saved: 0.87");
+    expect(page.$<HTMLInputElement>("safety-threshold").value).toBe("0.87");
+    expect(page.$<HTMLButtonElement>("safety-save").disabled).toBe(true);
+    expect(page.$("safety-settings").getAttribute("aria-busy")).toBe("false");
+    expect(page.$("safety-help").textContent).toBe(
+      "Higher = more permissive. Fixed rules for homes, private people and license plates always apply. A higher confidence cutoff means fewer classifier blocks; this model score is not a calibrated probability.",
+    );
+    submit(page);
+    expect(page.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+  });
+
+  it("saves both inclusive boundaries and loads the persisted value after refresh", async () => {
+    let stored = 0.95;
+    const routes = {
+      "GET /ops/api/settings": () => ok(settings(stored)),
+      "PUT /ops/api/settings": (init: RequestInit | undefined) => {
+        expect(init?.headers).toEqual({ "content-type": "application/json", accept: "application/json" });
+        stored = JSON.parse(String(init?.body)).classifier_block_min;
+        return ok(settings(stored));
+      },
+    };
+    const page = await setup(routes);
+    const input = page.$<HTMLInputElement>("safety-threshold");
+    expect([input.min, input.max, input.step]).toEqual(["0.50", "1.00", "0.01"]);
+    for (const value of ["0.50", "1.00"]) {
+      await page.change("safety-threshold", value, "input");
+      expect(page.text("safety-value")).toBe(value);
+      submit(page);
+      await page.settle();
+      expect(page.text("safety-status")).toBe("Saved.");
+      expect(page.$<HTMLButtonElement>("safety-save").disabled).toBe(true);
+    }
+    expect(page.requests.filter((r) => r.method === "PUT").map((r) => r.body)).toEqual([
+      { classifier_block_min: 0.5 },
+      { classifier_block_min: 1 },
+    ]);
+    expect((await setup(routes)).text("safety-value")).toBe("1.00");
+    expect(page.$("safety-settings").textContent).not.toContain("Off");
+  });
+
+  it("locks controls while saving, prevents duplicate writes, and uses the server response", async () => {
+    let finish!: (response: Response) => void;
+    const page = await setup({
+      "GET /ops/api/settings": () => ok(settings()),
+      "PUT /ops/api/settings": () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    await page.change("safety-threshold", "0.85", "input");
+    submit(page);
+    await page.settle();
+    expect(page.text("safety-save")).toBe("Saving…");
+    expect(page.$<HTMLFieldSetElement>("safety-controls").disabled).toBe(true);
+    expect(page.$("safety-settings").getAttribute("aria-busy")).toBe("true");
+    submit(page);
+    expect(page.requests.filter((r) => r.method === "PUT")).toHaveLength(1);
+    finish(ok(settings(0.86)));
+    await page.settle();
+    expect(page.text("safety-value")).toBe("0.86");
+    expect(page.$<HTMLFieldSetElement>("safety-controls").disabled).toBe(false);
+  });
+
+  it.each([
+    () => ok({ message: "Try again" }, 503),
+    () => ok({ error: "Unavailable" }, 503),
+    () => ok({}, 503),
+    () => ok(settings(1.01)),
+    () => {
+      throw new Error("Offline");
+    },
+    () => {
+      throw "Offline";
+    },
+  ])("retains the draft after failed save and lets the operator retry", async (failure) => {
+    let fail = true;
+    const page = await setup({
+      "GET /ops/api/settings": () => ok(settings()),
+      "PUT /ops/api/settings": () => (fail ? failure() : ok(settings(0.85))),
+    });
+    await page.change("safety-threshold", "0.85", "input");
+    submit(page);
+    await page.settle();
+    expect(page.text("safety-value")).toBe("0.85");
+    expect(page.text("safety-saved")).toBe("Saved: 0.95");
+    expect(page.text("safety-status")).toMatch(/^Not saved:/);
+    expect(page.$("safety-status").getAttribute("role")).toBe("alert");
+    expect(page.$<HTMLButtonElement>("safety-save").disabled).toBe(false);
+    fail = false;
+    submit(page);
+    await page.settle();
+    expect(page.text("safety-status")).toBe("Saved.");
+  });
+
+  it.each([
+    () => ok({}, 403),
+    () => ok(settings(0.49)),
+    () => ok(settings(Number.NaN)),
+    () => {
+      throw new Error("Offline");
+    },
+    () => {
+      throw "Offline";
+    },
+  ])("does not enable a fabricated value when load fails, and supports retry", async (failure) => {
+    let fail = true;
+    const page = await setup({
+      "GET /ops/api/settings": () => (fail ? failure() : ok(settings())),
+    });
+    expect(page.text("safety-status")).toMatch(/^Could not load settings:/);
+    expect(page.$<HTMLButtonElement>("safety-save").disabled).toBe(true);
+    submit(page);
+    expect(page.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+    fail = false;
+    await page.click(page.$("safety-retry"));
+    expect(page.text("safety-value")).toBe("0.95");
+    expect(page.$<HTMLButtonElement>("safety-retry").hidden).toBe(true);
+  });
+
+  it("rejects nonfinite and out-of-range drafts even on a synthetic form submit", async () => {
+    const page = await setup({ "GET /ops/api/settings": () => ok(settings()) });
+    const input = page.$<HTMLInputElement>("safety-threshold");
+    for (const value of [Number.NaN, 0.49, 1.01]) {
+      Object.defineProperty(input, "valueAsNumber", { configurable: true, get: () => value });
+      input.dispatchEvent(new page.happy.Event("input") as unknown as Event);
+      expect(page.$<HTMLButtonElement>("safety-save").disabled).toBe(true);
+      submit(page);
+    }
+    expect(page.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+  });
+
+  it("hides only the unavailable rollout endpoint", async () => {
+    const page = await setup();
+    expect(page.$("safety-settings").hidden).toBe(true);
+    expect(page.$("p-overview").hidden).toBe(false);
+  });
+});
+
 describe("ops page boot", () => {
   it("renders health, tasks, money, workers, logs, events and charts from one poll", async () => {
     const { L, calls } = leaflet();
@@ -255,6 +410,7 @@ describe("ops page boot", () => {
     );
     const { $, text, requests, timers } = page;
     expect(requests.map((r) => r.path)).toEqual([
+      "/ops/api/settings",
       "/ops/feed",
       "/ops/tickets?state=open&limit=50",
       "/ops/tickets?state=open&limit=1",
@@ -2301,7 +2457,14 @@ describe("ops page on its own host", () => {
       { "POST /ops/logout": () => new Response(null, { status: 204 }) },
       { root: true },
     );
-    expect(page.raw.slice(0, 5)).toEqual(["/feed", "/tickets", "/tickets", "/events", "/series"]);
+    expect(page.raw.slice(0, 6)).toEqual([
+      "/api/settings",
+      "/feed",
+      "/tickets",
+      "/tickets",
+      "/events",
+      "/series",
+    ]);
     // The header keeps only the signed-in label and Log out: the live map and allowlist are tabs now.
     expect(page.doc.querySelectorAll(".bar a")).toHaveLength(1);
     await page.click(page.$("logout"));

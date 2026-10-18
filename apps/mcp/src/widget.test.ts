@@ -202,6 +202,44 @@ describe("widget call bridge (ChatGPT)", () => {
   });
 });
 
+describe.each(["MCP Apps", "ChatGPT"])("%s readable tool errors", (bridge) => {
+  const message = "Safety review <unavailable>";
+  const fix = 'Retry the same request & keep "public" places.';
+  it.each(["text", "structured", "rejected"])(
+    "shows message and fix from %s errors after Ask is clicked",
+    async (kind) => {
+      const payload = { error: "unsafe_task", message, fix, category: "other" };
+      const text = JSON.stringify(payload);
+      const result: Result =
+        kind === "structured"
+          ? { isError: true, structuredContent: payload }
+          : { isError: true, content: [{ type: "text", text }] };
+      const w =
+        bridge === "ChatGPT"
+          ? boot({
+              openai: {
+                callTool: async () => {
+                  if (kind === "rejected") throw new Error(text);
+                  return result;
+                },
+              },
+            })
+          : boot({ host: () => (kind === "rejected" ? { error: { message: text } } : result) });
+      w.show(QUOTE, { location: "YC 580 20th Street", question: "Is the hackathon on going?" });
+      w.button("ask").click();
+      await w.settle();
+      const alert = w.root.querySelector('[data-error][role="alert"]');
+      expect(alert?.textContent).toBe(`${message} ${fix}`);
+      expect(alert?.innerHTML).toContain("&lt;unavailable&gt;");
+      expect(alert?.textContent).not.toContain("unsafe_task");
+      expect(w.button("ask").disabled).toBe(false);
+      w.button("ask").click();
+      await w.settle();
+      expect(w.root.querySelectorAll("[data-error]")).toHaveLength(1);
+    },
+  );
+});
+
 it("inlines the script and the call helper in the HTML resource", () => {
   expect(WIDGET_HTML).toContain(WIDGET_SCRIPT);
   expect(WIDGET_HTML).toContain('"tools/call"');

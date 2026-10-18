@@ -59,8 +59,8 @@ export function emailRow(s: WorkerSetup): EmailRow | null {
       return s.opted_in
         ? {
             status: "pending",
-            title: "Check your inbox",
-            detail: `Tap the link we sent to ${masked} to confirm it.`,
+            title: "Finish adding your email",
+            detail: `Tap Send again, then send the email we open from ${masked}.`,
             actions: ["resend", "remove"],
           }
         : {
@@ -81,7 +81,7 @@ export function emailRow(s: WorkerSetup): EmailRow | null {
   }
 }
 
-/** Adds or changes (a confirmation link goes out) or, with null, removes the email. Answers the updated setup. */
+/** With null, removes the email (an address would mail a confirmation link; /me adds by mailto instead). */
 export async function saveEmail(code: string, email: string | null, send: Send): Promise<WorkerSetup> {
   try {
     return (await send("/w/me/email", post({ email }, code))) as WorkerSetup;
