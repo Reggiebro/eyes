@@ -563,22 +563,36 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       p_now: nowIso(),
     });
 
+  const retryContext = (task: Task) => ({
+    question: task.question,
+    location: { lat: task.lat, lng: task.lng, label: task.place_label },
+    task_type: task.task_type,
+    bounty_usd: centsToUsd(task.bounty_cents),
+  });
+
   async function sendOffers(task: Task, workers: Nearby[]): Promise<number> {
+    const eligible = new Set(
+      await rpc<string>("eyes_dispatchable_workers", {
+        p_worker_ids: workers.map((w) => w.worker_id),
+      }),
+    );
     const sent = await Promise.allSettled(
-      workers.map((w) =>
-        toAll(contacts(w), (to) =>
-          messaging.sendOffer(to, {
-            task_id: task.id,
-            task_type: task.task_type,
-            question: task.question,
-            place_label: task.place_label,
-            bounty_cents: task.bounty_cents,
-            distance_m: Math.round(w.distance_m),
-            deadline_at: iso(task.deadline_at),
-            live_payouts: config.live_payouts,
-          }),
+      workers
+        .filter((w) => eligible.has(w.worker_id))
+        .map((w) =>
+          toAll(contacts(w), (to) =>
+            messaging.sendOffer(to, {
+              task_id: task.id,
+              task_type: task.task_type,
+              question: task.question,
+              place_label: task.place_label,
+              bounty_cents: task.bounty_cents,
+              distance_m: Math.round(w.distance_m),
+              deadline_at: iso(task.deadline_at),
+              live_payouts: config.live_payouts,
+            }),
+          ),
         ),
-      ),
     );
     logFailedOffers(task.id, sent);
     return sent.filter((s) => s.status === "fulfilled").length;
@@ -1117,6 +1131,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       const { task } = found;
       return {
         task_id: task.id,
+        retry_context: retryContext(task),
         status: task.status,
         question: task.question,
         task_type: task.task_type,
@@ -1181,12 +1196,17 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
 
     async disputeAnswer(agent, input) {
       const { task_id, reason } = parse(TOOLS.dispute_answer.input, input);
-      await rpc("eyes_dispute", { p_agent_id: agent.id, p_task_id: task_id, p_reason: reason });
+      const task = await one<Task>("eyes_dispute", {
+        p_agent_id: agent.id,
+        p_task_id: task_id,
+        p_reason: reason,
+      });
       return {
         task_id,
         status: "disputed",
+        retry_context: retryContext(task),
         next_step:
-          "Recorded. A person reviews the dispute; an unpaid payout is held meanwhile. If the answer was fake, the full bounty and fee are refunded to your balance. Call get_task later: dispute.status is open, upheld (refunded) or rejected (the answer stands).",
+          "Recorded. A person reviews the dispute; an unpaid payout is held meanwhile. If the answer was fake, the full bounty and fee are refunded to your balance. Call get_task later: dispute.status is open, upheld (refunded) or rejected (the answer stands). To ask again, call quote_task with retry_context.location and retry_context.task_type, then ask_eyes with retry_context and a new idempotency_key only after confirming the new cost. This dispute does not create another paid task.",
       };
     },
 

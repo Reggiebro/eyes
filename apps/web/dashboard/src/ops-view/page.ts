@@ -131,8 +131,19 @@ export type Worker = {
   lng: number | null;
   available: boolean;
   opted_in: boolean;
+  banned?: boolean;
+  dispute_hold_at?: string | null;
+  dispute_reviewed_at?: string | null;
   /** App Review and other test accounts (migration 030): listed, never counted or mapped. */
   test?: boolean;
+};
+type DisputeReview = {
+  worker_id: string;
+  dispute_hold_at: string | null;
+  dispute_reviewed_at: string | null;
+  disputed_tasks: number;
+  history: { task_id: string; created_at: string; message: string; dispute_status: string }[];
+  last_review: { actor: string; at: string; note: string; decision: "lift_hold" } | null;
 };
 /** A real position: not missing, not the 0,0 placeholder. */
 const located = (p: { lat?: number | null; lng?: number | null }) =>
@@ -624,7 +635,7 @@ export function boot(win: OpsWindow) {
         .addTo(layer);
     }
     for (const w of workers) {
-      const on = w.available && w.opted_in;
+      const on = rank(w) === 2;
       const marker = L.circleMarker([w.lat, w.lng], {
         radius: w.id === selected ? 11 : 7,
         weight: w.id === selected ? 4 : 2,
@@ -704,7 +715,7 @@ export function boot(win: OpsWindow) {
   }
   function showWorker(d: WorkerDetail, close: HTMLElement) {
     const w = d.worker;
-    const state = w.banned ? "banned" : (RANK[rank(w)] as string);
+    const state = RANK[rank(w)] as string;
     const e = d.earnings;
     // Each task shows its own photo; a photo seen on an earlier task here gets a warning chip.
     const firstWith = new Map<string, string>();
@@ -721,7 +732,8 @@ export function boot(win: OpsWindow) {
           h(
             "span",
             null,
-            badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+            badge(state, workerTone(w)),
+            w.banned && w.dispute_hold_at ? badge("Paused: dispute review", "warning") : null,
             w.test ? badge("test") : null,
           ),
           close,
@@ -748,6 +760,7 @@ export function boot(win: OpsWindow) {
               : "",
           ),
         ),
+        "dispute_hold_at" in w || w.dispute_reviewed_at ? workerDisputeReview(d, close) : null,
         h("h3", "panel__sub", d.tasks.length ? `Last ${d.tasks.length} tasks` : "No tasks yet"),
         h(
           "ul",
@@ -780,6 +793,140 @@ export function boot(win: OpsWindow) {
         h("span", "tiny", w.id),
       ].filter((x) => x != null),
     );
+  }
+  function workerDisputeReview(d: WorkerDetail, close: HTMLElement) {
+    const w = d.worker;
+    const area = h("section", "worker-disputes");
+    area.setAttribute("aria-label", "Dispute review");
+    const panel = $<HTMLDialogElement>("review-panel");
+    const load = async () => {
+      area.setAttribute("aria-busy", "true");
+      area.replaceChildren(h("p", "muted", "Loading dispute review…"));
+      try {
+        const res = await fetch(`/workers/${w.id}/dispute-review`, { cache: "no-store" });
+        const body = await json<DisputeReview & Reply>(res);
+        if (!area.isConnected) return;
+        if (!res.ok) throw new Error(String(body.message || body.error || res.status));
+        show(body);
+      } catch (err) {
+        const retry = h("button", "ui-button ui-button--sm ui-button--ghost", "Retry dispute review");
+        retry.type = "button";
+        retry.addEventListener("click", () => void load());
+        const error = h("p", "muted", `Could not load dispute review: ${(err as Error).message}`);
+        error.setAttribute("role", "alert");
+        area.replaceChildren(error, retry);
+      } finally {
+        area.setAttribute("aria-busy", "false");
+      }
+    };
+    const show = (body: DisputeReview) => {
+      area.replaceChildren(
+        h("h3", "panel__sub", `${body.disputed_tasks} distinct disputed tasks since last review`),
+        h(
+          "p",
+          "muted",
+          body.dispute_hold_at
+            ? `Paused: dispute review since ${stamp(body.dispute_hold_at)}. New dispatch and claims are blocked.`
+            : "No temporary dispute hold.",
+        ),
+        h("p", "tiny", "Three distinct genuine task disputes trigger a pause. Test tasks do not count."),
+        h(
+          "ul",
+          "wtasks",
+          ...body.history.map((entry) => {
+            const link = h("a", null, `Dispute tickets for task ${entry.task_id}`);
+            link.href = `#support?q=${encodeURIComponent(entry.task_id)}`;
+            link.addEventListener("click", () => panel.close());
+            return h(
+              "li",
+              null,
+              link,
+              h("p", "tiny", `${entry.dispute_status} · ${stamp(entry.created_at)}`),
+              h("p", "msg", entry.message || "(no reason)"),
+            );
+          }),
+        ),
+        ...(body.last_review
+          ? [
+              h("h3", "panel__sub", "Last review"),
+              h(
+                "p",
+                "muted",
+                `Temporary hold lifted by ${body.last_review.actor} · ${stamp(body.last_review.at)}`,
+              ),
+              h("p", "msg", body.last_review.note),
+            ]
+          : []),
+      );
+      if (!body.dispute_hold_at) return;
+      const controls = actionArea(document, {
+        id: `worker-${w.id}-dispute`,
+        primary: {
+          label: "Review and lift temporary hold",
+          confirm:
+            "Lift only the temporary dispute hold? Only new dispatch and claims may resume, subject to normal eligibility. Existing payments and disputes do not change. A permanent fraud ban is not overridden.",
+          verb: "Lift temporary hold",
+          tone: "primary",
+          run: async (note) => {
+            if (note.length < 5 || note.length > 1000)
+              return { ok: false, message: "Write an operator note of 5–1000 characters." };
+            const preventCancel = (event: Event) => event.preventDefault();
+            panel.addEventListener("cancel", preventCancel);
+            (close as HTMLButtonElement).disabled = true;
+            area.setAttribute("aria-busy", "true");
+            try {
+              const res = await fetch(`/workers/${w.id}/dispute-review`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ note }),
+              });
+              const result = await json<DisputeReview & Reply>(res);
+              if (!res.ok)
+                return {
+                  ok: false,
+                  message:
+                    res.status === 409
+                      ? "Worker is no longer held. Close and reopen the worker to refresh; no review was saved."
+                      : `Review failed: ${result.message || result.error || res.status}. Retry with your note.`,
+                };
+              w.dispute_hold_at = result.dispute_hold_at;
+              w.dispute_reviewed_at = result.dispute_reviewed_at;
+              const listed = workerRows.find((worker) => worker.id === w.id);
+              if (listed) {
+                listed.dispute_hold_at = result.dispute_hold_at;
+                listed.dispute_reviewed_at = result.dispute_reviewed_at;
+                workers.setRows(workerRows);
+                renderMap(workers.visible());
+              }
+              showWorker(d, close);
+              return {
+                ok: true,
+                message:
+                  "Temporary hold lifted. Only new dispatch and claims may resume, subject to normal eligibility. Existing payments and disputes are unchanged; permanent fraud bans still apply.",
+              };
+            } finally {
+              panel.removeEventListener("cancel", preventCancel);
+              (close as HTMLButtonElement).disabled = false;
+              area.setAttribute("aria-busy", "false");
+            }
+          },
+        },
+        more: [],
+        note: {
+          label: "Operator review note",
+          hint: "Required: 5–1000 characters. Saved with the review.",
+          required: true,
+        },
+        toast,
+      });
+      const note = controls.querySelector("textarea") as HTMLTextAreaElement;
+      note.minLength = 5;
+      note.maxLength = 1000;
+      note.required = true;
+      area.append(controls);
+    };
+    void load();
+    return area;
   }
   // Esc or Close: the worker is no longer selected.
   $("review-panel").addEventListener("close", () => {
@@ -826,7 +973,8 @@ export function boot(win: OpsWindow) {
       h("div", "stat live", h("b", null, String(w.online)), h("span", null, "available now")),
       h("div", "stat", h("b", null, String(w.total)), h("span", null, "signed up")),
     );
-    workers.setRows(feed.workers);
+    workerRows = feed.workers;
+    workers.setRows(workerRows);
     renderMap(workers.visible());
     renderStory(feed.tasks);
     openWanted();
@@ -1704,8 +1852,12 @@ export function boot(win: OpsWindow) {
   $("ledger").replaceChildren(ledger.el);
 
   // Workers: every worker from the feed; the filters also pick which markers the map shows.
-  const rank = (w: Worker) => (w.available && w.opted_in ? 2 : w.opted_in ? 1 : 0);
-  const RANK = ["opted out", "opted in", "available"];
+  let workerRows: Worker[] = [];
+  const rank = (w: Worker) =>
+    w.banned ? 4 : w.dispute_hold_at ? 3 : w.available && w.opted_in ? 2 : w.opted_in ? 1 : 0;
+  const RANK = ["opted out", "opted in", "available", "Paused: dispute review", "Banned"];
+  const workerTone = (w: Worker) =>
+    w.banned ? "danger" : w.dispute_hold_at ? "warning" : rank(w) === 2 ? "success" : "";
   const workers = tableFor<Worker>("workers", {
     name: "workers",
     empty: "No workers yet.",
@@ -1726,7 +1878,8 @@ export function boot(win: OpsWindow) {
           h(
             "span",
             null,
-            badge(RANK[rank(w)] as string, rank(w) === 2 ? "success" : ""),
+            badge(RANK[rank(w)] as string, workerTone(w)),
+            w.banned && w.dispute_hold_at ? badge("Paused: dispute review", "warning") : null,
             w.test ? badge("test") : null,
           ),
       },

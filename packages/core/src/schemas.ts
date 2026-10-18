@@ -68,6 +68,8 @@ export const Worker = z.object({
   opted_in: z.boolean(),
   rating: z.number().min(0).max(5),
   banned: z.boolean().optional(),
+  dispute_hold_at: Timestamp.nullable().optional(),
+  dispute_reviewed_at: Timestamp.nullable().optional(),
   created_at: Timestamp,
 });
 export type Worker = z.infer<typeof Worker>;
@@ -300,9 +302,17 @@ export const AwaitAnswerOutput = z.object({
   next_step: z.string(),
 });
 
+export const RetryContext = z.object({
+  question: z.string(),
+  location: z.object({ lat: z.number(), lng: z.number(), label: z.string() }),
+  task_type: TaskType,
+  bounty_usd: Usd,
+});
+
 export const GetTaskInput = z.object({ task_id: TaskId });
 export const GetTaskOutput = z.object({
   task_id: Id,
+  retry_context: RetryContext,
   status: TaskStatus,
   question: z.string(),
   task_type: TaskType,
@@ -381,6 +391,7 @@ export const DisputeAnswerInput = z.object({
 export const DisputeAnswerOutput = z.object({
   task_id: Id,
   status: z.literal("disputed"),
+  retry_context: RetryContext,
   next_step: z.string(),
 });
 
