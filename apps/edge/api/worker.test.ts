@@ -229,20 +229,27 @@ describe("EyesServer", () => {
     );
   });
 
-  describe("fetch() while the server is still booting", () => {
+  describe("fetch() across a boot or a rollout restart", () => {
+    const REFUSED = "the container is not listening";
+    const NO_INSTANCE = "there is no container instance that can be provided to this durable object";
+
     beforeEach(() => {
       vi.useFakeTimers();
     });
 
+    const bodies = (port: FakePort) =>
+      port.fetch.mock.calls.map(([, init]) => new TextDecoder().decode(init?.body as ArrayBuffer));
+
     it("retries after a refused connection and replays the buffered body", async () => {
       const port = fakePort();
       port.fetch
-        .mockRejectedValueOnce(new Error("connection refused"))
+        .mockRejectedValueOnce(new Error(REFUSED))
+        .mockRejectedValueOnce(new Error(NO_INSTANCE))
         .mockResolvedValueOnce(new Response("ready", { status: 201 }));
       const dob = new EyesServer(fakeCtx(fakeContainer({ port })), {});
 
       const pending = dob.fetch(new Request("http://eyes/v1/tasks", { method: "POST", body: "hello" }));
-      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(1_100);
       const res = await pending;
 
       expect(res.status).toBe(201);
@@ -250,16 +257,14 @@ describe("EyesServer", () => {
       expect(port.fetch.mock.calls.map(([url]) => url)).toEqual([
         "http://eyes/v1/tasks",
         "http://eyes/v1/tasks",
+        "http://eyes/v1/tasks",
       ]);
-      const bodies = port.fetch.mock.calls.map(([, init]) =>
-        new TextDecoder().decode(init?.body as ArrayBuffer),
-      );
-      expect(bodies).toEqual(["hello", "hello"]);
+      expect(bodies(port)).toEqual(["hello", "hello", "hello"]);
     });
 
     it("answers 503 once the 60 s deadline passes with no answer", async () => {
       const port = fakePort();
-      port.fetch.mockRejectedValue(new Error("connection refused"));
+      port.fetch.mockRejectedValue(new Error(REFUSED));
       const dob = new EyesServer(fakeCtx(fakeContainer({ port })), {});
 
       const pending = dob.fetch(new Request("http://eyes/healthz"));
@@ -267,21 +272,82 @@ describe("EyesServer", () => {
       const res = await pending;
 
       expect(res.status).toBe(503);
-      expect(await res.text()).toBe("Eyes server unavailable: connection refused");
+      expect(await res.text()).toBe(`Eyes server unavailable: ${REFUSED}`);
       expect(port.fetch.mock.calls.length).toBeGreaterThan(1);
     });
 
-    it("passes later requests straight through once the server has answered", async () => {
+    it("never replays a request that may have reached the server: 502 at once", async () => {
       const port = fakePort();
+      port.fetch.mockRejectedValue(new Error("Network connection lost."));
       const dob = new EyesServer(fakeCtx(fakeContainer({ port })), {});
 
+      const res = await dob.fetch(new Request("http://eyes/v1/tasks", { method: "POST", body: "pay" }));
+
+      expect(res.status).toBe(502);
+      expect(await res.text()).toBe("Eyes server unavailable: Network connection lost.");
+      expect(port.fetch).toHaveBeenCalledOnce();
+    });
+
+    it("holds requests while a rollout swaps the instance and starts the new one when the old exits", async () => {
+      const port = fakePort();
+      const container = fakeContainer({ port });
+      const dob = new EyesServer(fakeCtx(container), {});
+      await dob.fetch(new Request("http://eyes/healthz"));
+      expect(container.start).toHaveBeenCalledOnce();
+
+      // SIGTERM: the old server stops listening, then exits; the new image answers.
+      port.fetch.mockRejectedValueOnce(new Error(REFUSED)).mockImplementationOnce(async () => {
+        container.running = false;
+        throw new Error(NO_INSTANCE);
+      });
+      const pending = dob.fetch(
+        new Request("http://eyes/mcp", { method: "POST", body: "{}", headers: { "content-length": "2" } }),
+      );
+      await vi.advanceTimersByTimeAsync(1_100);
+      const res = await pending;
+
+      expect(res.status).toBe(200);
+      expect(container.start).toHaveBeenCalledTimes(2);
+      expect(bodies(port).slice(1)).toEqual(["{}", "{}", "{}"]);
+    });
+
+    it("streams a large or unknown-length body once the server is up, without buffering", async () => {
+      const port = fakePort();
+      const dob = new EyesServer(fakeCtx(fakeContainer({ port })), {});
       await dob.fetch(new Request("http://eyes/healthz"));
 
-      const second = new Request("http://eyes/v1/agents");
-      await dob.fetch(second);
+      const large = new Request("http://eyes/w/capture", {
+        method: "POST",
+        body: "x",
+        headers: { "content-length": String(1024 * 1024 + 1) },
+      });
+      await dob.fetch(large);
+      const chunked = new Request("http://eyes/w/capture", { method: "POST", body: "x" });
+      await dob.fetch(chunked);
 
-      expect(port.fetch).toHaveBeenCalledTimes(2);
-      expect(port.fetch.mock.calls[1]?.[0]).toBe(second);
+      expect(port.fetch.mock.calls[1]?.[0]).toBe(large);
+      expect(port.fetch.mock.calls[2]?.[0]).toBe(chunked);
+    });
+
+    it("answers a streamed body 503 on refusal and 502 on any other error, without replaying", async () => {
+      const port = fakePort();
+      const dob = new EyesServer(fakeCtx(fakeContainer({ port })), {});
+      await dob.fetch(new Request("http://eyes/healthz"));
+      const upload = () => new Request("http://eyes/w/capture", { method: "POST", body: "x" });
+
+      port.fetch.mockRejectedValueOnce(new Error("Network connection lost."));
+      expect((await dob.fetch(upload())).status).toBe(502);
+
+      port.fetch.mockRejectedValueOnce(new Error(REFUSED));
+      expect((await dob.fetch(upload())).status).toBe(503);
+      expect(port.fetch).toHaveBeenCalledTimes(3);
+
+      // The refusal marks the server as restarting, so the next upload is buffered and retried.
+      port.fetch.mockRejectedValueOnce(new Error(REFUSED));
+      const pending = dob.fetch(upload());
+      await vi.advanceTimersByTimeAsync(600);
+      expect((await pending).status).toBe(200);
+      expect(bodies(port).slice(3)).toEqual(["x", "x"]);
     });
   });
 });

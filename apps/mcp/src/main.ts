@@ -23,6 +23,8 @@ import { createServer, liveProviders } from "./server.ts";
 import { withShortLinks } from "./short-links.ts";
 
 const EXPIRE_EVERY_MS = 30_000;
+/** Longest SIGTERM drain; most await_answer long polls finish inside it. */
+export const DRAIN_MS = 10_000;
 
 type Exit = (message: string) => never;
 /* v8 ignore start -- process exit: only the spawned boot in main.test.ts reaches it */
@@ -144,5 +146,27 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   return { http, stop };
 }
 
-/* v8 ignore next -- process entry: the spawned boots in main.test.ts run this line */
-if (import.meta.main) start(process.env);
+/**
+ * A rollout SIGTERMs the container and waits up to 15 min before SIGKILL. As PID 1, node ignores
+ * SIGTERM without a handler, so every deploy would wait the full 15 min. This one stops new
+ * connections, lets in-flight requests finish, and exits after at most DRAIN_MS.
+ */
+export function onSigterm(
+  http: { once(event: "close", listener: () => void): unknown },
+  stop: () => void,
+  exit: (code: number) => void = process.exit,
+) {
+  return () => {
+    console.log(`SIGTERM: draining for up to ${DRAIN_MS / 1000} s`);
+    http.once("close", () => exit(0));
+    stop();
+    setTimeout(() => exit(0), DRAIN_MS);
+  };
+}
+
+/* v8 ignore start -- process entry: the spawned boots in main.test.ts run it */
+if (import.meta.main) {
+  const { http, stop } = start(process.env);
+  process.once("SIGTERM", onSigterm(http, stop));
+}
+/* v8 ignore stop */
