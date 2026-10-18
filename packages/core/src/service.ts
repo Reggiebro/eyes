@@ -16,9 +16,10 @@ import type {
   TaskType,
   ToolInput,
   ToolOutput,
-  WorkerEarnings,
   WorkerLocationInput,
   WorkerSetup,
+  WorkerTasks,
+  WorkerTasksQuery,
 } from "./schemas.ts";
 
 export const SAFETY_CATEGORIES = [
@@ -104,9 +105,10 @@ export interface EyesService {
   workerConnectUrl(token: string): Promise<string>;
   markWorkerOnboarded(account_id: string): Promise<void>;
   handleWorkerReply(input: { phone: string; intent: ReplyIntent; text: string }): Promise<void>;
-  workerEarnings(token: string): Promise<WorkerEarnings>;
   /** token: the worker's "e:" token, the /me page's code (ADR-028). Throws unauthorized. */
   workerSetup(token: string): Promise<WorkerSetup>;
+  /** token: as workerSetup. One page of the worker's tasks, newest first, and the totals. Throws unauthorized. */
+  workerTasks(token: string, query: WorkerTasksQuery): Promise<WorkerTasks>;
   /** token: as workerSetup. Mints a location code; returns the app install link carrying it. Throws unauthorized. */
   workerInstallLink(token: string): Promise<{ install_url: string }>;
   getOffer(token: string): Promise<OfferView>;

@@ -462,45 +462,37 @@ export const WorkerLocationInput = z
   })
   .refine((v) => v.lat !== 0 || v.lng !== 0, { message: "0,0 is not a real location.", path: ["lat"] });
 export type WorkerLocationInput = z.input<typeof WorkerLocationInput>;
-export const WorkerEarnings = z.object({
+// One row of the worker's task list on /me (T6.42, ADR-029). payout: the payout label rule (ADR-020).
+export const WorkerTask = z.object({
+  task_id: Id,
+  question: z.string(),
+  place_label: z.string(),
+  status: TaskStatus,
+  bounty_usd: Usd,
+  payout: z.enum(["paid", "pending", "waiting_for_payout_setup"]).nullable(),
+  claimed_at: Timestamp,
+});
+export const WORKER_TASK_FILTERS = ["paid", "pending", "review", "expired"] as const;
+// GET /w/me/tasks: one page of the worker's tasks, newest first, plus the totals over all of them.
+export const WorkerTasks = z.object({
   paid_usd: Usd,
   pending_usd: Usd,
-  tasks: z
-    .array(
-      z.object({
-        task_id: Id,
-        question: z.string(),
-        task_type: TaskType,
-        place_label: z.string(),
-        status: TaskStatus,
-        bounty_usd: Usd,
-        payout: z.enum(["paid", "pending", "waiting_for_payout_setup"]).nullable(),
-        claimed_at: Timestamp,
-        paid_at: Timestamp.nullable(),
-      }),
-    )
-    .max(50),
+  tasks: z.array(WorkerTask).max(100),
+  next_cursor: z.string().nullable(),
 });
-// The worker's setup page, /me (ADR-028). tasks: the 5 newest claims, rows as in WorkerEarnings.
+export const WorkerTasksQuery = z.object({
+  q: z.string().trim().max(100).optional().catch(undefined),
+  status: z.enum(WORKER_TASK_FILTERS).optional().catch(undefined),
+  cursor: z.string().max(100).optional().catch(undefined),
+  tz: z.string().max(64).optional().catch(undefined),
+});
+// The worker's setup page, /me (ADR-028). Its task list loads from GET /w/me/tasks.
 export const WorkerSetup = z.object({
   opted_in: z.boolean(),
   spot: z.object({ at: Timestamp.nullable(), fresh: z.boolean(), max_age_h: z.number() }),
   app: z.object({ last_at: Timestamp.nullable(), sending: z.boolean() }),
   payouts: z.object({ set_up: z.boolean(), live: z.boolean(), setup_url: z.string().nullable() }),
   here_url: z.string(),
-  earnings_url: z.string(),
-  tasks: z
-    .array(
-      WorkerEarnings.shape.tasks.element.pick({
-        question: true,
-        place_label: true,
-        status: true,
-        bounty_usd: true,
-        payout: true,
-        claimed_at: true,
-      }),
-    )
-    .max(5),
 });
 
 export const CaptureResult = z.object({
@@ -522,7 +514,9 @@ export type CaptureResult = z.output<typeof CaptureResult>;
 export type ResolvedLocation = z.output<typeof ResolvedLocation>;
 export type OwnerPolicyInput = z.output<typeof OwnerPolicyInput>;
 export type OwnerConsole = z.output<typeof OwnerConsole>;
-export type WorkerEarnings = z.output<typeof WorkerEarnings>;
+export type WorkerTask = z.output<typeof WorkerTask>;
+export type WorkerTasks = z.output<typeof WorkerTasks>;
+export type WorkerTasksQuery = z.output<typeof WorkerTasksQuery>;
 export type WorkerSetup = z.output<typeof WorkerSetup>;
 
 export const HTTP_ROUTES = {
@@ -546,6 +540,7 @@ export const HTTP_ROUTES = {
   worker_connect_redirect: "GET /w/connect/:token",
   worker_earnings: "GET /w/earnings/:token",
   worker_me: "GET /w/me",
+  worker_me_tasks: "GET /w/me/tasks",
   worker_me_install: "POST /w/me/install",
   offer_view: "GET /w/offers/:token",
   offer_capture: "POST /w/offers/:token/capture",

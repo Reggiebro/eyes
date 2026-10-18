@@ -41,7 +41,6 @@ export function withShortLinks(
     },
     sendCaptureLink: async (to, msg) =>
       messaging.sendCaptureLink(to, { ...msg, capture_url: await shorten(to, msg.capture_url) }),
-    sendPaid: async (to, msg) =>
-      messaging.sendPaid(to, { ...msg, earnings_url: await shorten(to, msg.earnings_url) }),
+    sendPaid: async (to, msg) => messaging.sendPaid(to, { ...msg, me_url: await shorten(to, msg.me_url) }),
   };
 }

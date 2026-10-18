@@ -22,6 +22,7 @@ import {
   verifyToken,
   WorkerLocationInput,
   type WorkerSetup,
+  type WorkerTasks,
 } from "@eyes/core";
 import type { Rpc } from "@eyes/db";
 import { PAGE_HEADERS } from "@eyes/payments";
@@ -341,9 +342,13 @@ describe("worker setup page (ADR-028)", () => {
     app: { last_at: "2026-10-17T18:00:00.000Z", sending: true },
     payouts: { set_up: false, live: true, setup_url: "http://api.eyes.test/w/connect/c" },
     here_url: "http://worker.eyes.test/here.html?t=l",
-    earnings_url: "http://api.eyes.test/w/earnings/e",
+  };
+  const TASKS: WorkerTasks = {
+    paid_usd: 0,
+    pending_usd: 3,
     tasks: [
       {
+        task_id: "8b3e4d5c-6f7a-4b2c-9d0e-1f2a3b4c5d6e",
         question: "Is it open?",
         place_label: "Dolores Park",
         status: "verified",
@@ -352,6 +357,7 @@ describe("worker setup page (ADR-028)", () => {
         claimed_at: "2026-10-17T18:30:00.000Z",
       },
     ],
+    next_cursor: null,
   };
   const REFUSED = {
     error: "unauthorized",
@@ -369,6 +375,10 @@ describe("worker setup page (ADR-028)", () => {
       workerSetup: async (token) => {
         check("setup", token);
         return SETUP;
+      },
+      workerTasks: async (token, query) => {
+        check(`tasks ${JSON.stringify(query)}`, token);
+        return TASKS;
       },
       workerInstallLink: async (token) => {
         check("install", token);
@@ -397,6 +407,30 @@ describe("worker setup page (ADR-028)", () => {
     const res = await fetch(`http://eyes.test${path}`, { headers });
     expect([res.status, await res.json(), seen]).toEqual([401, REFUSED, [call]]);
     expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("GET /w/me/tasks passes the bearer code and the shown filters, drops unknown ones, answers uncached", async () => {
+    const { fetch, seen } = me();
+    const res = await fetch(
+      "http://eyes.test/w/me/tasks?q=%20pier%20&status=paid&cursor=c%7C1&tz=America%2FNew_York&c=good",
+      { headers: { authorization: "Bearer good", origin: "http://worker.eyes.test" } },
+    );
+    expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+      200,
+      TASKS,
+      "no-store",
+    ]);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+    await fetch("http://eyes.test/w/me/tasks?status=everything", {
+      headers: { authorization: "Bearer good" },
+    });
+    const refused = await fetch("http://eyes.test/w/me/tasks?c=good");
+    expect([refused.status, await refused.json()]).toEqual([401, REFUSED]);
+    expect(seen).toEqual([
+      'tasks {"q":"pier","status":"paid","cursor":"c|1","tz":"America/New_York"} good',
+      "tasks {} good",
+      "tasks {} ",
+    ]);
   });
 
   it("POST /w/me/install returns the install link for the bearer code; GET never mints one", async () => {

@@ -1,13 +1,26 @@
-import type { WorkerSetup } from "@eyes/core";
+import type { WorkerSetup, WorkerTask, WorkerTasks } from "@eyes/core";
 import { describe, expect, it, vi } from "vitest";
 import { Problem } from "./api.ts";
-import { ago, checklist, type MeDeps, meView, openInstall, showMe, takeCode, taskLines } from "./me.ts";
+import {
+  ago,
+  checklist,
+  type ListDeps,
+  type MeDeps,
+  meView,
+  openInstall,
+  showMe,
+  shownDate,
+  type TaskList,
+  takeCode,
+  taskLine,
+  taskList,
+} from "./me.ts";
 
 const CODE = "eyJwIjoiZTp3MSIsImUiOjF9.c2lnbmF0dXJlLXNpZ25hdHVyZS1zaWduYXR1cmU";
 const NOW = Date.parse("2026-10-17T12:00:00Z");
 const minAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();
 const HERE = "https://app.eyes.pictures/here.html?t=h.t";
-const EARNINGS = "https://app.eyes.pictures/earnings?t=e.t";
+const TZ = "America/Los_Angeles";
 const CONNECT = "https://connect.stripe.com/setup/abc";
 const START = "sms:+14155550100?&body=START";
 
@@ -18,19 +31,18 @@ function setup(over: Partial<WorkerSetup> = {}): WorkerSetup {
     app: { last_at: minAgo(5), sending: true },
     payouts: { set_up: true, live: true, setup_url: null },
     here_url: HERE,
-    earnings_url: EARNINGS,
-    tasks: [],
     ...over,
   };
 }
 
-const task = (over: Partial<WorkerSetup["tasks"][number]> = {}): WorkerSetup["tasks"][number] => ({
+const task = (over: Partial<WorkerTask> = {}): WorkerTask => ({
+  task_id: "8b3e4d5c-6f7a-4b2c-9d0e-1f2a3b4c5d6e",
   question: "Is oat milk in stock right now?",
   place_label: "Blue Bottle Coffee, Mint Plaza",
   status: "verified",
   bounty_usd: 3,
   payout: "pending",
-  claimed_at: minAgo(30),
+  claimed_at: "2026-10-17T05:30:00.000Z",
   ...over,
 });
 
@@ -213,55 +225,193 @@ describe("checklist", () => {
   });
 });
 
-describe("taskLines", () => {
-  it("puts the status and payout in plain words, with the amount in dollars", () => {
-    expect(taskLines([task()])).toEqual([
-      {
-        question: "Is oat milk in stock right now?",
-        place: "Blue Bottle Coffee, Mint Plaza",
-        amount: "$3.00",
-        state: "Verified · Payout pending",
-        paid: false,
-      },
-    ]);
+describe("shownDate", () => {
+  it("shows the date in the worker's zone, as the server search formats it", () => {
+    expect(shownDate("2026-10-17T05:30:00.000Z", TZ)).toBe("Oct 16, 2026");
+    expect(shownDate("2026-10-17T05:30:00.000Z", "UTC")).toBe("Oct 17, 2026");
+    expect(shownDate("2026-03-01T12:00:00.000Z", "UTC")).toBe("Mar 1, 2026");
   });
+});
 
-  it("says Paid once when the task and the payout are both paid", () => {
-    expect(taskLines([task({ status: "paid", payout: "paid", bounty_usd: 2.5 })])[0]).toMatchObject({
-      amount: "$2.50",
-      state: "Paid",
-      paid: true,
+describe("taskLine", () => {
+  it("puts the status, payout and local date in plain words, with the amount in dollars", () => {
+    expect(taskLine(task(), TZ, true)).toEqual({
+      id: "8b3e4d5c-6f7a-4b2c-9d0e-1f2a3b4c5d6e",
+      question: "Is oat milk in stock right now?",
+      place: "Blue Bottle Coffee, Mint Plaza",
+      date: "Oct 16, 2026",
+      amount: "$3.00",
+      status: "Verified",
+      tone: "success",
+      payout: "Payout pending",
+      review: false,
     });
   });
 
-  it("shows only the status when there is no payout, and the setup wait when payouts are not set up", () => {
-    expect(taskLines([task({ status: "expired", payout: null })])[0]).toMatchObject({
-      state: "Expired",
-      paid: false,
+  it.each([
+    [{ status: "paid", payout: "paid", bounty_usd: 2.5 }, "Paid", "success", null],
+    [{ status: "disputed", payout: "paid" }, "Disputed", "warning", "Paid out"],
+    [{ payout: "waiting_for_payout_setup" }, "Verified", "success", "Waiting for payout setup"],
+    [{ status: "expired", payout: null }, "Expired", "", null],
+    [{ status: "refunded", payout: null }, "Not paid", "", null],
+    [{ status: "claimed", payout: null }, "Claimed", "", null],
+    [{ status: "submitted", payout: null }, "Checking", "", null],
+    [{ status: "dispatched", payout: null }, "Offered", "", null],
+  ] as const)("labels %o", (over, status, tone, payout) => {
+    expect(taskLine(task(over), "UTC", true)).toMatchObject({
+      status,
+      tone,
+      payout,
+      review: tone === "warning",
     });
-    expect(taskLines([task({ payout: "waiting_for_payout_setup" })])[0]?.state).toBe(
-      "Verified · Waiting for payout setup",
+  });
+
+  it.each(["needs_review", "disputed"] as const)("offers a manual review for %s", (status) => {
+    expect(taskLine(task({ status, payout: null }), "UTC", true)).toMatchObject({
+      tone: "warning",
+      review: true,
+    });
+  });
+
+  it("says the payout is simulated on a test server, and nothing when no money moved", () => {
+    expect(taskLine(task({ payout: "paid" }), "UTC", false).payout).toBe("Simulated, nothing sent");
+    expect(taskLine(task({ payout: null }), "UTC", false).payout).toBeNull();
+  });
+});
+
+describe("taskList", () => {
+  const page = (over: Partial<WorkerTasks> = {}): WorkerTasks => ({
+    paid_usd: 3,
+    pending_usd: 6.25,
+    tasks: [task()],
+    next_cursor: null,
+    ...over,
+  });
+  // Answers each request in the order the test resolves them, so races can be staged.
+  function deps() {
+    const waiting: { path: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    const shown: TaskList[] = [];
+    const send = vi.fn(
+      (path: string, _init: RequestInit) =>
+        new Promise<unknown>((resolve, reject) => waiting.push({ path, resolve, reject })),
     );
-    expect(taskLines([task({ status: "claimed", payout: null })])[0]?.state).toBe("Claimed");
+    const d: ListDeps = { send, show: (l) => shown.push(l), tz: TZ, live: true };
+    const answer = async (i: number, value: unknown) => {
+      waiting[i]?.resolve(value);
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    return { d, send, waiting, shown, answer, last: () => shown.at(-1) as TaskList };
+  }
+
+  it("loads the first page with the code in the header only and the browser's zone, then shows totals", async () => {
+    const { d, send, waiting, last } = deps();
+    const list = taskList(CODE, d);
+    const done = list.load();
+    expect(last()).toMatchObject({ state: "loading", any: false, tasks: [] });
+    waiting[0]?.resolve(page());
+    expect(await done).toMatchObject({
+      state: "idle",
+      paid: "$3.00",
+      pending: "$6.25",
+      any: true,
+      cursor: null,
+    });
+    expect(last().tasks.map((t) => t.date)).toEqual(["Oct 16, 2026"]);
+    expect(send).toHaveBeenCalledWith("/w/me/tasks?tz=America%2FLos_Angeles", {
+      headers: { Authorization: `Bearer ${CODE}` },
+    });
+    expect(send.mock.calls[0]?.[0]).not.toContain(CODE);
   });
 
-  it("keeps at most 5 tasks", () => {
-    expect(taskLines(Array.from({ length: 7 }, () => task()))).toHaveLength(5);
+  it("knows a worker without tasks apart from a search that matches nothing", async () => {
+    const { d, waiting } = deps();
+    const list = taskList(CODE, d);
+    const first = list.load();
+    waiting[0]?.resolve(page({ tasks: [], paid_usd: 0, pending_usd: 0 }));
+    expect(await first).toMatchObject({ any: false, tasks: [] });
+    const second = list.load();
+    waiting[1]?.resolve(page());
+    await second;
+    const none = list.search("zzz");
+    waiting[2]?.resolve(page({ tasks: [] }));
+    expect(await none).toMatchObject({ any: true, tasks: [], q: "zzz" });
+  });
+
+  it("sends the trimmed search and the filter, and appends the next page with the cursor", async () => {
+    const { d, send, waiting } = deps();
+    const list = taskList(CODE, d);
+    const searched = list.search("  pier ");
+    waiting[0]?.resolve(page({ next_cursor: "2026-10-17T05:30:00.123456+00:00|x" }));
+    await searched;
+    const filtered = list.filter("paid");
+    waiting[1]?.resolve(page({ next_cursor: "c|1" }));
+    await filtered;
+    const more = list.more();
+    await expect(list.more()).resolves.toMatchObject({ state: "more" }); // a second tap while loading does nothing
+    waiting[2]?.resolve(page({ tasks: [task({ task_id: "b", question: "Second?" })] }));
+    const after = await more;
+    expect(send.mock.calls.map(([path]) => path)).toEqual([
+      "/w/me/tasks?tz=America%2FLos_Angeles&q=pier",
+      "/w/me/tasks?tz=America%2FLos_Angeles&q=pier&status=paid",
+      "/w/me/tasks?tz=America%2FLos_Angeles&q=pier&status=paid&cursor=c%7C1",
+    ]);
+    expect(after.tasks.map((t) => t.question)).toEqual(["Is oat milk in stock right now?", "Second?"]);
+    expect(after.cursor).toBeNull();
+    expect(await list.more()).toBe(after); // no next page: nothing to load
+    expect(send).toHaveBeenCalledTimes(3);
+    const all = list.filter("all");
+    waiting[3]?.resolve(page());
+    await all;
+    expect(send.mock.calls[3]?.[0]).toBe("/w/me/tasks?tz=America%2FLos_Angeles&q=pier");
+  });
+
+  it("shows only the newest request's answer when an older one lands late", async () => {
+    const { d, waiting, answer, last } = deps();
+    const list = taskList(CODE, d);
+    void list.search("pie");
+    void list.search("pier");
+    await answer(1, page({ tasks: [task({ question: "Pier?" })] }));
+    await answer(0, page({ tasks: [task({ question: "Pie?" })] }));
+    expect(last().tasks.map((t) => t.question)).toEqual(["Pier?"]);
+    expect(last().q).toBe("pier");
+  });
+
+  it("keeps the rows on a failure, ignores a stale failure, and tries the failed page again", async () => {
+    const { d, send, waiting, last } = deps();
+    const list = taskList(CODE, d);
+    const first = list.load();
+    waiting[0]?.resolve(page({ next_cursor: "c|1" }));
+    await first;
+    const failed = list.more();
+    const boom = new Problem("Could not reach Eyes.", "Check your signal, then try again.");
+    waiting[1]?.reject(boom);
+    expect(await failed).toMatchObject({
+      state: "error",
+      error: boom,
+      tasks: [{ question: task().question }],
+    });
+    const retry = list.load();
+    expect(send.mock.calls[2]?.[0]).toContain("cursor=c%7C1");
+    waiting[2]?.resolve(page({ tasks: [task({ task_id: "b" })] }));
+    expect((await retry).tasks).toHaveLength(2);
+
+    const stale = list.search("a");
+    void list.search("ab");
+    waiting[3]?.reject(new Error("late"));
+    await stale;
+    expect(last()).toMatchObject({ state: "loading", error: null });
   });
 });
 
 describe("meView", () => {
   it("titles the page You're set up when nothing is left to do (simulated payouts count as done)", () => {
-    const view = meView(
-      setup({ payouts: { set_up: false, live: false, setup_url: null }, tasks: [task()] }),
-      NOW,
-    );
-    expect(view).toMatchObject({ step: "loaded", title: "You're set up", earningsUrl: EARNINGS });
-    expect(view.step === "loaded" && view.tasks).toHaveLength(1);
+    const view = meView(setup({ payouts: { set_up: false, live: false, setup_url: null } }), NOW);
+    expect(view).toEqual({ step: "loaded", title: "You're set up", rows: expect.any(Array), live: false });
   });
 
   it("titles the page Finish setting up when a row is to do", () => {
-    expect(meView(setup({ opted_in: false }), NOW)).toMatchObject({ title: "Finish setting up" });
+    expect(meView(setup({ opted_in: false }), NOW)).toMatchObject({ title: "Finish setting up", live: true });
   });
 });
 

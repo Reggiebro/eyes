@@ -26,7 +26,7 @@ export interface Messaging {
       task_id: string;
       place_label: string;
       amount_cents: number;
-      earnings_url: string;
+      me_url: string;
       live_payouts: boolean;
     },
   ): Promise<SentMessage>;

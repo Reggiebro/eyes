@@ -13,7 +13,6 @@ import {
   type TaskStatus,
   type TaskType,
   usdToCents,
-  type WorkerEarnings,
 } from "@eyes/core";
 import { PAGE_CSS, PAGE_HEADER } from "@eyes/ui/page";
 import { type Context, Hono, type Next } from "hono";
@@ -261,26 +260,6 @@ const OWNER_STATUS: Record<TaskStatus, { label: string; tone: "" | "success" | "
   needs_review: { label: "Needs review", tone: "warning" },
 };
 
-const PAYOUT_LABELS: Record<NonNullable<WorkerEarnings["tasks"][number]["payout"]>, string> = {
-  paid: "Paid",
-  pending:
-    "Not sent yet. If you have not finished payout setup, use the link we texted, or text START for a new one.",
-  waiting_for_payout_setup: "Waiting for your payout setup",
-};
-
-// What a task's status means to the worker who did it. `review` adds the way to ask a person.
-const TASK_BADGES: Record<TaskStatus, { label: string; tone: "" | "success" | "warning"; review?: true }> = {
-  dispatched: { label: "Claimed", tone: "" },
-  claimed: { label: "Claimed", tone: "" },
-  submitted: { label: "Checking your photo", tone: "" },
-  verified: { label: "Verified", tone: "success" },
-  paid: { label: "Paid", tone: "success" },
-  expired: { label: "Expired", tone: "" },
-  refunded: { label: "Not paid", tone: "" },
-  disputed: { label: "Disputed", tone: "warning", review: true },
-  needs_review: { label: "Needs review", tone: "warning", review: true },
-};
-
 // Dates render in UTC on the server and switch to the reader's local time when scripts run.
 // The page CSP allows exactly this script by hash.
 const LOCAL_TIME =
@@ -289,38 +268,6 @@ const LOCAL_TIME_CSP = PAGE_HEADERS["Content-Security-Policy"].replace(
   "default-src 'none';",
   `default-src 'none'; script-src 'sha256-${createHash("sha256").update(LOCAL_TIME).digest("base64")}';`,
 );
-
-function earningsPage(view: WorkerEarnings, livePayouts: boolean) {
-  const waiting = view.tasks.some((t) => t.payout === "waiting_for_payout_setup");
-  return shell(
-    "Your Eyes earnings",
-    html`<h1>Your earnings</h1>
-<p>Keep this link private: anyone who has it can see where and when you did tasks. Links stop working 7 days after we text them; text HELP to the Eyes number for a new one.</p>
-<dl class="totals">
-<div><dt>Paid to you</dt><dd>${usd(view.paid_usd)}</dd></div>
-<div><dt>Earned, not sent yet</dt><dd>${usd(view.pending_usd)}</dd></div>
-</dl>
-${!livePayouts ? html`<p class="note">This is a test server and payouts are simulated, so the amounts on this page are not real money and nothing is sent to you.</p>` : waiting ? html`<p class="note">Some of your earnings are waiting for you to set up payouts. Open the payout link we texted you, or text START to the Eyes number for a new one.</p>` : ""}
-<h2>Your recent tasks</h2>
-${
-  view.tasks.length
-    ? html`<ol class="tasks">${view.tasks.map((t) => {
-        const badge = TASK_BADGES[t.status];
-        const payout = t.payout ? (livePayouts ? PAYOUT_LABELS[t.payout] : "Simulated, nothing sent") : "";
-        return html`<li class="task">
-<div class="task__top"><span class="ui-badge${badge.tone ? ` ui-badge--${badge.tone}` : ""}">${badge.label}</span><span class="task__bounty">${usd(t.bounty_usd)}</span></div>
-<p class="task__question">${t.question || TASK_TYPE_LABELS[t.task_type]}</p>
-<p class="task__place">${placeName(t.place_label)}</p>
-${badge.review ? html`<p class="hint">Reply HELP for a manual review.</p>` : ""}
-${payout ? html`<p class="task__payout">${payout}${livePayouts && t.paid_at ? html` <time datetime="${t.paid_at}">${when(t.paid_at)}</time>` : ""}</p>` : ""}
-<p class="task__when">Claimed <time datetime="${t.claimed_at}">${when(t.claimed_at)}</time></p>
-</li>`;
-      })}</ol>
-<script>${raw(LOCAL_TIME)}</script>`
-    : html`<p>No tasks yet. Reply YES to a task text to claim one.</p>`
-}`,
-  );
-}
 
 function ownerPage(view: OwnerConsole, token: string, note: Note | null, feeUsd: number) {
   const p = view.policy;
@@ -508,10 +455,13 @@ export function stripeRoutes(deps: RouteDeps, _env: Env): Hono {
       ),
     ),
   );
+  // The earnings page is retired (T6.42, ADR-029): its "e:" token is the /me code (ADR-028), so old links open
+  // the worker's task list. The code goes in the fragment only; no-store keeps the 301 out of caches.
   app.get("/w/earnings/:token", (c) => {
-    c.header("Content-Security-Policy", LOCAL_TIME_CSP);
-    return explained(c, async () =>
-      c.html(earningsPage(await deps.service.workerEarnings(c.req.param("token")), deps.config.live_payouts)),
+    const token = c.req.param("token");
+    return c.redirect(
+      `${deps.config.worker_web_url}/me${/^[\w-]+\.[\w-]+$/.test(token) ? `#c=${token}` : ""}`,
+      301,
     );
   });
   app.get("/w/connect/:token", (c) =>
