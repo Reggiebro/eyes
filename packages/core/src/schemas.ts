@@ -411,12 +411,14 @@ export type ToolName = keyof typeof TOOLS;
 export type ToolInput<T extends ToolName> = z.output<(typeof TOOLS)[T]["input"]>;
 export type ToolOutput<T extends ToolName> = z.output<(typeof TOOLS)[T]["output"]>;
 
-export const JoinWorkerInput = z.object({
-  name: z.string().min(2).max(80),
-  phone: Phone,
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
-});
+export const JoinWorkerInput = z
+  .object({
+    name: z.string().min(2).max(80),
+    phone: Phone,
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+  })
+  .refine((v) => v.lat !== 0 || v.lng !== 0, { message: "0,0 is not a real location.", path: ["lat"] });
 export const JoinWorkerOutput = z.object({
   opt_in_instructions: z.string(),
   inkbox_number: z.string().nullable(),

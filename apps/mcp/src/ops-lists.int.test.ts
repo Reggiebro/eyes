@@ -347,3 +347,70 @@ describe.skipIf(!url)("ops issues on Postgres (grouping, status, regression)", (
     ).toEqual([]);
   });
 });
+
+describe.skipIf(!url)("test flags on Postgres (migration 030)", () => {
+  const sql = postgres(url ?? "", { onnotice: () => {} });
+  const rpc = createRpc({ kind: "postgres", url: url ?? "" });
+  const marker = randomUUID().slice(0, 8);
+  const agents: string[] = [];
+  afterAll(async () => {
+    await sql`delete from ledger where agent_id = any(${agents})`;
+    await sql`delete from tasks where agent_id = any(${agents})`;
+    await sql`delete from agents where id = any(${agents})`;
+    await sql.end();
+  });
+
+  it("marks smoke- and e2e- signups as test agents, their tasks as test runs, and keeps them out of the escrow total", async () => {
+    await migrate(url ?? "");
+    const signup = async (name: string) => {
+      const [a] = await rpc<{ id: string; test: boolean }>("eyes_signup", {
+        p_name: name,
+        p_api_key_hash: `${name}-${marker}`,
+        p_grant_cents: 0,
+        p_now: new Date().toISOString(),
+      });
+      agents.push(a?.id as string);
+      return a;
+    };
+    const [smoke, e2e, real] = [
+      await signup(`smoke-${marker}`),
+      await signup(`E2E-${marker}`),
+      await signup(`agent ${marker}`),
+    ];
+    expect([smoke?.test, e2e?.test, real?.test]).toEqual([true, true, false]);
+    const task = async (agent: string) => {
+      const [t] = await sql<
+        { id: string; test: boolean }[]
+      >`insert into tasks (agent_id, question, task_type, place_label,
+        lat, lng, bounty_cents, fee_cents, deadline_at) values (${agent}, 'q', 'is_open', 'Mint Plaza', 37.78, -122.4, 300, 50,
+        now() + interval '1 hour') returning id, test`;
+      return t;
+    };
+    const [testTask, realTask] = [await task(smoke?.id as string), await task(real?.id as string)];
+    expect([testTask?.test, realTask?.test]).toEqual([true, false]);
+    const [before] = await rpc<{ totals: { escrowed_cents: number } }>("eyes_dashboard_feed", {
+      p_limit: 500,
+    });
+    await sql`insert into ledger (agent_id, task_id, type, amount_cents) values (${smoke?.id ?? ""}, ${testTask?.id ?? ""}, 'escrow', 350)`;
+    const [after] = await rpc<{
+      totals: { escrowed_cents: number };
+      tasks: { id: string; test: boolean }[];
+      ledger: { task_id: string; test: boolean }[];
+    }>("eyes_dashboard_feed", { p_limit: 500 });
+    expect(after?.totals.escrowed_cents).toBe(before?.totals.escrowed_cents);
+    expect(after?.tasks.find((t) => t.id === testTask?.id)?.test).toBe(true);
+    expect(after?.ledger.find((l) => l.task_id === testTask?.id)?.test).toBe(true);
+    await sql`insert into ledger (agent_id, task_id, type, amount_cents) values (${real?.id ?? ""}, ${realTask?.id ?? ""}, 'escrow', 350)`;
+    const [last] = await rpc<{ totals: { escrowed_cents: number } }>("eyes_dashboard_feed", { p_limit: 500 });
+    expect(last?.totals.escrowed_cents).toBe((before?.totals.escrowed_cents ?? 0) + 350);
+    // The map never draws 0,0.
+    await sql`update tasks set lat = 0, lng = 0, status = 'needs_review' where id = ${realTask?.id ?? ""}`;
+    const pins = await rpc<{ id: string }>("eyes_map_tasks", {
+      p_status: null,
+      p_from: null,
+      p_to: null,
+      p_now: new Date().toISOString(),
+    });
+    expect(pins.map((p) => p.id)).not.toContain(realTask?.id);
+  });
+});

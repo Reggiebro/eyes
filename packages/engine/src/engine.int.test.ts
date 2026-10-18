@@ -243,7 +243,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(again).toEqual(first);
     expect(again).toEqual(await service.joinWorker({ name: "Someone Else", phone: newPhone(), ...at }));
     await service.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
-    expect(await service.joinWorker({ name: "Someone Else", phone, lat: 0, lng: 0 })).toEqual(first);
+    expect(await service.joinWorker({ name: "Someone Else", phone, ...north(at, 4000) })).toEqual(first);
+    // 0,0 is never a location: the join is refused before anything is written.
+    await expect(
+      service.joinWorker({ name: "Someone Else", phone: newPhone(), lat: 0, lng: 0 }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+    });
     // STOP deleted the location (ADR-024); the repeat join did not write its own.
     expect(await sql`select name, lat from workers where phone = ${phone}`).toEqual([
       { name: "Real Worker", lat: null },
@@ -1802,6 +1808,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
       });
       await expect(
         service.quoteTask(a, { location: "Nowhere Street 1, Atlantis", task_type: "line_length" }),
+      ).rejects.toMatchObject({ code: "location_not_found" });
+      // 0,0 is a missing location written as numbers, never a place to send someone.
+      await expect(
+        service.quoteTask(a, { location: { lat: 0, lng: 0 }, task_type: "line_length" }),
       ).rejects.toMatchObject({ code: "location_not_found" });
     });
 

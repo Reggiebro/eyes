@@ -286,7 +286,7 @@ describe("ops page boot", () => {
       "0",
       "0",
     ]);
-    expect($("statuses").querySelector(".is-danger .funnel__label")?.textContent).toBe("Needs review");
+    expect($("statuses").querySelector(".is-danger .funnel__label")?.textContent).toBe("Review");
 
     expect(text("escrowed")).toBe("$12.34");
     expect(text("money-kv")).toContain("InTop-ups$100.00");
@@ -1784,6 +1784,89 @@ describe("ops workers map, story and worker panel", () => {
     expect(page.$("map-scope").textContent).toBe(
       "1 task: needs review, the Tasks tab's dates and every open one",
     );
+  });
+
+  it("shows each task's own photo, tags test runs, and warns when two tasks share one photo", async () => {
+    const photo = (v: string, n: number) => `https://storage.eyes.test/photos/${n}.jpg?v=${v}`;
+    const t = detail.tasks[0] as (typeof detail.tasks)[number];
+    const page = await setup(
+      {
+        [`GET /ops/workers/${W}`]: () =>
+          ok({
+            ...detail,
+            worker: { ...detail.worker, test: true },
+            tasks: [
+              { ...t, id: "c89a5c9a-0000", photo_url: photo("ea00", 9), test: true },
+              { ...t, id: "ef593d4f-0000", photo_url: photo("ea00", 6), test: true },
+              { ...t, id: "91460d11-0000", photo_url: photo("1f94", 5) },
+              { ...t, id: "d45bb0cb-0000", photo_url: null, submitted_at: null, gps_ok: null },
+            ],
+          }),
+      },
+      { hash: `#workers?w=${W.slice(0, 8)}` },
+    );
+    await page.settle();
+    await page.settle();
+    const panel = page.$("review-panel");
+    expect([...panel.querySelectorAll(".task-head .ui-badge")].map((b) => b.textContent)).toEqual([
+      "available",
+      "test",
+    ]);
+    const rows = [...panel.querySelectorAll(".wtasks > li")];
+    expect(rows.map((li) => li.querySelector("img.thumb")?.getAttribute("src") ?? null)).toEqual([
+      photo("ea00", 9),
+      photo("ea00", 6),
+      photo("1f94", 5),
+      null,
+    ]);
+    expect(
+      rows.map((li) =>
+        [...li.querySelectorAll(".ui-badge")]
+          .map((b) => b.textContent)
+          .filter((x) => /test|same/.test(x ?? "")),
+      ),
+    ).toEqual([["test run", "same photo as task ef593d4f"], ["test run"], [], []]);
+    const img = rows[0]?.querySelector("img.thumb") as HTMLElement;
+    img.click();
+    expect(img.classList.contains("is-big")).toBe(true);
+    img.dispatchEvent(new page.happy.KeyboardEvent("keydown", { key: "Enter" }) as unknown as Event);
+    expect(img.classList.contains("is-big")).toBe(false);
+  });
+
+  it("never maps a worker without a real location or a test worker, and tags test workers in the list", async () => {
+    const { L, calls } = leaflet();
+    const page = await setup(
+      {
+        "GET /ops/feed": () =>
+          ok(
+            feed(
+              {},
+              {
+                workers: [
+                  { id: "w-real-0001", lat: 37.77, lng: -122.42, available: true, opted_in: true },
+                  { id: "w-null-0002", lat: 0, lng: 0, available: true, opted_in: true },
+                  {
+                    id: "w-test-0003",
+                    lat: 37.78,
+                    lng: -122.41,
+                    available: false,
+                    opted_in: true,
+                    test: true,
+                  },
+                ],
+              },
+            ),
+          ),
+      },
+      { hash: "#workers", L },
+    );
+    await page.settle();
+    expect(calls.slice(calls.lastIndexOf("clear")).filter((c) => c.startsWith("marker"))).toEqual([
+      "marker 37.77,-122.42 wk is-on",
+    ]);
+    const rows = [...page.$("workers").querySelectorAll("tbody tr")].map((tr) => tr.textContent);
+    expect(rows).toContain("worker w-null-0availableno location");
+    expect(rows).toContain("worker w-test-0opted intesttest, not mapped");
   });
 
   it("says there is no story before the first task", async () => {

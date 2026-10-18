@@ -364,10 +364,14 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     }
   }
 
+  // 0,0 ("Null Island") is a missing location written as numbers, never a public place.
   async function resolve(location: LatLng | string): Promise<ResolvedLocation> {
-    if (typeof location !== "string") return { ...location, label: `${location.lat},${location.lng}` };
-    const place = await providers.geo.geocode(location);
-    if (!place) throw new EyesError("location_not_found", { location });
+    const place =
+      typeof location === "string"
+        ? await providers.geo.geocode(location)
+        : { ...location, label: `${location.lat},${location.lng}` };
+    if (!place || (place.lat === 0 && place.lng === 0))
+      throw new EyesError("location_not_found", { location });
     return place;
   }
 

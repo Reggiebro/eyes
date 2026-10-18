@@ -83,6 +83,8 @@ export type Task = Checked & {
   money_at?: Record<string, string> | null;
   /** From the paged /ops/tasks list. */
   agent?: string | null;
+  /** A smoke or end-to-end run (migration 030): tagged, never counted. */
+  test?: boolean;
   /** From the feed: where the task is, for its map marker. */
   lat?: number;
   lng?: number;
@@ -121,7 +123,15 @@ export type Worker = {
   lng: number | null;
   available: boolean;
   opted_in: boolean;
+  /** App Review and other test accounts (migration 030): listed, never counted or mapped. */
+  test?: boolean;
 };
+/** A real position: not missing, not the 0,0 placeholder. */
+const located = (p: { lat?: number | null; lng?: number | null }) =>
+  p.lat != null && p.lng != null && !(p.lat === 0 && p.lng === 0);
+/** The content hash in an InsForge photo URL (?v=<md5>); two tasks with the same one share a photo. */
+const photoHash = (url: string | null | undefined) =>
+  url ? new URL(url).searchParams.get("v") || url : null;
 type LedgerRow = {
   id: string;
   type: string;
@@ -263,6 +273,19 @@ export function boot(win: OpsWindow) {
           h("span", null, i === 0 ? `${label} ${stamp(at)}` : `${label} ${after(t.created_at, at)}`),
         ),
     );
+  }
+
+  // A small photo that opens full width on click (and on Enter), and closes the same way.
+  function thumb(url: string) {
+    const img = h("img", "thumb");
+    img.src = url;
+    img.alt = "Worker photo; select to enlarge";
+    img.referrerPolicy = "no-referrer";
+    img.tabIndex = 0;
+    const toggle = () => img.classList.toggle("is-big");
+    img.addEventListener("click", toggle);
+    img.addEventListener("keydown", (e) => e.key === "Enter" && toggle());
+    return img;
   }
 
   function photoOf(t: Checked) {
@@ -453,7 +476,7 @@ export function boot(win: OpsWindow) {
   let wanted: string | null = null;
   function renderMap(all: Worker[]) {
     // STOP deletes a worker's location
-    const workers = all.filter((w): w is Worker & { lat: number; lng: number } => w.lat != null);
+    const workers = all.filter((w): w is Worker & { lat: number; lng: number } => located(w) && !w.test);
     const L = win.L;
     if (!L) {
       $("map").classList.add("nomap");
@@ -476,8 +499,8 @@ export function boot(win: OpsWindow) {
     // and urgent pins draw last (on top). Clicking opens the task, or a list when there are several.
     const spots = new Map<string, Task[]>();
     for (const t of mapTasks) {
-      if (t.lat == null || t.lng == null) continue;
-      const key = `${t.lat.toFixed(5)},${t.lng.toFixed(5)}`;
+      if (!located(t)) continue;
+      const key = `${(t.lat as number).toFixed(5)},${(t.lng as number).toFixed(5)}`;
       spots.set(key, [...(spots.get(key) ?? []), t]);
     }
     const groups = [...spots.values()].map((ts) => ts.toSorted((a, b) => URGENCY(b) - URGENCY(a)));
@@ -586,14 +609,24 @@ export function boot(win: OpsWindow) {
     const w = d.worker;
     const state = w.banned ? "banned" : (RANK[rank(w)] as string);
     const e = d.earnings;
-    const shot = d.tasks.find((t) => t.submitted_at);
+    // Each task shows its own photo; a photo seen on an earlier task here gets a warning chip.
+    const firstWith = new Map<string, string>();
+    for (const t of d.tasks.toReversed()) {
+      const hash = photoHash(t.photo_url);
+      if (hash && !firstWith.has(hash)) firstWith.set(hash, t.id);
+    }
     $("review-panel").replaceChildren(
       ...[
         h(
           "div",
           "task-head",
           h("h2", "ui-card__title", `Worker ${w.id.slice(0, 8)}`),
-          badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+          h(
+            "span",
+            null,
+            badge(state, w.banned ? "danger" : rank(w) === 2 ? "success" : ""),
+            w.test ? badge("test") : null,
+          ),
           close,
         ),
         h(
@@ -618,31 +651,34 @@ export function boot(win: OpsWindow) {
               : "",
           ),
         ),
-        shot ? photoOf(shot) : null,
-        shot ? checks(shot) : null,
         h("h3", "panel__sub", d.tasks.length ? `Last ${d.tasks.length} tasks` : "No tasks yet"),
         h(
           "ul",
           "wtasks",
-          ...d.tasks.map((t) =>
-            h(
+          ...d.tasks.map((t) => {
+            const same = firstWith.get(photoHash(t.photo_url) ?? "");
+            return h(
               "li",
               null,
               h(
                 "p",
                 "wtasks__head",
                 badge(statusLabel(t.status), STATUS_TONE[t.status]),
+                t.test ? badge("test run") : null,
                 " ",
                 cut(t.question, 120),
               ),
+              t.photo_url ? thumb(t.photo_url) : null,
+              checks(t),
+              same && same !== t.id ? badge(`same photo as task ${same.slice(0, 8)}`, "warning") : null,
               h(
                 "p",
                 "tiny",
                 `${cut(nearLabel(t.place_label), 70)} · ${usd(t.bounty_cents)} · ${stamp(t.created_at)}`,
               ),
               steps(t, true),
-            ),
-          ),
+            );
+          }),
         ),
         h("span", "tiny", w.id),
       ].filter((x) => x != null),
@@ -1483,9 +1519,19 @@ export function boot(win: OpsWindow) {
         desc: true,
         text: (w) => RANK[rank(w)] as string,
         sort: rank,
-        cell: (w) => badge(RANK[rank(w)] as string, rank(w) === 2 ? "success" : ""),
+        cell: (w) =>
+          h(
+            "span",
+            null,
+            badge(RANK[rank(w)] as string, rank(w) === 2 ? "success" : ""),
+            w.test ? badge("test") : null,
+          ),
       },
-      { key: "location", label: "Location", text: (w) => (w.lat == null ? "no location" : "on the map") },
+      {
+        key: "location",
+        label: "Location",
+        text: (w) => (!located(w) ? "no location" : w.test ? "test, not mapped" : "on the map"),
+      },
     ],
     filters: [
       {
@@ -1503,7 +1549,7 @@ export function boot(win: OpsWindow) {
           ["on the map", "On the map"],
           ["no location", "No location"],
         ],
-        value: (w) => (w.lat == null ? "no location" : "on the map"),
+        value: (w) => (located(w) && !w.test ? "on the map" : "no location"),
       },
     ],
   });

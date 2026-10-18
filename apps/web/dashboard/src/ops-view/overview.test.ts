@@ -148,9 +148,12 @@ describe("overview funnel", () => {
       "0%",
     ]);
     const states = [...FUNNEL, "needs_review", "disputed", "expired", "refunded"];
-    expect(steps.map((s) => s.querySelector(".funnel__label")?.textContent)).toEqual(states.map(statusLabel));
+    // "Review" fits one line; the status and its filter stay needs_review.
+    expect(steps.map((s) => s.querySelector(".funnel__label")?.textContent)).toEqual(
+      states.map((s) => (s === "needs_review" ? "Review" : statusLabel(s))),
+    );
     expect(steps.map((s) => s.getAttribute("href"))).toEqual(states.map((s) => `#tasks?status=${s}`));
-    expect(steps[5]?.getAttribute("aria-label")).toBe("Needs review: 3. Show in Tasks");
+    expect(steps[5]?.getAttribute("aria-label")).toBe("Review: 3. Show in Tasks");
     expect(root.querySelector(".attention, .ended")).toBeNull();
   });
 

@@ -60,6 +60,33 @@ describe("summarize", () => {
     expect(s.partial).toEqual({ tasks: false, ledger: false, workers: false });
   });
 
+  it("leaves test runs and test workers out of counts, money and the review queue", () => {
+    const s = summarize(
+      {
+        tasks: [
+          task("needs_review", 1),
+          { ...task("needs_review", 1, "test-task"), test: true },
+          { ...task("paid", 1), test: true },
+        ],
+        ledger: [
+          { type: "release", amount_cents: 300, created_at: hoursAgo(1) },
+          { type: "release", amount_cents: 300, created_at: hoursAgo(1), test: true },
+        ],
+        workers: [
+          { lat: 1, lng: 1, available: true, opted_in: true },
+          { lat: null, lng: null, available: false, opted_in: true, test: true },
+        ],
+        totals: {},
+      },
+      500,
+      NOW,
+    );
+    expect(s.statuses).toMatchObject({ needs_review: 1, paid: 0 });
+    expect(s.money_24h.release).toBe(300);
+    expect(s.workers).toEqual({ total: 1, opted_in: 1, online: 1 });
+    expect(s.queue.map((t) => t.id)).toEqual([ID]);
+  });
+
   it("flags partial counts when every fetched row is inside the window", () => {
     const s = summarize({ tasks: [task("paid", 1)], ledger: [], workers: [], totals: {} }, 1, NOW);
     expect(s.partial.tasks).toBe(true);

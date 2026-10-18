@@ -1105,7 +1105,12 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         dbError = err instanceof Error ? err.message : String(err);
         console.error("ops feed: database read failed:", dbError);
       }
-      const workers = feed.workers.map((w) => ({ ...w, lat: coarse(w.lat), lng: coarse(w.lng) }));
+      // No location (null) or a 0,0 placeholder stays off the map: coarse(null) would read as 0.
+      const workers = feed.workers.map((w) =>
+        w.lat == null || w.lng == null || (w.lat === 0 && w.lng === 0)
+          ? { ...w, lat: null, lng: null }
+          : { ...w, lat: coarse(w.lat), lng: coarse(w.lng) },
+      );
       return c.json(
         {
           ...feed,

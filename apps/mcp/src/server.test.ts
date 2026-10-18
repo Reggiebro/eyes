@@ -11,6 +11,7 @@ import {
   type EyesService,
   FAKE_STRIPE_SIGNATURE,
   fakeProviders,
+  JoinWorkerInput,
   type OfferView,
   type OwnerPolicyInput,
   type PhotoUpload,
@@ -89,7 +90,11 @@ const OPS_KEY = "ops-5f2c9a1e7b3d4c8a9e0f1a2b3c4d5e6f";
 const FEED = {
   tasks: [{ id: TASK_ID, lat: 37.78246, lng: -122.40776, photo_url: "https://storage.eyes.test/p.jpg" }],
   ledger: [],
-  workers: [{ lat: 37.78246, lng: -122.40776, available: true, opted_in: true }],
+  workers: [
+    { lat: 37.78246, lng: -122.40776, available: true, opted_in: true },
+    { lat: null, lng: null, available: false, opted_in: true, test: true },
+    { lat: 0, lng: 0, available: true, opted_in: true },
+  ],
   totals: { escrowed_cents: 0, released_today_cents: 0, paid_out_today_cents: 0 },
 };
 
@@ -504,6 +509,13 @@ describe("worker location", () => {
     { lng: ok.lng, source: ok.source },
   ])("rejects %j", (body) => {
     expect(WorkerLocationInput.safeParse(body).success).toBe(false);
+  });
+  it("refuses 0,0 when a worker joins, like every other location write", () => {
+    const join = { name: "Ana Diaz", phone: "+14155550121", lat: 37.78246, lng: -122.40776 };
+    expect(JoinWorkerInput.safeParse(join).success).toBe(true);
+    expect(JoinWorkerInput.safeParse({ ...join, lat: 0, lng: 0 }).error?.issues[0]?.message).toBe(
+      "0,0 is not a real location.",
+    );
   });
 });
 
@@ -1676,11 +1688,16 @@ describe("ops dashboard", () => {
     expect(feed.status).toBe(200);
     expect(await feed.json()).toMatchObject({
       ...FEED,
-      workers: [{ lat: 37.782, lng: -122.408, available: true, opted_in: true }],
+      // A missing location stays missing (not 0,0, "Null Island"), and 0,0 counts as missing.
+      workers: [
+        { lat: 37.782, lng: -122.408, available: true, opted_in: true },
+        { lat: null, lng: null, available: false, opted_in: true, test: true },
+        { lat: null, lng: null, available: true, opted_in: true },
+      ],
       ops: {
         operator: "break-glass",
         health: { db: "insforge", classifier: "rules only", commit: null, db_error: null },
-        workers: { total: 1, opted_in: 1, online: 1 },
+        workers: { total: 2, opted_in: 2, online: 2 },
         queue: [],
       },
     });
