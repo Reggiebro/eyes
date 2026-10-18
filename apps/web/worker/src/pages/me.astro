@@ -100,6 +100,7 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
         <strong></strong>
         <span class="ui-check__detail"></span>
         {import.meta.env.VITE_INKBOX_NUMBER && <span class="ui-text-sm ui-text-secondary">Eyes iMessage: {import.meta.env.VITE_INKBOX_NUMBER}</span>}
+        <span class="ui-text-sm ui-text-secondary">Send from an address your mail provider verifies; custom aliases need SPF/DKIM.</span>
       </span>
       <div class="me-email__actions" data-mode="idle">
         <button type="button" class="ui-button ui-button--ghost" data-act="remove">Remove</button>

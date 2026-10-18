@@ -61,6 +61,9 @@ for (const width of [390, 1440]) {
       const row = emailRow(page);
       await expect(row).toContainText(instruction);
       await expect(row).toContainText("Eyes iMessage: +14155550100");
+      await expect(row).toContainText(
+        "Send from an address your mail provider verifies; custom aliases need SPF/DKIM.",
+      );
       await expect(row.getByRole("button")).toHaveText(state === "none" ? [] : ["Remove"]);
       await expect(row.getByRole("link")).toHaveCount(0);
       await expect(
@@ -74,6 +77,7 @@ for (const width of [390, 1440]) {
       expect(new URL(page.url()).hash).toBe("");
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
       if (process.env.SHOTS) {
+        await expect(row).toHaveCSS("opacity", "1");
         await row.screenshot({ path: `${process.env.SHOTS}/me-email-${state}-${width}.png` });
       }
     });
