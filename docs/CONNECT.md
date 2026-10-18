@@ -16,6 +16,20 @@ A public directory listing requires OpenAI review, approval, and an explicit pub
 
 Sources: [Connect in ChatGPT](https://developers.openai.com/plugins/deploy/connect-chatgpt), [current account requirements](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), [public app review](https://developers.openai.com/plugins/deploy/app-review).
 
+## Claude web: no terminal required
+
+Open [Claude Connectors](https://claude.ai/customize/connectors). The same remote connector also works through your Claude account in Desktop and Cowork; no local JSON or shell commands are needed.
+
+1. In **Customize > Connectors**, choose **+ Add > Add custom connector**. If Eyes is already added, open it and resume **Connect** instead of creating a duplicate.
+2. Name it **Eyes**, paste `https://mcp.eyes.pictures/mcp` with no trailing slash, and choose **Continue**.
+3. Keep the detected **Sign in now** and **Register automatically** settings, add the connector, then choose **Connect**.
+4. On the Eyes OAuth page, enter your **existing Eyes API key** and connect. If needed, explicitly choose to create a key there. Never paste a key into chat; connecting does not automatically create a key or charge a card.
+5. In a new chat, open **+ > Connectors** and enable **Eyes**. Ask for the same free quote above.
+
+Custom connectors are available on Free, Pro, Max, Team and Enterprise. Free is limited to one custom connector. On Team, an Owner or Primary Owner must add the organization connector first; Enterprise also permits a custom role with **Manage access to Libraries**. Each member then connects individually from Customize. Organization admins use [admin connector settings](https://claude.ai/admin-settings/connectors).
+
+This is custom connector setup, not a one-click install or a claim that Eyes is listed in the connector directory. [Official Claude requirements](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+
 ## Advanced: other clients and CLI
 
 | URL | Use it for |
@@ -169,11 +183,7 @@ Use the [ChatGPT web steps above](#chatgpt-web-no-terminal-required). Do not pas
 
 ### Claude (claude.ai and Claude Desktop connectors)
 
-1. Open **Settings > Connectors** and click **Add custom connector**. Set Name to `Eyes` and URL to `https://api.eyes.pictures/mcp`, with no trailing slash.
-2. Click **Add**, then **Connect**. On the Eyes page, paste your key or create one.
-3. In a chat, open the tools menu and make sure **Eyes** is on.
-
-Claude Desktop uses the connectors from your claude.ai account. On Team and Enterprise plans, an owner adds the connector first, in **Organization settings > Connectors**.
+Use the [Claude web steps above](#claude-web-no-terminal-required) for new connectors. Existing API-host connectors can stay unchanged.
 
 When OAuth creates a key, click **Copy** beside the displayed key to save it before continuing. **Copied** confirms success; if clipboard access is unavailable or denied, select the displayed key and copy it manually. Copy never submits the page or follows **Continue**.
 
