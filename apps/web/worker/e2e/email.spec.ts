@@ -44,7 +44,8 @@ test("/me shows no email row while the API does not send the email fields", asyn
   await expect(emailRow(page)).toHaveCount(0);
 });
 
-const instruction = "Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email.";
+const instruction =
+  "Reply EMAIL in your existing Eyes iMessage conversation. We’ll reply with a link to send your first email.";
 
 for (const width of [390, 1440]) {
   for (const state of ["none", "pending", "verified"]) {
@@ -60,7 +61,8 @@ for (const width of [390, 1440]) {
       const posts = await mockMe(page, withEmail(state, state === "none" ? null : MASKED));
       const row = emailRow(page);
       await expect(row).toContainText(instruction);
-      await expect(row).toContainText("Eyes iMessage: +14155550100");
+      await expect(row).not.toContainText("Eyes iMessage:");
+      await expect(row).not.toContainText("+14155550100");
       await expect(row).toContainText(
         "Send from an address your mail provider verifies; custom aliases need SPF/DKIM.",
       );
