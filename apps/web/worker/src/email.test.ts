@@ -1,7 +1,7 @@
 import type { WorkerSetup } from "@eyes/core";
 import { describe, expect, it, vi } from "vitest";
 import { Problem } from "./api.ts";
-import { emailOn, emailRow, saveEmail, sendLink, signIn, validEmail } from "./email.ts";
+import { emailOn, emailRow, saveEmail, sendLink, signIn, startEmail, validEmail } from "./email.ts";
 
 // No email fields by default: what an API that predates worker email sends.
 const setup = (over: Partial<WorkerSetup> = {}) =>
@@ -125,6 +125,27 @@ describe("saveEmail", () => {
     await expect(saveEmail("c.d", null, vi.fn().mockRejectedValue(plain))).rejects.toBe(plain);
     const boom = new TypeError("boom");
     await expect(saveEmail("c.d", null, vi.fn().mockRejectedValue(boom))).rejects.toBe(boom);
+  });
+});
+
+describe("startEmail", () => {
+  it("posts with only the code and answers the mailto", async () => {
+    const send = vi.fn().mockResolvedValue({ mailto: "mailto:work@e.test?subject=Eyes%20abc" });
+    expect(await startEmail("c.d", send)).toBe("mailto:work@e.test?subject=Eyes%20abc");
+    expect(send).toHaveBeenCalledWith("/w/me/email/start", {
+      method: "POST",
+      headers: { Authorization: "Bearer c.d" },
+    });
+  });
+
+  it("shows the API's own words, and passes other failures through", async () => {
+    const err = await startEmail(
+      "c.d",
+      refuse(400, { message: "Text START to the Eyes number first." }),
+    ).catch((e) => e);
+    expect(err).toMatchObject({ message: "Text START to the Eyes number first.", status: 400 });
+    const boom = new TypeError("boom");
+    await expect(startEmail("c.d", vi.fn().mockRejectedValue(boom))).rejects.toBe(boom);
   });
 });
 
