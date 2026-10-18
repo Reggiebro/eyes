@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ayaangazali/eyes/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/ayaangazali/eyes/actions/workflows/ci.yml)
 [![Live](https://img.shields.io/badge/live-eyes.pictures-2563eb?style=for-the-badge)](https://eyes.pictures)
-[![MCP](https://img.shields.io/badge/MCP-api.eyes.pictures%2Fmcp-0d9488?style=for-the-badge)](docs/CONNECT.md)
+[![MCP](https://img.shields.io/badge/MCP-mcp.eyes.pictures%2Fmcp-0d9488?style=for-the-badge)](https://mcp.eyes.pictures/mcp)
 
 [Site](https://eyes.pictures) · [Worker app](https://app.eyes.pictures) · [Connect](docs/CONNECT.md) · [Deploy](docs/DEPLOY.md) · [Status](STATUS.md)
 
@@ -20,13 +20,15 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 
 ## Features
 
-- **[MCP tools](docs/features/mcp-tools.md):** 9 tools to quote, ask, wait and pay; also REST.
-- **[ChatGPT and Claude apps](docs/features/chatgpt-claude-apps.md):** OAuth sign-in; answers show as photo cards.
+- **[MCP tools](docs/features/mcp-tools.md):** 13 tools to quote, ask, wait, accept answers, review classifier refusals and manage tasks and money; also REST.
+- **[ChatGPT and Claude apps](docs/features/chatgpt-claude-apps.md):** configured at the dedicated MCP host; OAuth **Continue** hands a new key to the client automatically. Saving it is optional for direct API use.
 - **[iMessage dispatch](docs/features/imessage-dispatch.md):** the 3 nearest workers get a text; first YES wins.
 - **[Email channel](docs/features/email-channel.md):** reply EMAIL in your existing Eyes iMessage conversation for a link to send your first email; offers, links and sign-in by email, with mobile still required.
-- **[Photo checks](docs/features/photo-checks.md):** GPS within 150 m, taken live, safe to share.
+- **[Photo checks](docs/features/photo-checks.md):** GPS within 150 m, taken live and narrowly moderated; no answer-correctness judgment.
 - **[Escrow](docs/features/escrow.md):** bounty plus $0.50 fee held on ask; refunded if no answer.
-- **[Safety](docs/features/safety.md):** rules, then an AI check; homes, people, cars, faces refused.
+- **[Prepaid balance](docs/features/escrow.md):** `get_balance.top_up_url` opens Stripe Checkout to add funds; payments are in test mode.
+- **[Safety](docs/features/safety.md):** rules and an AI check refuse private-person, home, vehicle or face-targeted requests; this is separate from photo moderation and is not a blanket ban on faces in photos.
+- **[Classifier review](docs/features/safety.md):** `report_classifier` and `get_classifier_report`; internal Approve/Reject controls, with approval allowing only an explicit retry of the same agent's exact request for 24 hours—not automatic dispatch or charging.
 - **[Owner controls](docs/features/owner-controls.md):** spend caps, allowed task types, key rotation.
 - **[Worker location](docs/features/worker-location.md):** HERE links, a Shortcut or the iPhone app.
 - **[Ops dashboard](docs/features/ops-dashboard.md):** internal.eyes.pictures: tasks, money, reviews, tickets, live map.
@@ -43,13 +45,17 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 2. **Connect:** from Claude Code (ChatGPT, claude.ai, Claude Desktop and Cursor are in [docs/CONNECT.md](docs/CONNECT.md)):
 
    ```sh
-   claude mcp add --transport http eyes https://api.eyes.pictures/mcp \
+   claude mcp add --transport http eyes https://mcp.eyes.pictures/mcp \
      --header "Authorization: Bearer $EYES_API_KEY"
    ```
 
 3. **Ask:** `claude -p 'Use quote_task to check the line at the Ferry Building, San Francisco'`
 
-Prefer the Manufact CLI? `npx -y mcp-use@2.10.1 client connect eyes https://api.eyes.pictures/mcp --protocol legacy -H "Authorization: Bearer $EYES_API_KEY"`. To be a worker, open https://app.eyes.pictures on an iPhone. Until workers have opted in near a place, `ask_eyes` there returns `no_workers_nearby` and charges nothing. https://api.eyes.pictures/status says which parts are live.
+Prefer the Manufact CLI? `npx -y mcp-use@2.10.1 client connect eyes https://mcp.eyes.pictures/mcp --protocol legacy -H "Authorization: Bearer $EYES_API_KEY"`. To be a worker, open https://app.eyes.pictures on an iPhone. Until workers have opted in near a place, `ask_eyes` there returns `no_workers_nearby` and charges nothing. https://api.eyes.pictures/status says which parts are live.
+
+**MCP is live at `https://mcp.eyes.pictures/mcp`, with ChatGPT and Claude configured there.** OAuth issuer and card origins match each host. REST signup, balance, uploads and webhooks stay at `https://api.eyes.pictures`; legacy `api.eyes.pictures/mcp` connectors remain supported. This does not mean every third-party connector has migrated. See [OAuth setup](docs/CONNECT.md).
+
+Stripe's provider integration is live, but payments and the $20 signup credit are test-only: no real money moves. Marketplace version 1.0.3 is a configured draft with preflight complete, not submitted or published; legal owner attestations and test-mode limits remain. The new ChatGPT card protocol and live API are verified. Follow-up in-chat visual checks on the operator's test accounts were quota-blocked on 2026-10-18, not unavailable for all users; see [STATUS](STATUS.md).
 
 ## How it works
 
@@ -68,7 +74,7 @@ sequenceDiagram
     E->>W: capture link
     W->>C: live photo + GPS
     C->>E: upload (InsForge storage)
-    E->>E: GPS, freshness, moderation (clef, Claude if unsure)
+    E->>E: GPS, freshness, moderation (clef, Claude on provider failure)
     A->>E: await_answer (long poll, 55 s per call)
     E-->>A: answer, photo, checks
     E->>W: $3 Stripe Connect transfer + paid text
@@ -77,7 +83,7 @@ sequenceDiagram
 ## Repository layout
 
 - [`apps/mcp/`](apps/mcp/): API server: MCP tools, REST, webhooks, OAuth, `/status`.
-- [`apps/edge/`](apps/edge/): Cloudflare Workers: API front, cron, uptime monitor.
+- [`apps/edge/`](apps/edge/): Cloudflare Workers: thin API forwarder, cron, uptime monitor—not the MCP/API server host.
 - [`apps/web/`](apps/web/): landing site, worker app and the ops dashboard (internal.eyes.pictures).
 - [`apps/mobile/`](apps/mobile/): Expo iPhone app that sends background location.
 - [`packages/`](packages/): core, engine, db, comms, payments, safety, verify, ui.
@@ -106,28 +112,28 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 
 | Provider | What Eyes uses it for | Where in the repo | Status |
 |---|---|---|---|
-| Manufact Cloud | Hosts the actual MCP/API server (`eyes-prod`), including REST, webhooks, OAuth and the ops dashboard; origin `https://warm-spark-aocdd.run.mcp-use.com`, public MCP `https://api.eyes.pictures/mcp` | [apps/mcp](apps/mcp), [Dockerfile](Dockerfile), [docs/DEPLOY.md](docs/DEPLOY.md) §2 | live |
-| Cloudflare Workers | `eyes-api` is a thin forwarder for `api.eyes.pictures` and `internal.eyes.pictures` to Manufact; static Workers serve `eyes.pictures` and `app.eyes.pictures` | [apps/edge/api](apps/edge/api), [apps/web/landing](apps/web/landing), [apps/web/worker](apps/web/worker) | live |
+| Manufact Cloud | Hosts the actual MCP/API server (`eyes-prod`), including REST, webhooks, OAuth and the ops dashboard; origin `https://warm-spark-aocdd.run.mcp-use.com`, public MCP `https://mcp.eyes.pictures/mcp` | [apps/mcp](apps/mcp), [Dockerfile](Dockerfile), [docs/DEPLOY.md](docs/DEPLOY.md) §2 | live |
+| Cloudflare Workers | `eyes-api` is a thin forwarder for `mcp.eyes.pictures`, `api.eyes.pictures` and `internal.eyes.pictures` to Manufact; static Workers serve `eyes.pictures` and `app.eyes.pictures` | [apps/edge/api](apps/edge/api), [apps/web/landing](apps/web/landing), [apps/web/worker](apps/web/worker) | live |
 | Manufact gateway (optional) | `https://dark-steel-ofaoa.run.mcp-use.com/mcp` proxies the public MCP endpoint for gateway analytics; this is separate from the Manufact server host | [docs/CONNECT.md](docs/CONNECT.md) | optional |
 | Cloudflare Containers + Durable Objects | Previous API hosting path; not the current production origin | [apps/edge/api/worker.js](apps/edge/api/worker.js) | legacy |
 | Cloudflare KV + Cron | `eyes-monitor` checks `/healthz` every minute, keeps state in KV, texts an alert after two failures | [apps/edge/monitor](apps/edge/monitor) | live |
-| Cloudflare DNS | `eyes.pictures` zone and the three custom domains | wrangler configs above | live |
-| Cloudflare Workers AI (`clef-omni`) | First-pass task safety classifier and photo moderation (safe / faces) | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
+| Cloudflare DNS | `eyes.pictures` zone and custom domains, including the dedicated MCP host | wrangler configs above | live |
+| Cloudflare Workers AI (`clef-omni`) | First-pass task safety classifier; photo moderation rejects only confirmed graphic gore or explicit sexual content | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | Cloudflare Browser Integrity rule | Zone security setting on the domains | Cloudflare dashboard only, not in the repo | live (not verifiable from the repo) |
 | InsForge | Postgres with RPC functions and RLS for the ledger, claims and expiry; migrations through the migrations endpoint | [packages/db](packages/db), [scripts/insforge-migrate.ts](scripts/insforge-migrate.ts) | live |
-| InsForge Storage | Public `photos` bucket for captures; face-rejected photos are deleted ([ADR-014](intent/decisions/ADR-014-delete-face-photos.md)) | [packages/db](packages/db) | live |
+| InsForge Storage | Public `photos` bucket for captures; faces alone do not reject or delete photos ([photo policy](docs/features/photo-checks.md)) | [packages/db](packages/db) | live |
 | InsForge Sites | Earlier host of the worker web (`*.insforge.site`); replaced by `app.eyes.pictures` | [docs/DEPLOY.md](docs/DEPLOY.md) §3 | earlier |
 | Stripe | Checkout top-ups, Connect Express onboarding, $3 transfers on verified answers, transfer reversals on confirmed fraud, signed webhooks | [packages/payments](packages/payments) | test mode |
 | Inkbox | Shared iMessage line: inbound webhook, offer and paid texts, START/STOP/HELP/HERE replies, texts with location codes and the app link; uptime alerts; first-contact owner/ops email fallback when Primitive refuses delivery | [packages/comms/src/inkbox.ts](packages/comms/src/inkbox.ts) | live |
 | Inkbox (limitation) | An iMessage "Share My Location" arrives as a lone U+FFFD, so Eyes replies with a HERE link instead ([ADR-024](intent/decisions/ADR-024-worker-location.md)) | [packages/comms](packages/comms) | live |
-| Primitive | Each agent's private email inbox ([ADR-007](intent/decisions/ADR-007-agent-email-identity.md)), inbound webhooks, normal email replies and worker mail; first-contact owner/ops delivery falls back to Inkbox | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | live |
-| Anthropic Claude | Fallback safety classifier and photo vision when clef is unsure or fails; used alone if Cloudflare is not configured | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
+| Primitive | Outbound DNS verified and one owner Gmail delivery confirmed; unrestricted sending is still off, first-contact fallback uses Inkbox, and external custom-alias SPF remains unresolved | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | limited live verification |
+| Anthropic Claude | Fallback for task-safety or photo provider failures only; used alone without Cloudflare | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | OpenStreetMap Nominatim | Geocodes place names in `quote_task` and `ask_eyes` | [apps/mcp/src/geo.ts](apps/mcp/src/geo.ts) | live |
 | OpenStreetMap tiles + Leaflet (unpkg) | Maps on the ops dashboard and live map | [apps/web/dashboard](apps/web/dashboard) | live |
 | Apple Maps / Google Maps links | Reads coordinates from map links a worker texts in; the capture page links to Google Maps directions | [packages/core/src/util.ts](packages/core/src/util.ts), [apps/web/worker/src/capture.ts](apps/web/worker/src/capture.ts) | live |
-| mcp-use | MCP server framework for the 12 tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
-| OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with OAuth sign-in | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | live |
-| Expo / React Native + Apple | iPhone app that sends background location; TestFlight distribution paused by the user | [apps/mobile](apps/mobile) | TestFlight paused |
+| mcp-use | MCP server framework for tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
+| OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with host-matched OAuth and card origins | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | supported |
+| Expo / React Native + Apple | iPhone app with persistent connection across task photos; current distribution is [ad hoc](docs/DEPLOY.md#ad-hoc-releases-iphone-app), not TestFlight | [apps/mobile](apps/mobile) | ad hoc |
 | ClickHouse | Optional copy of the ops event log and Trends charts; Postgres stays the source of truth | [apps/web/dashboard/src/clickhouse.ts](apps/web/dashboard/src/clickhouse.ts) | optional, off on the host |
 | Astro, Tailwind, GSAP | Landing and worker web; Better-T-Stack conventions | [apps/web](apps/web) | live |
 | Playwright, Vitest, Biome | E2E, unit/contract/safety/integration tests, lint and format | [e2e](e2e), [vitest.config.ts](vitest.config.ts), [biome.json](biome.json) | test |

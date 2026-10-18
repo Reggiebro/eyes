@@ -1,6 +1,18 @@
 # STATUS
 
-Updated hosting state (2026-10-18): the actual MCP/API server is hosted on **Manufact Cloud**, `eyes-prod`, origin `https://warm-spark-aocdd.run.mcp-use.com` (deployment `ef011ffa-b963-4d71-85e3-1841779dd1db`). Public MCP remains `https://api.eyes.pictures/mcp`; Cloudflare `eyes-api` is a thin forwarder for `api.eyes.pictures` and `internal.eyes.pictures`. Static `eyes.pictures` and `app.eyes.pictures` remain on Cloudflare. The `dark-steel-ofaoa` Manufact gateway is optional, not the server host. OAuth protected-resource metadata normalization and the permanent Manufact deploy path are still pending verification; API auto-deploy is paused while the hosting worker completes them.
+## Current state (2026-10-18)
+
+Dedicated MCP is live at `https://mcp.eyes.pictures/mcp`, with ChatGPT and Claude configured there. All 13 tools include `show_task`, `accept_answer`, `report_classifier` and `get_classifier_report`; `show_task` uses the shared `ui://eyes/card.html`. Legacy API-host MCP remains supported. REST/uploads/webhooks stay at `https://api.eyes.pictures`; Manufact hosts the application and Cloudflare provides edge/static hosting.
+
+Native iPhone distribution is ad hoc, not TestFlight; the app stays connected across task photos. Optional email can be skipped with **Use iMessage only**. The three-second post-install timer is a grace period, not OS detection. OAuth **Continue** passes a new key to each web client automatically.
+
+Photo moderation rejects confirmed graphic gore or explicit sexual content, not faces alone; task privacy/safety is separate. Stripe's provider is live, but payments and $20 credit remain test-only. Primitive outbound DNS and one owner Gmail delivery are verified; unrestricted sending is disabled, Inkbox first-contact fallback remains, and external custom-alias SPF is unresolved.
+
+Known unresolved gap: STOP handling and the documented email-deletion policy are not fully aligned. This documentation refresh does not fix that policy–implementation gap.
+
+Marketplace 1.0.3 is a configured draft with preflight complete, not submitted/published; legal owner attestations and test-mode limits remain. Live ChatGPT API/card protocol is verified. **Verification note (2026-10-18):** follow-up in-chat visual checks on the operator's ChatGPT and Claude test accounts hit account quotas; this is not a general limitation on either client's card capabilities.
+
+## Historical snapshots and task board
 
 Historical snapshot (2026-10-17 16:01 PT): 64 PRs merged in total, open: #92. The live stack was Manufact at main 2eca969 (EYES_PROVIDERS=live: Inkbox texting, Claude vision + classifier, InsForge storage, geo, Stripe test-mode payments; email simulated; show_task card held via EYES_VIEWS_MANIFEST), Sites ca4391f9 (JOIN open, shared line, simulated-pay copy) + InsForge (DB 001-014, Sites) + ops dashboard. Two security sweeps and two fresh-eyes audits done. Remaining needs were vendor keys, a person, or a product decision: docs/PLAN.md §4 and 'Needs from humans'.
 
