@@ -2,6 +2,25 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { LatLng } from "./schemas.ts";
 
 export const usdToCents = (usd: number): number => Math.round(usd * 100);
+/**
+ * Reject an amount that carries more than two decimal places (sub-cents).
+ *
+ * `usdToCents` rounds, which is correct for display and for money we already hold.
+ * It is wrong at a *validation* boundary: rounding first makes `10.004` pass a
+ * `max_bounty_usd: 10` cap and `10.006` fail it, and `3.333` is stored as `3.33`
+ * with nothing said. Callers that validate a caller-supplied USD amount use this
+ * instead so the input is refused rather than quietly changed.
+ *
+ * Accepts a string or a number. Returns the value unchanged so it can be used inline.
+ */
+export function assertWholeCents(value: string | number, name = "amount"): string | number {
+  const raw = typeof value === "number" ? String(value) : value.trim();
+  if (!/^\s*-?\d+(?:\.\d{1,2})?\s*$/.test(raw)) {
+    throw new TypeError(`${name} must be a USD amount with at most 2 decimals: ${raw}`);
+  }
+  return value;
+}
+
 export const centsToUsd = (cents: number): number => cents / 100;
 
 const EARTH_RADIUS_M = 6_371_000;
