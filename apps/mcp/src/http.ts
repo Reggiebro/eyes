@@ -17,6 +17,9 @@ const LOGGED_ROUTES = [
   "/topup/done",
   "/topup/cancel",
   "/w/connect/done",
+  "/w/location",
+  "/v1/worker/location",
+  "/s/:id",
   ...Object.values(HTTP_ROUTES).map((route) => route.slice(route.indexOf("/"))),
 ].map((path) => ({
   pattern: new RegExp(`^${path.replaceAll(".", "\\.").replace(/:\w+/g, "[^/]+")}$`),
@@ -150,7 +153,6 @@ export function toNodeListener(fetch: Fetch) {
       await pipeline(Readable.fromWeb(response.body as ReadableStream), res).catch(() => undefined);
     } catch (err) {
       console.error(`request failed: ${err instanceof Error ? err.name : "unknown error"}`);
-      if (res.headersSent) return void res.destroy();
       res.statusCode = 500;
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(new EyesError("internal_error").toBody()));

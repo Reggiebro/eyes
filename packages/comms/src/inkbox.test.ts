@@ -40,7 +40,7 @@ vi.mock("@inkbox/sdk", async (importOriginal) => ({
 const KEY = "test-signing-key";
 const NOW = new Date("2026-10-17T19:00:00.000Z");
 const TO = "+14155550123";
-const EARNINGS_URL = "https://api.eyes.test/w/earnings/x";
+const ME_URL = "https://app.eyes.test/me#c=e.t";
 
 const textReceived = (text: string) => ({
   event_type: "text.received",
@@ -185,6 +185,25 @@ describe("inkbox webhook", () => {
     expect(handleWorkerReply).toHaveBeenCalledWith({ phone: "+15555550123", intent, text: content });
   });
 
+  it.each([
+    ["\ufffd", null, "location_share"],
+    ["\ufffc", null, "location_share"],
+    ["", null, "location_share"],
+    ["", [], "location_share"],
+    ["", [{ url: "https://inkbox.test/photo.jpg" }], "unknown"],
+    ["\ufffd here", null, "here"],
+  ])(
+    "maps an iMessage %j with media %j (how Inkbox delivers Apple location shares) to %s",
+    async (content, media, intent) => {
+      const { post, handleWorkerReply } = setup();
+      const evt = imessageReceived(content);
+      evt.data.message.media = media as never;
+      const body = JSON.stringify(evt);
+      await post(body, signedHeaders(body));
+      expect(handleWorkerReply).toHaveBeenCalledWith({ phone: "+15555550123", intent, text: content });
+    },
+  );
+
   it("rejects an imessage.received with a bad signature exactly like a text event", async () => {
     const { post, handleWorkerReply } = setup();
     const body = JSON.stringify(imessageReceived("YES"));
@@ -294,6 +313,23 @@ describe("inkbox webhook", () => {
     expect(first).not.toMatch(/4155550999|secret|claim failed/);
     expect(second).toContain("internal_error");
   });
+
+  it("logs a non-Error service failure by its type", async () => {
+    const { post, handleWorkerReply } = setup();
+    handleWorkerReply.mockRejectedValueOnce("db gone");
+    const body = JSON.stringify(textReceived("yes"));
+    expect((await post(body, signedHeaders(body))).status).toBe(200);
+    expect(String(error.mock.calls[0]?.[0])).toMatch(/failed: string$/);
+  });
+
+  it("falls back to the message id when an iMessage event has no event id", async () => {
+    const { post, handleWorkerReply } = setup();
+    handleWorkerReply.mockRejectedValueOnce(new Error("x"));
+    const { id: _, ...evt } = imessageReceived("yes");
+    const body = JSON.stringify(evt);
+    await post(body, signedHeaders(body));
+    expect(String(error.mock.calls[0]?.[0])).toContain("reply 1a90e8b0-0e1e-485f-b316-28f7dfa96afd from");
+  });
 });
 
 describe("createInkboxMessaging", () => {
@@ -325,7 +361,7 @@ describe("createInkboxMessaging", () => {
       task_id: "t1",
       place_label: "Ferry Building",
       amount_cents: 300,
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
       live_payouts: true,
     };
     expect(await m.sendOffer(TO, offer())).toEqual({ id: "im_1" });
@@ -351,7 +387,7 @@ describe("createInkboxMessaging", () => {
       task_id: "t1",
       place_label: "Ferry Building",
       amount_cents: 300,
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
     };
     await m.sendPaid(TO, { ...paid, live_payouts: false });
     await m.sendPaid(TO, { ...paid, live_payouts: true });
@@ -440,6 +476,19 @@ describe("createInkboxMessaging", () => {
     sdk.sendIMessage.mockRejectedValueOnce(err);
     await expect(createInkboxMessaging(env).sendText(TO, "a")).rejects.toBe(err);
   });
+
+  it("names a send with no error code as 'no error code', whether reported in the reply or the API error", async () => {
+    sdk.sendIMessage.mockResolvedValueOnce({ id: "im_3", status: "error", errorCode: null });
+    sdk.sendIMessage.mockRejectedValueOnce(new InkboxAPIError(500, { error: { nested: true } }));
+    const m = createInkboxMessaging(env);
+    expect(await m.sendText(TO, "a").catch((err: Error) => [err.message, err.name])).toEqual([
+      "Inkbox iMessage error: no error code",
+      "InkboxSendError(error no error code)",
+    ]);
+    expect(await m.sendText(TO, "b").catch((err: Error) => err.name)).toBe(
+      "InkboxSendError(500 no error code)",
+    );
+  });
 });
 
 describe("offer template", () => {
@@ -506,11 +555,11 @@ describe("simulated payouts", () => {
         task_id: "t",
         place_label: "Ferry Building, San Francisco",
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: false,
       }),
     ).toBe(
-      `Eyes: your answer for the task at Ferry Building was accepted. No money was sent because payouts are simulated on this test server. Your earnings: ${EARNINGS_URL}`,
+      `Eyes: your answer for the task at Ferry Building was accepted. No money was sent because payouts are simulated on this test server. Your tasks: ${ME_URL}`,
     );
   });
 });
@@ -559,7 +608,7 @@ describe("place label in every template", () => {
         task_id: "t",
         place_label,
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: true,
       }),
       offerText(offer({ place_label, live_payouts: false })),
@@ -567,7 +616,7 @@ describe("place label in every template", () => {
         task_id: "t",
         place_label,
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: false,
       }),
     ];
@@ -595,15 +644,15 @@ describe("post-reply templates", () => {
     const paid = {
       task_id: "t",
       place_label: "Ferry Building",
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
       live_payouts: true,
     };
     expect(paidText({ ...paid, amount_cents: 350 })).toContain("$3.50 ");
     expect(paidText({ ...paid, amount_cents: 300 })).toContain("$3 ");
   });
 
-  it("paid text ends with the earnings link and stays within the 1600-character text limit", () => {
-    const earnings_url = `https://eyes-production-0123456789.example.app/w/earnings/${signToken(
+  it("paid text ends with the tasks link and stays within the 1600-character text limit", () => {
+    const me_url = `https://eyes-production-0123456789.example.app/me#c=${signToken(
       "a-link-secret-of-32-characters-0",
       `e:${crypto.randomUUID()}`,
       new Date("2026-10-24T19:00:00.000Z"),
@@ -612,10 +661,10 @@ describe("post-reply templates", () => {
       task_id: "t",
       place_label: "W".repeat(40),
       amount_cents: 4999,
-      earnings_url,
+      me_url,
       live_payouts: true,
     });
-    expect(text.endsWith(` Your earnings: ${earnings_url}`)).toBe(true);
+    expect(text.endsWith(` Your tasks: ${me_url}`)).toBe(true);
     expect(text.length).toBeLessThanOrEqual(1600);
   });
 });
@@ -677,7 +726,50 @@ describe("parseReplyIntent", () => {
     ["toString", "unknown"],
     ["__proto__", "unknown"],
     ["hasOwnProperty valueOf", "unknown"],
+    ["HERE", "here"],
+    ["Location", "here"],
+    ["I'M HERE", "here"],
+    ["i’m here!", "here"],
+    ["im here", "here"],
+    ["SHORTCUT", "shortcut"],
+    ["AUTO", "shortcut"],
+    ["Automation", "shortcut"],
+    ["APP", "app"],
+    ["app", "app"],
+    ["INSTALL", "install"],
+    ["download", "install"],
+    ["TestFlight", "install"],
+    ["install?", "unknown"],
+    ["TASK", "task"],
+    ["task", "task"],
+    ["Link", "task"],
+    ["task?", "unknown"],
+    ["here?", "unknown"],
   ])("%j -> %s", (text, intent) => {
+    expect(parseReplyIntent(text)).toBe(intent);
+  });
+
+  it.each([
+    ["Strat", "start"],
+    ["strt", "start"],
+    ["stat", "start"],
+    ["Start!", "start"],
+    ["START", "start"],
+    ["sTaRt.", "start"],
+    ["yse", "yes"],
+    ["yess", "yes"],
+    ["stpo", "stop"],
+    ["hepl", "help"],
+    // one edit from both "help" and "here": ambiguous
+    ["hele", "unknown"],
+    // three letters: a substitution is not enough, only an adjacent swap
+    ["yez", "unknown"],
+    ["oen", "unknown"],
+    ["xz", "unknown"],
+    ["strat now", "unknown"],
+    ["shop?", "stop"],
+    ["strat?", "unknown"],
+  ])("typo %j -> %s", (text, intent) => {
     expect(parseReplyIntent(text)).toBe(intent);
   });
 });

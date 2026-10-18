@@ -59,11 +59,13 @@ export const Worker = z.object({
   phone: Phone,
   name: z.string(),
   stripe_account_id: z.string().nullable(),
-  lat: z.number(),
-  lng: z.number(),
+  lat: z.number().nullable(),
+  lng: z.number().nullable(),
+  location_at: Timestamp.nullable(),
   available: z.boolean(),
   opted_in: z.boolean(),
   rating: z.number().min(0).max(5),
+  banned: z.boolean().optional(),
   created_at: Timestamp,
 });
 export type Worker = z.infer<typeof Worker>;
@@ -143,10 +145,14 @@ const TaskId = Id.describe("The task_id returned by ask_eyes.");
 const Usd = z.number();
 
 export const Verification = z.object({
-  gps_ok: z.boolean(),
-  fresh_ok: z.boolean(),
-  vision_ok: z.boolean(),
-  vision_reason: z.string(),
+  gps_ok: z.boolean().describe("The worker was within about 150 m of the place."),
+  fresh_ok: z.boolean().describe("The photo was taken live, before the deadline."),
+  vision_ok: z
+    .boolean()
+    .describe(
+      "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct.",
+    ),
+  vision_reason: z.string().describe("Why the photo is or is not safe to share."),
 });
 export type Verification = z.infer<typeof Verification>;
 
@@ -267,6 +273,17 @@ export const GetTaskOutput = z.object({
   created_at: Timestamp,
   claimed_at: Timestamp.nullable(),
   answer: Answer.nullable(),
+  dispute: z
+    .object({
+      status: z
+        .enum(["open", "upheld", "rejected"])
+        .describe(
+          "open: a person is reviewing your dispute. upheld: the answer was fake; bounty and fee were refunded to your balance. rejected: the answer stands and the worker keeps the pay.",
+        ),
+      refunded_usd: Usd.nullable().describe("What was refunded to your balance when the dispute was upheld."),
+    })
+    .nullable()
+    .describe("Your dispute_answer on this task and its outcome; null if you never disputed it."),
 });
 
 export const ListTasksInput = z.object({
@@ -429,22 +446,53 @@ export const CaptureFields = z.object({
   answer_text: z.string().max(1000).nullable().default(null),
   answer_bool: z.boolean().nullable().default(null),
 });
-export const WorkerEarnings = z.object({
+// iPhone Shortcuts send numbers as strings, with a comma decimal in many locales.
+const LooseNumber = z.preprocess(
+  (v) => (typeof v === "string" ? (v.trim() ? Number(v.trim().replace(",", ".")) : undefined) : v),
+  z.number(),
+);
+export const WorkerLocationInput = z
+  .object({
+    lat: LooseNumber.pipe(z.number().min(-90).max(90)),
+    lng: LooseNumber.pipe(z.number().min(-180).max(180)),
+    accuracy_m: LooseNumber.pipe(z.number().min(0)).optional().catch(undefined),
+    source: z.enum(["shortcut", "here_link", "capture", "findmy", "app"]),
+    input: z.string().max(500).optional().catch(undefined),
+    captured_at: Timestamp.optional().catch(undefined),
+  })
+  .refine((v) => v.lat !== 0 || v.lng !== 0, { message: "0,0 is not a real location.", path: ["lat"] });
+export type WorkerLocationInput = z.input<typeof WorkerLocationInput>;
+// One row of the worker's task list on /me (T6.42, ADR-029). payout: the payout label rule (ADR-020).
+export const WorkerTask = z.object({
+  task_id: Id,
+  question: z.string(),
+  place_label: z.string(),
+  status: TaskStatus,
+  bounty_usd: Usd,
+  payout: z.enum(["paid", "pending", "waiting_for_payout_setup"]).nullable(),
+  claimed_at: Timestamp,
+});
+export const WORKER_TASK_FILTERS = ["paid", "pending", "review", "expired"] as const;
+// GET /w/me/tasks: one page of the worker's tasks, newest first, plus the totals over all of them.
+export const WorkerTasks = z.object({
   paid_usd: Usd,
   pending_usd: Usd,
-  tasks: z
-    .array(
-      z.object({
-        task_id: Id,
-        place_label: z.string(),
-        status: TaskStatus,
-        bounty_usd: Usd,
-        payout: z.enum(["paid", "pending", "waiting_for_payout_setup"]).nullable(),
-        claimed_at: Timestamp,
-        paid_at: Timestamp.nullable(),
-      }),
-    )
-    .max(50),
+  tasks: z.array(WorkerTask).max(100),
+  next_cursor: z.string().nullable(),
+});
+export const WorkerTasksQuery = z.object({
+  q: z.string().trim().max(100).optional().catch(undefined),
+  status: z.enum(WORKER_TASK_FILTERS).optional().catch(undefined),
+  cursor: z.string().max(100).optional().catch(undefined),
+  tz: z.string().max(64).optional().catch(undefined),
+});
+// The worker's setup page, /me (ADR-028). Its task list loads from GET /w/me/tasks.
+export const WorkerSetup = z.object({
+  opted_in: z.boolean(),
+  spot: z.object({ at: Timestamp.nullable(), fresh: z.boolean(), max_age_h: z.number() }),
+  app: z.object({ last_at: Timestamp.nullable(), sending: z.boolean() }),
+  payouts: z.object({ set_up: z.boolean(), live: z.boolean(), setup_url: z.string().nullable() }),
+  here_url: z.string(),
 });
 
 export const CaptureResult = z.object({
@@ -466,7 +514,10 @@ export type CaptureResult = z.output<typeof CaptureResult>;
 export type ResolvedLocation = z.output<typeof ResolvedLocation>;
 export type OwnerPolicyInput = z.output<typeof OwnerPolicyInput>;
 export type OwnerConsole = z.output<typeof OwnerConsole>;
-export type WorkerEarnings = z.output<typeof WorkerEarnings>;
+export type WorkerTask = z.output<typeof WorkerTask>;
+export type WorkerTasks = z.output<typeof WorkerTasks>;
+export type WorkerTasksQuery = z.output<typeof WorkerTasksQuery>;
+export type WorkerSetup = z.output<typeof WorkerSetup>;
 
 export const HTTP_ROUTES = {
   health: "GET /healthz",
@@ -488,8 +539,16 @@ export const HTTP_ROUTES = {
   worker_join: "POST /w/join",
   worker_connect_redirect: "GET /w/connect/:token",
   worker_earnings: "GET /w/earnings/:token",
+  worker_me: "GET /w/me",
+  worker_me_tasks: "GET /w/me/tasks",
+  worker_me_install: "POST /w/me/install",
   offer_view: "GET /w/offers/:token",
   offer_capture: "POST /w/offers/:token/capture",
+  worker_device: "POST /w/device",
+  worker_device_profile: "GET /w/device/profile/:ticket",
+  worker_device_register: "POST /w/device/:ticket",
+  worker_app_manifest: "GET /w/app/manifest.plist",
+  worker_app_ipa: "GET /w/app/Eyes.ipa",
   webhook_inkbox: "POST /webhooks/inkbox",
   webhook_primitive: "POST /webhooks/primitive",
   webhook_stripe: "POST /webhooks/stripe",

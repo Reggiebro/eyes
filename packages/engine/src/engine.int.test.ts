@@ -7,6 +7,7 @@ import {
   agentEmailAddress,
   CaptureResult,
   type EngineDeps,
+  ERRORS,
   type EyesError,
   fakeProviders,
   JoinWorkerOutput,
@@ -20,7 +21,8 @@ import {
   type TaskStatus,
   TOOLS,
   type VerificationResult,
-  WorkerEarnings,
+  WorkerSetup,
+  WorkerTasks,
 } from "@eyes/core";
 import { migrate } from "@eyes/db";
 import postgres from "postgres";
@@ -53,10 +55,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
     db: { kind: "postgres", url: url ?? "" },
     providers,
     assessTask: async () => safety,
-    verifySubmission: async ({ task, submission: s, vision }) => {
+    verifySubmission: async ({ submission: s, vision }) => {
       if (!s.photo_url) return PASS;
-      const v = await vision.judge({ ...task, ...s, photo_url: s.photo_url });
-      const vision_ok = v.answers_question && !v.prominent_faces;
+      const v = await vision.judge({ photo_url: s.photo_url });
+      const vision_ok = v.allowed && !v.prominent_faces;
       return vision_ok ? PASS : { ...PASS, vision_ok, vision_reason: v.reason, auto_approve: false };
     },
     config: AppConfig.parse({
@@ -71,21 +73,24 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   beforeAll(() => migrate(url ?? ""));
   afterAll(() => sql.end());
-  afterEach(() => providers.vision.setVerdict({ answers_question: true, prominent_faces: false }));
+  afterEach(() => providers.vision.setVerdict({ allowed: true, prominent_faces: false }));
 
   const somewhere = (): LatLng => ({ lat: 10 + Math.random() * 40, lng: -120 + Math.random() * 60 });
   const north = (p: LatLng, meters: number): LatLng => ({ lat: p.lat + meters / 111_320, lng: p.lng });
 
   const newPhone = () => `+1555${String(randomInt(10_000_000)).padStart(7, "0")}`;
 
+  // START now ends with the setup link, so a token runs to the next space.
   const connectToken = (phone: string) =>
-    String(outbox.findLast((m) => m.to === phone && m.kind === "text")?.payload).split("/w/connect/")[1] ??
-    "";
+    /\/w\/connect\/(\S+)/.exec(
+      String(outbox.findLast((m) => m.to === phone && String(m.payload).includes("/w/connect/"))?.payload),
+    )?.[1] ?? "";
 
-  const earningsToken = (url: unknown) => String(url).split("/w/earnings/")[1] ?? "";
+  // START, HELP and the paid text link the setup page (ADR-028) with the worker's "e:" token as its code.
+  const meToken = (text: unknown) => /\/me#c=(\S+)/.exec(String(text))?.[1] ?? "";
   async function helpEarnings(phone: string) {
     await service.handleWorkerReply({ phone, intent: "help", text: "HELP" });
-    return earningsToken(outbox.findLast((m) => m.to === phone)?.payload);
+    return meToken(outbox.findLast((m) => m.to === phone)?.payload);
   }
 
   async function worker(at: LatLng, optIn = true) {
@@ -238,8 +243,9 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(again).toEqual(await service.joinWorker({ name: "Someone Else", phone: newPhone(), ...at }));
     await service.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
     expect(await service.joinWorker({ name: "Someone Else", phone, lat: 0, lng: 0 })).toEqual(first);
+    // STOP deleted the location (ADR-024); the repeat join did not write its own.
     expect(await sql`select name, lat from workers where phone = ${phone}`).toEqual([
-      { name: "Real Worker", lat: at.lat },
+      { name: "Real Worker", lat: null },
     ]);
   });
 
@@ -255,24 +261,331 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(after).toEqual(["Eyes: you're opted out and won't get task texts. Text START to rejoin."]);
     expect(String(after[0]).length).toBeLessThanOrEqual(159);
     await service.handleWorkerReply({ phone, intent: "start", text: "START" });
-    expect(sent().slice(before + 1)).toEqual([expect.stringMatching(/^You are in\. .*\/w\/connect\//)]);
+    // One text: STOP reset the app link (it deleted every code) and cleared the spot.
+    const start = sent().slice(before + 1);
+    expect(start).toHaveLength(1);
+    const lines = String(start[0]).split("\n");
+    expect(lines).toEqual([
+      "You're in. Eyes texts you paid photo tasks near you.",
+      expect.stringMatching(
+        /^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/,
+      ),
+      expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
+      expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+    ]);
+    const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
+    expect(await service.workerDevice(code)).toMatchObject({ registered: false });
+    // START again within the hour mints no second code: the app step links to the setup page.
+    await service.handleWorkerReply({ phone, intent: "start", text: "START" });
+    expect(String(sent().at(-1)).split("\n")).toEqual([
+      lines[0],
+      expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
+      expect.stringMatching(/^2\. Set up payouts: /),
+      expect.stringMatching(/^Your setup: /),
+      lines[4],
+    ]);
   });
 
-  it("HELP says what Eyes is, how to opt out, where to read more and links the worker's earnings", async () => {
+  it("HELP is the hub text: the open steps, the worker's setup page, YES and STOP", async () => {
     const { phone } = await worker(somewhere());
     await service.handleWorkerReply({ phone, intent: "help", text: "HELP" });
-    const help = String(outbox.findLast((m) => m.to === phone)?.payload);
-    const [text, url] = help.split(" Your earnings: ");
-    expect(text).toBe(
-      "Eyes texts you paid tasks to check public places nearby. Reply YES to claim a task, STOP to opt out. More: https://w.eyes.test",
-    );
-    expect(url).toMatch(/^https:\/\/api\.eyes\.test\/w\/earnings\/[\w-]+\.[\w-]+$/);
-    expect(await service.workerEarnings(earningsToken(url))).toEqual({
-      paid_usd: 0,
-      pending_usd: 0,
-      tasks: [],
+    const help = String(outbox.findLast((m) => m.to === phone)?.payload).split("\n");
+    // START sent the app link within the hour: the app step links to the setup page, no second code.
+    expect(help).toEqual([
+      "You're in. Eyes texts you paid photo tasks near you.",
+      expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
+      expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
+      expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+    ]);
+    expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
+  });
+
+  describe("worker setup page (ADR-028)", () => {
+    const setupToken = (phone: string) =>
+      meToken(
+        outbox.findLast((m) => m.to === phone && /^You're (in|all set)\./.test(String(m.payload)))?.payload,
+      );
+    const fixToken = (workerId: string) =>
+      signToken(deps.config.link_secret, `l:${workerId}`, new Date(providers.clock.now().getTime() + 60_000));
+    const refused = {
+      code: "unauthorized",
+      message: "This link is invalid or has expired.",
+      fix: "Text HELP to the Eyes number for a fresh link.",
+    };
+
+    it("shows the spot's age, whether the app sends it, payout setup, and every task with its payout", async () => {
+      const at = somewhere();
+      const agents = [await agent(), await agent()];
+      const w = await worker(north(at, 50));
+      const token = setupToken(w.phone);
+      const [joined] = await sql<
+        { created_at: Date }[]
+      >`select created_at from workers where id = ${w.worker_id}`;
+      expect(WorkerSetup.parse(await service.workerSetup(token))).toEqual({
+        opted_in: true,
+        spot: { at: joined?.created_at.toISOString(), fresh: true, max_age_h: 24 },
+        app: { last_at: null, sending: false },
+        payouts: {
+          set_up: false,
+          live: true,
+          setup_url: expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/[\w-]+\.[\w-]+$/),
+        },
+        here_url: expect.stringMatching(/^https:\/\/w\.eyes\.test\/here\.html\?t=[\w-]+\.[\w-]+$/),
+      });
+
+      // Six claims from two agents (each stays within its $20 grant); the list has all of them, newest first.
+      const questions: string[] = [];
+      for (let i = 1; i <= 6; i++) {
+        const question = `Is the line longer than ${i} people?`;
+        await ask(agents[i % 2] as Agent, at, { question });
+        await reply(w.phone);
+        const link = outbox.findLast((m) => m.to === w.phone && m.kind === "capture_link");
+        await capture(new URL(String(link?.payload.capture_url)).searchParams.get("t") ?? "", at);
+        questions.unshift(question);
+        providers.clock.advance(1000);
+      }
+      const rows = (payout: string) =>
+        questions.map((question) => ({
+          task_id: expect.any(String),
+          question,
+          place_label: expect.any(String),
+          status: "verified",
+          bounty_usd: 3,
+          payout,
+          claimed_at: expect.any(String),
+        }));
+      const list = async () => WorkerTasks.parse(await service.workerTasks(token, {}));
+      expect(await list()).toEqual({
+        paid_usd: 0,
+        pending_usd: 18,
+        tasks: rows("waiting_for_payout_setup"),
+        next_cursor: null,
+      });
+      await service.workerConnectUrl(connectToken(w.phone));
+      expect(await service.workerSetup(token)).toMatchObject({
+        payouts: { set_up: true, live: true, setup_url: null },
+      });
+      expect((await list()).tasks).toEqual(rows("pending"));
+
+      const start = providers.clock.now();
+      try {
+        providers.clock.advance(31_000); // past the capture's fix and the 30 s fix interval
+        await service.updateWorkerLocation(fixToken(w.worker_id), { ...north(at, 60), source: "app" });
+        const appAt = providers.clock.now().toISOString();
+        expect(await service.workerSetup(token)).toMatchObject({
+          spot: { at: appAt, fresh: true },
+          app: { last_at: appAt, sending: true },
+        });
+        providers.clock.advance(24 * 3_600_000 + 1000);
+        expect(await service.workerSetup(token)).toMatchObject({
+          spot: { at: appAt, fresh: false },
+          app: { last_at: appAt, sending: false },
+        });
+        await service.updateWorkerLocation(fixToken(w.worker_id), { ...north(at, 50), source: "here_link" });
+        expect(await service.workerSetup(token)).toMatchObject({
+          spot: { at: providers.clock.now().toISOString(), fresh: true },
+          app: { last_at: null, sending: false },
+        });
+      } finally {
+        providers.clock.set(start);
+      }
     });
-    expect(help.length).toBeLessThanOrEqual(1600);
+
+    it("START and HELP list only open steps: numbered for 2+, unnumbered for 1, 'You're all set' for none", async () => {
+      const at = somewhere();
+      const w = await worker(at); // its START sent the app link, so the next hour has no app step
+      const hub = async (intent: "start" | "help") => {
+        await service.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
+        return String(outbox.findLast((m) => m.to === w.phone)?.payload).split("\n");
+      };
+      const head = "Eyes texts you paid photo tasks near you.";
+      const tail = [
+        expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/),
+        "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+      ];
+      const hour = 3_600_000;
+      const start = providers.clock.now();
+      try {
+        providers.clock.advance(hour + 1);
+        expect(await hub("start")).toEqual([
+          `You're in. ${head}`,
+          expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): \S+$/),
+          expect.stringMatching(/^2\. Set up payouts: \S+$/),
+          ...tail,
+        ]);
+
+        // The app sent a fix: no app step even past the hour, so payouts is the one step, unnumbered.
+        providers.clock.advance(31_000);
+        await service.updateWorkerLocation(fixToken(w.worker_id), { ...north(at, 10), source: "app" });
+        providers.clock.advance(hour + 1);
+        for (const intent of ["start", "help"] as const) {
+          expect(await hub(intent)).toEqual([
+            `You're in. ${head}`,
+            expect.stringMatching(/^Set up payouts: \S+\/w\/connect\/\S+$/),
+            ...tail,
+          ]);
+        }
+
+        await service.workerConnectUrl(connectToken(w.phone));
+        for (const intent of ["start", "help"] as const) {
+          expect(await hub(intent)).toEqual([`You're all set. ${head}`, ...tail]);
+        }
+
+        // The app's last fix is over 24 h old: the app step is back, alone and unnumbered.
+        providers.clock.advance(24 * hour);
+        expect(await hub("help")).toEqual([
+          `You're in. ${head}`,
+          expect.stringMatching(
+            /^Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/,
+          ),
+          ...tail,
+        ]);
+      } finally {
+        providers.clock.set(start);
+      }
+    });
+
+    it("pages every task 20 at a time and searches only what a row shows, dates in the browser's zone", async () => {
+      const a = await agent();
+      const w = await worker(somewhere());
+      const token = setupToken(w.phone);
+      // 25 claims, one a day back from 2026-03-10 05:30 UTC (the evening before in Los Angeles).
+      const status = (i: number) =>
+        (["verified", "needs_review", "expired", "disputed", "refunded"] as const)[i % 5] ?? "verified";
+      for (let i = 0; i < 25; i++) {
+        const at = new Date(Date.UTC(2026, 2, 10 - i, 5, 30));
+        await sql`insert into tasks (agent_id, question, task_type, place_label, lat, lng, bounty_cents, fee_cents,
+          deadline_at, status, claimed_by, claimed_at)
+          values (${a.id}, ${`Question ${i}`}, 'is_open', ${i === 7 ? "Ferry Building" : "Pier 39"}, 1, 1,
+          ${100 + i}, 0, ${at}, ${status(i)}, ${w.worker_id}, ${at})`;
+      }
+      const ids = (r: { tasks: { question: string }[] }) => r.tasks.map((t) => t.question);
+      const first = await service.workerTasks(token, {});
+      expect(ids(first)).toEqual(Array.from({ length: 20 }, (_, i) => `Question ${i}`));
+      expect(first.next_cursor).toMatch(/\|[0-9a-f-]{36}$/);
+      const second = await service.workerTasks(token, { cursor: first.next_cursor ?? "" });
+      expect([ids(second), second.next_cursor]).toEqual([
+        ["Question 20", "Question 21", "Question 22", "Question 23", "Question 24"],
+        null,
+      ]);
+      // A malformed cursor starts from the top instead of failing.
+      expect(ids(await service.workerTasks(token, { cursor: "x|y" }))).toEqual(ids(first));
+
+      const search = async (q: string, tz?: string) => ids(await service.workerTasks(token, { q, tz }));
+      expect(await search("ferry")).toEqual(["Question 7"]);
+      expect(await search("$1.07")).toEqual(["Question 7"]);
+      expect(await search("question 1")).toHaveLength(11);
+      expect(await search("Mar 10, 2026")).toEqual(["Question 0"]);
+      expect(await search("Mar 9, 2026", "America/Los_Angeles")).toEqual(["Question 0"]);
+      expect(await search("Mar 10, 2026", "Not/AZone")).toEqual(["Question 0"]);
+      // Nothing a row does not show: not the cents, the task id or a UTC timestamp.
+      expect(await search("107")).toEqual([]);
+      expect(await search(first.tasks[0]?.task_id.slice(0, 8) ?? "")).toEqual([]);
+      expect(await search("05:30")).toEqual([]);
+
+      const filter = async (s: "paid" | "pending" | "review" | "expired") =>
+        ids(await service.workerTasks(token, { status: s }));
+      expect(await filter("review")).toEqual(
+        ["Question 1", "Question 3", "Question 6", "Question 8"].concat([
+          "Question 11",
+          "Question 13",
+          "Question 16",
+          "Question 18",
+          "Question 21",
+          "Question 23",
+        ]),
+      );
+      expect(await filter("expired")).toHaveLength(10);
+      expect(await filter("paid")).toEqual([]);
+      expect(await filter("pending")).toEqual([]);
+      const [verified] = await sql<{ id: string }[]>`select id from tasks where claimed_by = ${w.worker_id}
+        and question = 'Question 5'`;
+      await sql`insert into ledger (type, amount_cents, task_id, worker_id) values ('release', 105, ${verified?.id ?? ""}, ${w.worker_id})`;
+      expect(await filter("pending")).toEqual(["Question 5"]);
+      expect(ids(await service.workerTasks(token, { status: "pending", q: "pier" }))).toEqual(["Question 5"]);
+    });
+
+    it("refuses a missing, garbage, tampered, wrong-kind or expired code and an unknown worker", async () => {
+      const w = await worker(somewhere());
+      const token = setupToken(w.phone);
+      const secret = deps.config.link_secret;
+      for (const bad of [
+        "",
+        "garbage",
+        `${token}x`,
+        signToken(secret, `l:${w.worker_id}`),
+        signToken(secret, `e:${randomUUID()}`),
+      ]) {
+        await expect(service.workerSetup(bad)).rejects.toMatchObject(refused);
+        await expect(service.workerInstallLink(bad)).rejects.toMatchObject(refused);
+      }
+      const issued = providers.clock.now();
+      try {
+        providers.clock.advance(7 * 24 * 3_600_000 + 1000);
+        await expect(service.workerSetup(token)).rejects.toMatchObject(refused);
+      } finally {
+        providers.clock.set(issued);
+      }
+    });
+
+    it("install mints a working location code, as the /app link with TestFlight, never for an opted-out worker", async () => {
+      const w = await worker(somewhere());
+      const token = setupToken(w.phone);
+      const { install_url } = await service.workerInstallLink(token);
+      expect(install_url).toMatch(/^https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/);
+      await expect(service.workerDevice(install_url.split("#c=")[1] ?? "")).resolves.toMatchObject({
+        registered: false,
+      });
+      const withLink = createEyesService({
+        ...deps,
+        config: AppConfig.parse({
+          ...deps.config,
+          testflight_url: "https://testflight.apple.com/join/TESTLINK1",
+        }),
+      });
+      expect((await withLink.workerInstallLink(token)).install_url).toMatch(
+        /^https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/,
+      );
+      await service.handleWorkerReply({ phone: w.phone, intent: "stop", text: "STOP" });
+      await expect(service.workerInstallLink(token)).rejects.toMatchObject(refused);
+      expect(await service.workerSetup(token)).toMatchObject({
+        opted_in: false,
+        spot: { at: null, fresh: false },
+        app: { last_at: null, sending: false },
+      });
+    });
+  });
+
+  it("INSTALL and APP text one app link with a fresh code each: /install without TestFlight", async () => {
+    const { phone } = await worker(somewhere());
+    await service.handleWorkerReply({ phone, intent: "install", text: "INSTALL" });
+    const install = String(outbox.findLast((m) => m.to === phone)?.payload);
+    expect(install).toMatch(/^Get the Eyes app: https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/);
+    const code = install.slice(-43);
+    expect(await service.workerDevice(code)).toMatchObject({ registered: false, ready: false });
+    await service.handleWorkerReply({ phone, intent: "app", text: "APP" });
+    const app = String(outbox.findLast((m) => m.to === phone)?.payload);
+    expect(app).toMatch(/^Get the Eyes app: https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/);
+    expect(app.slice(-43)).not.toBe(code);
+  });
+
+  it("START and APP link /app (which falls back to TestFlight) when EYES_TESTFLIGHT_URL is set", async () => {
+    const link = "https://testflight.apple.com/join/TESTLINK1";
+    const withLink = createEyesService({
+      ...deps,
+      config: AppConfig.parse({ ...deps.config, testflight_url: link }),
+    });
+    const { phone } = await worker(somewhere());
+    const last = () => String(outbox.findLast((m) => m.to === phone)?.payload);
+    await withLink.handleWorkerReply({ phone, intent: "app", text: "APP" });
+    expect(last()).toMatch(/^Get the Eyes app: https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/);
+    await withLink.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
+    await withLink.handleWorkerReply({ phone, intent: "start", text: "START" });
+    expect(last().split("\n")[1]).toMatch(
+      /^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/app#c=[\w-]{43}$/,
+    );
   });
 
   it("returns outputs that parse against the frozen contract schemas on every service call", async () => {
@@ -574,7 +887,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
   it("emails the owner a private link that sets the limits ask_eyes enforces, and never shows it to the agent", async () => {
     const at = somewhere();
     await worker(north(at, 100));
-    const ownerEmail = `owner-${randomUUID()}@example.com`;
+    const ownerEmail = `owner-${randomUUID()}@owners.eyes.pictures`;
     const signup = await service.signupAgent({ name: "owned-agent", owner_email: ownerEmail });
     const mail = providers.email.outbox.find((m) => m.to === ownerEmail);
     const ownerToken = mail?.text.match(/\/owner\/([\w.-]+)/)?.[1] ?? "";
@@ -647,7 +960,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   it("claims the owner email was sent only when email delivery is live", async () => {
     expect(deps.config.email_delivery).toBe(false);
-    const ownerEmail = `owner-${randomUUID()}@example.com`;
+    const ownerEmail = `owner-${randomUUID()}@owners.eyes.pictures`;
     const simulated = await service.signupAgent({ name: "simulated-mail-agent", owner_email: ownerEmail });
     expect(simulated.next_step).not.toMatch(/emailed/i);
     expect(simulated.next_step).toContain(`nothing was sent to ${ownerEmail}`);
@@ -706,19 +1019,30 @@ describe.skipIf(!url)("engine on Postgres", () => {
       `Text START to the Eyes number to start getting paid tasks near you. When a task text arrives, reply YES to claim it. Text STOP any time to pause. ${simulated}`,
     );
     await sim.handleWorkerReply({ phone, intent: "start", text: "START" });
-    expect(last("text")).toBe(`You are in. Eyes will text you paid tasks nearby. ${simulated}`);
+    const texts = outbox.filter((m) => m.to === phone && m.kind === "text").map((m) => m.payload);
+    // One text: no payout step on a test server, the simulated note instead; the app is the one step.
+    const lines = String(texts.at(-1)).split("\n");
+    expect(lines.slice(0, 3)).toEqual([
+      "You're in. Eyes texts you paid photo tasks near you.",
+      expect.stringMatching(/^Get the app \(keeps your spot fresh\): /),
+      simulated,
+    ]);
+    expect(String(texts.at(-1))).not.toContain("/w/connect/");
+    expect(await sim.workerSetup(meToken(lines[3]))).toMatchObject({
+      payouts: { set_up: false, live: false, setup_url: null },
+    });
     await sim.handleWorkerReply({ phone, intent: "help", text: "HELP" });
-    expect(String(last("text"))).toContain(`STOP to opt out. ${simulated} More: `);
+    expect(String(last("text")).split("\n")[2]).toBe(simulated);
 
     const verified = await capture();
     expect(verified.result).toMatchObject({ status: "verified", message: `Verified. ${simulated}` });
     expect(last("paid")).toMatchObject({ task_id: verified.task_id, live_payouts: false });
 
-    providers.vision.setVerdict({ answers_question: false, reason: "No line in the photo." });
+    providers.vision.setVerdict({ allowed: false, reason: "A screen shows personal details." });
     const review = await capture();
     expect(review.result).toMatchObject({
       status: "needs_review",
-      message: `Thanks, we got it. Your answer needs a quick manual check (No line in the photo.). ${simulated}`,
+      message: `Thanks, we got it. Your answer needs a quick manual check (A screen shows personal details.). ${simulated} To request a manual review, reply HELP to the Eyes text.`,
     });
     expect(outbox.some((m) => m.to === phone && JSON.stringify(m.payload).includes("/w/connect/"))).toBe(
       false,
@@ -732,8 +1056,11 @@ describe.skipIf(!url)("engine on Postgres", () => {
       throw new Error(`relay refused: ${msg.text}`);
     };
     try {
-      const signup = await service.signupAgent({ name: "unlucky-agent", owner_email: "owner@example.com" });
-      expect(signup.next_step).toContain("could not email your user at owner@example.com");
+      const signup = await service.signupAgent({
+        name: "unlucky-agent",
+        owner_email: "owner@owners.eyes.pictures",
+      });
+      expect(signup.next_step).toContain("could not email your user at owner@owners.eyes.pictures");
       expect(error).toHaveBeenCalled();
       expect(JSON.stringify(error.mock.calls)).not.toContain("/owner/");
     } finally {
@@ -744,7 +1071,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   it("emails only the first payer a working owner link, once, and never shows the link to the agent", async () => {
     const a = await agent();
-    const payer = `payer-${randomUUID()}@example.com`;
+    const payer = `payer-${randomUUID()}@owners.eyes.pictures`;
     const topup = {
       agent_id: a.id,
       amount_cents: 1500,
@@ -764,7 +1091,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(await service.getBalance(a)).toMatchObject({ balance_usd: 35 });
     expect(providers.email.outbox).toHaveLength(before + 1);
 
-    const later = `later-${randomUUID()}@example.com`;
+    const later = `later-${randomUUID()}@owners.eyes.pictures`;
     await service.creditTopup({ ...topup, stripe_ref: `cs_${randomUUID()}`, payer_email: later });
     expect(await service.getBalance(a)).toMatchObject({ balance_usd: 50 });
     expect(providers.email.outbox).toHaveLength(before + 1);
@@ -788,7 +1115,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       service.creditTopup({ agent_id: agentId, amount_cents: 1500, stripe_ref, payer_email });
 
     const a = await agent();
-    const payer = `payer-${randomUUID()}@example.com`;
+    const payer = `payer-${randomUUID()}@owners.eyes.pictures`;
     const ref = `cs_${randomUUID()}`;
     const before = providers.email.outbox.length;
     await overlapping(a.id, () => Array.from({ length: 5 }, () => topup(a.id, ref, payer)));
@@ -796,7 +1123,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(providers.email.outbox.slice(before).map((m) => m.to)).toEqual([payer]);
 
     const b = await agent();
-    const payers = [`first-${randomUUID()}@example.com`, `second-${randomUUID()}@example.com`];
+    const payers = [
+      `first-${randomUUID()}@owners.eyes.pictures`,
+      `second-${randomUUID()}@owners.eyes.pictures`,
+    ];
     const start = providers.email.outbox.length;
     await overlapping(b.id, () => payers.map((p) => topup(b.id, `cs_${randomUUID()}`, p)));
     expect(await service.getBalance(b)).toMatchObject({ balance_usd: 50 });
@@ -817,7 +1147,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         agent_id: a.id,
         amount_cents: 500,
         stripe_ref: `cs_${randomUUID()}`,
-        payer_email: "payer@example.com",
+        payer_email: "payer@owners.eyes.pictures",
       });
       expect(await service.getBalance(a)).toMatchObject({ balance_usd: 25 });
       expect(error).toHaveBeenCalled();
@@ -875,23 +1205,21 @@ describe.skipIf(!url)("engine on Postgres", () => {
       providers.clock.advance(1000);
       return asked.task_id;
     };
-    const row = { place_label: expect.any(String), claimed_at: expect.any(String) };
+    const row = {
+      question: expect.any(String),
+      place_label: expect.any(String),
+      claimed_at: expect.any(String),
+    };
 
     const first = await work(3);
     const connect = connectToken(w.phone);
-    expect(await service.workerEarnings(await helpEarnings(w.phone))).toEqual({
+    expect(await service.workerTasks(await helpEarnings(w.phone), {})).toEqual({
       paid_usd: 0,
       pending_usd: 3,
       tasks: [
-        {
-          ...row,
-          task_id: first,
-          status: "verified",
-          bounty_usd: 3,
-          payout: "waiting_for_payout_setup",
-          paid_at: null,
-        },
+        { ...row, task_id: first, status: "verified", bounty_usd: 3, payout: "waiting_for_payout_setup" },
       ],
+      next_cursor: null,
     });
 
     await service.workerConnectUrl(connect);
@@ -909,23 +1237,16 @@ describe.skipIf(!url)("engine on Postgres", () => {
       error.mockRestore();
     });
 
-    const view = WorkerEarnings.parse(
-      await service.workerEarnings(earningsToken(paid?.payload.earnings_url)),
-    );
+    expect(paid?.payload.me_url).toMatch(/^https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/);
+    const view = WorkerTasks.parse(await service.workerTasks(meToken(paid?.payload.me_url), {}));
     expect(view).toEqual({
       paid_usd: 3,
       pending_usd: 4.25,
       tasks: [
-        { ...row, task_id: second, status: "verified", bounty_usd: 4.25, payout: "pending", paid_at: null },
-        {
-          ...row,
-          task_id: first,
-          status: "paid",
-          bounty_usd: 3,
-          payout: "paid",
-          paid_at: expect.any(String),
-        },
+        { ...row, task_id: second, status: "verified", bounty_usd: 4.25, payout: "pending" },
+        { ...row, task_id: first, status: "paid", bounty_usd: 3, payout: "paid" },
       ],
+      next_cursor: null,
     });
   });
 
@@ -946,15 +1267,21 @@ describe.skipIf(!url)("engine on Postgres", () => {
     };
     const t1 = await work(w1, 3);
     const t2 = await work(w2, 5);
-    const view = async (phone: string) => service.workerEarnings(await helpEarnings(phone));
+    const view = async (phone: string) => service.workerTasks(await helpEarnings(phone), {});
     expect(await view(w1.phone)).toMatchObject({ pending_usd: 3, tasks: [{ task_id: t1 }] });
     expect((await view(w1.phone)).tasks).toHaveLength(1);
     expect(await view(w2.phone)).toMatchObject({ pending_usd: 5, tasks: [{ task_id: t2 }] });
     expect((await view(w2.phone)).tasks).toHaveLength(1);
-    expect(await view(idle.phone)).toEqual({ paid_usd: 0, pending_usd: 0, tasks: [] });
+    expect(await view(idle.phone)).toEqual({ paid_usd: 0, pending_usd: 0, tasks: [], next_cursor: null });
+    // A cursor from another worker's list only moves the window; it never shows that worker's tasks.
+    const other = (await view(w2.phone)).tasks[0];
+    const fromW2 = await service.workerTasks(await helpEarnings(w1.phone), {
+      cursor: `9999-01-01T00:00:00Z|${other?.task_id}`,
+    });
+    expect(fromW2.tasks.map((t) => t.task_id)).toEqual([t1]);
   });
 
-  it("opens the earnings page only with an e: token for an existing worker, signed here and under 7 days old", async () => {
+  it("lists tasks only with an e: token for an existing worker, signed here and under 7 days old", async () => {
     const w = await worker(somewhere());
     const secret = "test-link-secret-0123456789";
     const wrong = [
@@ -965,18 +1292,18 @@ describe.skipIf(!url)("engine on Postgres", () => {
       "garbage",
     ];
     for (const token of wrong) {
-      await expect(service.workerEarnings(token)).rejects.toMatchObject({
-        code: "offer_invalid",
-        message: "This earnings link is invalid or has expired.",
+      await expect(service.workerTasks(token, {})).rejects.toMatchObject({
+        code: "unauthorized",
+        message: "This link is invalid or has expired.",
       });
     }
     const token = await helpEarnings(w.phone);
     const issued = providers.clock.now();
     try {
       providers.clock.advance(7 * 24 * 60 * 60 * 1000 - 1000);
-      await expect(service.workerEarnings(token)).resolves.toMatchObject({ tasks: [] });
+      await expect(service.workerTasks(token, {})).resolves.toMatchObject({ tasks: [] });
       providers.clock.advance(2000);
-      await expect(service.workerEarnings(token)).rejects.toMatchObject({ code: "offer_invalid" });
+      await expect(service.workerTasks(token, {})).rejects.toMatchObject({ code: "unauthorized" });
     } finally {
       providers.clock.set(issued);
     }
@@ -995,7 +1322,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     try {
       const { api_key: oldKey } = await service.signupAgent({
         name: "leaky-agent",
-        owner_email: "o@example.com",
+        owner_email: "o@owners.eyes.pictures",
       });
       const a = (await service.authenticate(oldKey)) as Agent;
       const ownerToken = signToken(deps.config.link_secret, `p:${a.id}`);
@@ -1043,6 +1370,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const link = outbox.findLast((m) => m.to === w.phone && m.kind === "capture_link");
     return {
       a,
+      w,
       task_id: asked.task_id,
       token: new URL(String(link?.payload.capture_url)).searchParams.get("t") ?? "",
     };
@@ -1085,15 +1413,17 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect((await service.getTask(a, { task_id })).answer?.photo_url).toBeNull();
   });
 
-  it("keeps the photo of a capture without prominent faces, approved or sent to review", async () => {
-    for (const answers_question of [true, false]) {
-      providers.vision.setVerdict({ answers_question });
+  it("keeps the photo without prominent faces, delivering it only when moderation allows it", async () => {
+    for (const allowed of [true, false]) {
+      providers.vision.setVerdict({ allowed });
       const at = somewhere();
       const { a, task_id, token } = await claimed(at);
-      await capture(token, at);
+      const { status } = await capture(token, at);
+      expect(status === "needs_review").toBe(!allowed);
       const [key] = stored(task_id);
+      expect(key).toBeDefined();
       expect((await service.getTask(a, { task_id })).answer?.photo_url).toBe(
-        `https://storage.fake.test/photos/${key}`,
+        allowed ? `https://storage.fake.test/photos/${key}` : null,
       );
     }
   });
@@ -1117,6 +1447,80 @@ describe.skipIf(!url)("engine on Postgres", () => {
     } finally {
       remove.mockRestore();
       error.mockRestore();
+    }
+  });
+
+  const tickets = (taskId: string) =>
+    sql`select id::int, status, message, note from tickets where task_id = ${taskId}`;
+
+  it("HELP after a held answer opens a ticket, a free-text reply adds to it, and resolving it texts the worker", async () => {
+    const at = somewhere();
+    providers.vision.setVerdict({ allowed: false, reason: "A screen shows personal details." });
+    const { task_id, token, w } = await claimed(at);
+    expect(await capture(token, at)).toMatchObject({
+      status: "needs_review",
+      message:
+        "Thanks, we got it. Your answer needs a quick manual check (A screen shows personal details.). You will be paid once it is approved. To request a manual review, reply HELP to the Eyes text.",
+    });
+    const last = () => outbox.findLast((m) => m.to === w.phone)?.payload;
+
+    await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
+    const [opened] = await tickets(task_id);
+    const id = Number(opened?.id);
+    expect(opened).toMatchObject({ status: "open", message: "HELP" });
+    expect(last()).toBe(
+      `Eyes: ticket #${id} opened. Someone will check your answer by hand and text you the outcome. Reply here to add details.`,
+    );
+
+    await service.handleWorkerReply({
+      phone: w.phone,
+      intent: "unknown",
+      text: "The line is round the corner",
+    });
+    expect(last()).toBe(`Eyes: added to ticket #${id}. We will text you the outcome.`);
+    expect(await tickets(task_id)).toEqual([
+      { id, status: "open", message: "HELP\nThe line is round the corner", note: null },
+    ]);
+
+    const note = "The line is visible at the left edge.";
+    expect(await service.resolveTicket({ ticket_id: id, outcome: "release", note })).toEqual({
+      ticket_id: id,
+      task_id,
+      status: "resolved",
+    });
+    expect(last()).toBe(
+      `Eyes: ticket #${id} is resolved. Your answer was approved and you are being paid. Note: ${note}`,
+    );
+    expect(await tickets(task_id)).toMatchObject([{ id, status: "resolved", note }]);
+    await expect(service.resolveTicket({ ticket_id: id, outcome: "close", note })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+  });
+
+  it("HELP without a held answer from the last 48 hours keeps the usual replies and opens no ticket", async () => {
+    const at = somewhere();
+    const verified = await claimed(at);
+    await capture(verified.token, at);
+    providers.vision.setVerdict({ allowed: false });
+    const oldAt = somewhere();
+    const old = await claimed(oldAt);
+    await capture(old.token, oldAt);
+    const start = providers.clock.now();
+    providers.clock.advance(48 * 60 * 60 * 1000 + 1);
+    try {
+      for (const { w, task_id } of [verified, old]) {
+        await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
+        expect(String(outbox.findLast((m) => m.to === w.phone)?.payload)).toMatch(
+          /^You're (in|all set)\. Eyes texts you paid photo tasks near you\.\n[\s\S]*Your setup: /,
+        );
+        await service.handleWorkerReply({ phone: w.phone, intent: "unknown", text: "hello?" });
+        expect(outbox.findLast((m) => m.to === w.phone)?.payload).toMatch(
+          /^Didn't catch that\. Reply YES to take a task or STOP to pause\. Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/,
+        );
+        expect(await tickets(task_id)).toEqual([]);
+      }
+    } finally {
+      providers.clock.set(start);
     }
   });
 
@@ -1161,6 +1565,39 @@ describe.skipIf(!url)("engine on Postgres", () => {
       status: "verified",
       answer: { answer_text: "short" },
     });
+  });
+
+  it("TASK texts the live capture link for the worker's open claim, and the no-task text when none is open, submitted or expired", async () => {
+    const at = somewhere();
+    const a = await agent();
+    const w = await worker(north(at, 50));
+    const none = "You have no open task right now. We'll text you when one is near.";
+    const task = async () => {
+      await service.handleWorkerReply({ phone: w.phone, intent: "task", text: "TASK" });
+      return outbox.findLast((m) => m.to === w.phone)?.payload;
+    };
+    const claimLink = async () => {
+      await reply(w.phone);
+      return String(
+        outbox.findLast((m) => m.to === w.phone && m.kind === "capture_link")?.payload.capture_url,
+      );
+    };
+
+    expect(await task()).toBe(none);
+
+    await ask(a, at);
+    const link = await claimLink();
+    expect(await task()).toBe(`Eyes: here is the link for your task: ${link}`);
+    await capture(new URL(link).searchParams.get("t") ?? "", at);
+    expect(await task()).toBe(none);
+
+    const { task_id } = await ask(a, at);
+    const next = await claimLink();
+    expect(next).not.toBe(link);
+    expect(await task()).toBe(`Eyes: here is the link for your task: ${next}`);
+    const past = new Date(providers.clock.now().getTime() - 60_000);
+    await sql`update tasks set deadline_at = ${past} where id = ${task_id}`;
+    expect(await task()).toBe(none);
   });
 
   it("a released task is offered again to idle workers it was offered to, never the busy or the releaser, and their YES claims it", async () => {
@@ -1215,5 +1652,455 @@ describe.skipIf(!url)("engine on Postgres", () => {
     }
     expect(offersTo(other.phone)).toHaveLength(2);
     expect(offersTo(releaser.phone)).toHaveLength(1);
+  });
+
+  describe("disputes (ADR-026)", () => {
+    // A paid task: the worker finished payout setup, so the capture pays out a fake transfer.
+    async function paidTask() {
+      const at = somewhere();
+      const { a, w, task_id, token } = await claimed(at);
+      await service.workerConnectUrl(connectToken(w.phone));
+      expect(await capture(token, at)).toMatchObject({ status: "paid" });
+      return { a, w, task_id, at };
+    }
+    const balance = async (a: Agent) => (await service.getBalance(a)).balance_usd;
+    const disputeTicket = async (task_id: string) =>
+      Number((await sql`select id from tickets where task_id = ${task_id} and kind = 'dispute'`)[0]?.id);
+
+    it("dispute_answer opens a dispute ticket that get_task reports as open", async () => {
+      const { a, task_id } = await paidTask();
+      await service.disputeAnswer(a, { task_id, reason: "The photo shows a different cafe." });
+      const [t] =
+        await sql`select kind, status, dispute_status, message from tickets where task_id = ${task_id}`;
+      expect(t).toMatchObject({
+        kind: "dispute",
+        status: "open",
+        dispute_status: "open",
+        message: "The photo shows a different cafe.",
+      });
+      expect((await service.getTask(a, { task_id })).dispute).toEqual({ status: "open", refunded_usd: null });
+    });
+
+    it("confirm fraud refunds bounty + fee, reverses the transfer once, bans the worker; a double click moves nothing", async () => {
+      const { a, w, task_id, at } = await paidTask();
+      await service.disputeAnswer(a, { task_id, reason: "Fake: the cafe was closed." });
+      const before = await balance(a);
+      const ticket_id = await disputeTicket(task_id);
+      const results = (
+        await Promise.all([
+          service.confirmFraud({ ticket_id, note: "fake photo" }),
+          service.confirmFraud({ ticket_id, note: "fake photo" }),
+        ])
+      ).sort((x, y) => Number(x.already_resolved) - Number(y.already_resolved));
+      expect(results[0]).toMatchObject({
+        dispute_status: "upheld",
+        agent_refund_cents: 350,
+        reversal: "reversed",
+        worker_banned: true,
+        already_resolved: false,
+      });
+      expect(results[1]).toMatchObject({
+        dispute_status: "upheld",
+        agent_refund_cents: 0,
+        already_resolved: true,
+      });
+      expect(await balance(a)).toBeCloseTo(before + 3.5);
+      expect(
+        providers.payments.reversals.filter((r) => r.idempotency_key === `reverse-${task_id}`),
+      ).toHaveLength(1);
+      expect(await ledger(task_id)).toContainEqual(
+        expect.objectContaining({ type: "fraud_refund", amount: 350 }),
+      );
+      expect((await service.getBalance(a)).escrowed_usd).toBeGreaterThanOrEqual(0);
+      expect((await service.getTask(a, { task_id })).dispute).toEqual({
+        status: "upheld",
+        refunded_usd: 3.5,
+      });
+      const [banned] = await sql`select banned, opted_in from workers where id = ${w.worker_id}`;
+      expect(banned).toMatchObject({ banned: true, opted_in: false });
+      expect(await sql`select 1 from worker_location_tokens where worker_id = ${w.worker_id}`).toHaveLength(
+        0,
+      );
+      await service.handleWorkerReply({ phone: w.phone, intent: "start", text: "START" });
+      expect(outbox.findLast((m) => m.to === w.phone)?.payload).toBe("This number can't take Eyes tasks.");
+      expect((await sql`select opted_in from workers where id = ${w.worker_id}`)[0]?.opted_in).toBe(false);
+      // The banned worker was the only one here: no offer goes out, the new task finds nobody.
+      await expect(ask(a, at)).rejects.toMatchObject({ code: "no_workers_nearby" });
+    });
+
+    it("records the reversal as owed when the connected account has no balance", async () => {
+      const { a, task_id } = await paidTask();
+      await service.disputeAnswer(a, { task_id, reason: "Fake answer, wrong place." });
+      const ticket_id = await disputeTicket(task_id);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      providers.payments.failReversals("balance_insufficient");
+      try {
+        expect(await service.confirmFraud({ ticket_id, note: "fake" })).toMatchObject({
+          reversal: "owed",
+          reversal_owed_cents: 300,
+        });
+      } finally {
+        providers.payments.failReversals(null);
+        error.mockRestore();
+      }
+      const [row] = await sql`select reversal_owed_cents::int as owed from tickets where id = ${ticket_id}`;
+      expect(row?.owed).toBe(300);
+      expect(await service.confirmFraud({ ticket_id, note: "again" })).toMatchObject({
+        reversal: "owed",
+        reversal_owed_cents: 300,
+        already_resolved: true,
+      });
+    });
+
+    it("reject dispute closes the ticket once and the worker keeps the pay", async () => {
+      const { a, task_id } = await paidTask();
+      await service.disputeAnswer(a, { task_id, reason: "I think the line was longer." });
+      const before = await balance(a);
+      const ticket_id = await disputeTicket(task_id);
+      expect(await service.rejectDispute({ ticket_id, note: "photo matches" })).toMatchObject({
+        dispute_status: "rejected",
+        already_resolved: false,
+      });
+      expect(await service.rejectDispute({ ticket_id, note: "photo matches" })).toMatchObject({
+        already_resolved: true,
+      });
+      expect(await service.getTask(a, { task_id })).toMatchObject({
+        status: "paid",
+        dispute: { status: "rejected", refunded_usd: null },
+      });
+      expect(await balance(a)).toBe(before);
+      expect(providers.payments.reversals.some((r) => r.idempotency_key === `reverse-${task_id}`)).toBe(
+        false,
+      );
+    });
+
+    it("confirm fraud on an unpaid needs_review answer refunds through escrow and reverses nothing", async () => {
+      const at = somewhere();
+      const { a, task_id, token } = await claimed(at);
+      providers.vision.setVerdict({ allowed: false });
+      await capture(token, at);
+      await service.disputeAnswer(a, { task_id, reason: "Fake answer, wrong place." });
+      const r = await service.confirmFraud({ ticket_id: await disputeTicket(task_id), note: "fake" });
+      expect(r).toMatchObject({ agent_refund_cents: 350, reversal: "none" });
+      expect(await ledger(task_id)).toContainEqual(expect.objectContaining({ type: "refund", amount: 350 }));
+      expect((await service.getBalance(a)).escrowed_usd).toBe(0);
+    });
+  });
+
+  describe("edge paths", () => {
+    const secret = deps.config.link_secret;
+
+    it("geocodes a string location, refuses an unknown place, and gives no ETA with nobody nearby", async () => {
+      const a = await agent();
+      const at = somewhere();
+      const quote = await service.quoteTask(a, { location: `${at.lat},${at.lng}`, task_type: "line_length" });
+      expect(quote).toMatchObject({
+        workers_nearby: 0,
+        est_minutes_to_answer: null,
+        resolved_location: { lat: at.lat, lng: at.lng, label: `${at.lat},${at.lng}` },
+      });
+      await expect(
+        service.quoteTask(a, { location: "Nowhere Street 1, Atlantis", task_type: "line_length" }),
+      ).rejects.toMatchObject({ code: "location_not_found" });
+    });
+
+    it("explains an unsafe quote with the classifier text or the default message, and refuses ask_eyes", async () => {
+      const a = await agent();
+      const at = somewhere();
+      const refusals: [string | null, string][] = [
+        ["Weapons are off limits.", "Weapons are off limits."],
+        [null, ERRORS.unsafe_task.message],
+      ];
+      try {
+        for (const [reason, expected] of refusals) {
+          safety = { allowed: false, category: "illegal_or_dangerous", reason, fix: null, layer: "rules" };
+          expect(await service.quoteTask(a, { location: at, task_type: "line_length" })).toMatchObject({
+            allowed: false,
+            reason_if_not: expected,
+          });
+        }
+        await expect(ask(a, at)).rejects.toMatchObject({ code: "unsafe_task" });
+      } finally {
+        safety = ALLOW;
+      }
+    });
+
+    it("names 'none' for a key allowed no task types, and an owner link for a missing agent is invalid", async () => {
+      const a = await agent();
+      await service.updateSpendPolicy(signToken(secret, `p:${a.id}`), {
+        max_bounty_usd: 5,
+        daily_cap_usd: 50,
+        allowed_task_types: [],
+      });
+      const quote = await service.quoteTask(a, { location: somewhere(), task_type: "line_length" });
+      expect(quote.reason_if_not).toContain("its allowed_task_types are none.");
+      await expect(
+        service.updateSpendPolicy(signToken(secret, `p:${randomUUID()}`), {
+          max_bounty_usd: 5,
+          daily_cap_usd: 50,
+          allowed_task_types: ["line_length"],
+        }),
+      ).rejects.toMatchObject({ code: "owner_link_invalid" });
+    });
+
+    it("refuses an ask without an idempotency key before charging", async () => {
+      const at = somewhere();
+      const a = await agent();
+      await worker(north(at, 100));
+      await expect(ask(a, at, { idempotency_key: undefined })).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+      expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+    });
+
+    it("tells an agent with no tasks how to start, or to drop the status filter", async () => {
+      const a = await agent();
+      expect(await service.listTasks(a, { limit: 20 })).toEqual({
+        tasks: [],
+        next_step: "You have no tasks yet. Call quote_task, then ask_eyes to create one.",
+      });
+      expect((await service.listTasks(a, { status: "paid", limit: 20 })).next_step).toBe(
+        "You have no tasks with status paid. Call list_tasks without status to see all your tasks.",
+      );
+    });
+
+    it("opens a $20 top-up checkout only for a t: token", async () => {
+      const a = await agent();
+      const checkout = vi.spyOn(providers.payments, "createTopupCheckout");
+      try {
+        expect(await service.topupCheckoutUrl(signToken(secret, `t:${a.id}`))).toBe(
+          "https://api.eyes.test/topup/done?simulated=1",
+        );
+        expect(checkout).toHaveBeenCalledWith(
+          expect.objectContaining({ agent_id: a.id, amount_cents: 2000 }),
+        );
+        for (const token of ["nope", signToken(secret, `p:${a.id}`)])
+          await expect(service.topupCheckoutUrl(token)).rejects.toMatchObject({
+            code: "unauthorized",
+            message: "This top-up link is invalid.",
+          });
+      } finally {
+        checkout.mockRestore();
+      }
+    });
+
+    it("live mode issues eyes_live_ keys with no grant, and owner email failures log a redacted reason", async () => {
+      const live = createEyesService({ ...deps, config: { ...deps.config, test_mode: false } });
+      const send = vi
+        .spyOn(providers.email, "send")
+        .mockRejectedValueOnce("smtp down")
+        .mockRejectedValueOnce(
+          Object.assign(new Error("rejected owner@owners.eyes.pictures, see https://smtp.example/x"), {
+            status: 550,
+          }),
+        );
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const first = await live.signupAgent({
+          name: "live-agent",
+          owner_email: "owner@owners.eyes.pictures",
+        });
+        expect(first.api_key).toMatch(/^eyes_live_/);
+        expect(first.balance_usd).toBe(0);
+        expect(first.next_step).toContain("We could not email your user at owner@owners.eyes.pictures");
+        const second = await live.signupAgent({
+          name: "live-agent",
+          owner_email: "owner@owners.eyes.pictures",
+        });
+        expect(error.mock.calls.map((call) => String(call[0]))).toEqual([
+          `owner email for agent ${first.agent_id} failed: unknown`,
+          `owner email for agent ${second.agent_id} failed: Error status 550: rejected <redacted> see <redacted>`,
+        ]);
+      } finally {
+        send.mockRestore();
+        error.mockRestore();
+      }
+    });
+
+    it("skips owner email to reserved test domains at debug level and logs a provider 403 recipient denial as a warning", async () => {
+      const send = vi.spyOn(providers.email, "send");
+      const logs = (["debug", "warn", "error"] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => {}),
+      );
+      const [debug, warn, error] = logs;
+      try {
+        for (const to of [
+          "o@example.com",
+          "o@a.example.net",
+          "o@x.test",
+          "o@x.example",
+          "o@x.invalid",
+          "o@app.localhost",
+        ]) {
+          const s = await service.signupAgent({ name: "smoke-agent", owner_email: to });
+          expect(s.next_step).toContain(`could not email your user at ${to}`);
+        }
+        expect(send).not.toHaveBeenCalled();
+        expect(debug).toHaveBeenCalledTimes(6);
+        expect(String(debug?.mock.calls[0]?.[0])).toMatch(/skipped: reserved test domain$/);
+
+        send.mockRejectedValueOnce(
+          Object.assign(
+            new Error("cannot send to o@x.co: x.co is not a Primitive-managed recipient domain"),
+            {
+              name: "PrimitiveApiError",
+              status: 403,
+            },
+          ),
+        );
+        const denied = await service.signupAgent({ name: "scoped-agent", owner_email: "o@notexample.com" });
+        expect(denied.next_step).toContain("could not email your user at o@notexample.com");
+        expect(error).not.toHaveBeenCalled();
+        expect(warn?.mock.calls.map((call) => String(call[0]))).toEqual([
+          `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
+        ]);
+      } finally {
+        send.mockRestore();
+        for (const log of logs) log.mockRestore();
+      }
+    });
+
+    it("ignores STOP from an unknown number and anything but START from a banned worker", async () => {
+      const before = outbox.length;
+      await service.handleWorkerReply({ phone: newPhone(), intent: "stop", text: "STOP" });
+      const w = await worker(somewhere());
+      await sql`update workers set banned = true where id = ${w.worker_id}`;
+      const sent = outbox.length;
+      await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
+      expect(outbox.length).toBe(sent);
+      expect(outbox.slice(before).some((m) => m.to !== w.phone)).toBe(false);
+    });
+
+    it("reuses the worker's Stripe account on a second payout setup link", async () => {
+      const w = await worker(somewhere());
+      const create = vi.spyOn(providers.payments, "createWorkerAccount");
+      try {
+        const token = connectToken(w.phone);
+        const first = await service.workerConnectUrl(token);
+        expect(await service.workerConnectUrl(token)).toBe(first);
+        expect(create).toHaveBeenCalledTimes(1);
+      } finally {
+        create.mockRestore();
+      }
+    });
+
+    it("needs the photo a task requires, answers Yes/No from answer_bool, and shows no payout before release", async () => {
+      for (const answer_bool of [true, false]) {
+        const at = somewhere();
+        const { a, w, task_id, token } = await claimed(at);
+        const fields = {
+          lat: at.lat,
+          lng: at.lng,
+          accuracy_m: 5,
+          captured_at: providers.clock.now().toISOString(),
+          answer_text: null,
+          answer_bool,
+        };
+        await expect(service.submitCapture(token, fields, null)).rejects.toMatchObject({
+          code: "invalid_input",
+          fix: "Take a photo with the capture page camera and submit again.",
+        });
+        const earnings = await service.workerTasks(await helpEarnings(w.phone), {});
+        expect(earnings.tasks.find((t) => t.task_id === task_id)).toMatchObject({
+          status: "claimed",
+          payout: null,
+        });
+        await service.submitCapture(token, fields, {
+          bytes: new Uint8Array([1]),
+          content_type: "image/jpeg",
+        });
+        expect((await service.getTask(a, { task_id })).answer).toMatchObject({
+          answer_text: answer_bool ? "Yes" : "No",
+          answer_bool,
+        });
+      }
+    });
+
+    it("pings stale workers, re-offers after 30 s, and logs ping and re-offer failures by name", async () => {
+      const pinging = createEyesService({ ...deps, config: { ...deps.config, location_ping: true } });
+      const places = [somewhere(), somewhere(), somewhere(), somewhere()];
+      const stale: { phone: string; worker_id: string }[] = [];
+      for (const p of places) stale.push(await worker(north(p, 200)));
+      providers.clock.advance(25 * 3_600_000);
+      await worker(north(places[0] as LatLng, 100));
+      await worker(north(places[1] as LatLng, 100));
+      await worker(north(places[3] as LatLng, 100));
+      const a = await agent();
+      const askAt = (at: LatLng | undefined) =>
+        pinging.askEyes(a, {
+          question: "Is the line long right now?",
+          location: at as LatLng,
+          task_type: "line_length",
+          bounty_usd: 3,
+          deadline_minutes: 30,
+          require_photo: true,
+          idempotency_key: randomUUID(),
+        });
+      // The pinged worker taps the HERE link from its ping text.
+      const answerPing = (i: number) => {
+        const ping = outbox.findLast(
+          (m) => m.to === stale[i]?.phone && /^Eyes ping /.test(String(m.payload)),
+        );
+        const link = /https:\S+/.exec(String(ping?.payload))?.[0] ?? "x:";
+        return service.updateWorkerLocation(new URL(link).searchParams.get("t") ?? "", {
+          ...north(places[i] as LatLng, 150),
+          source: "here_link",
+        });
+      };
+      const timers: (() => Promise<unknown>)[] = [];
+      const realSetTimeout = globalThis.setTimeout;
+      const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        fn: () => Promise<unknown>,
+        ms?: number,
+        ...rest: unknown[]
+      ) => {
+        // postgres also arms 30 s timers; hold back only the engine's re-offer.
+        if (ms !== 30_000 || !String(fn).includes("offerMore")) return realSetTimeout(fn, ms, ...rest);
+        timers.push(fn);
+        return { unref: () => {} };
+      }) as unknown as typeof setTimeout);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        // Ping delivered: after 30 s the task goes to the pinged worker, now fresh.
+        const first = await askAt(places[0]);
+        expect(first.workers_notified).toBe(1);
+        await answerPing(0);
+        await timers[0]?.();
+        expect(
+          outbox.some(
+            (m) => m.to === stale[0]?.phone && m.kind === "offer" && m.payload.task_id === first.task_id,
+          ),
+        ).toBe(true);
+
+        // The re-offer itself fails: logged by error name, never thrown.
+        const second = await askAt(places[1]);
+        await answerPing(1);
+        const offerFail = vi.spyOn(providers.messaging, "sendOffer").mockImplementationOnce(() => {
+          throw new TypeError("bad offer");
+        });
+        await timers[1]?.();
+        offerFail.mockRestore();
+
+        // Nobody fresh: the ping still goes out (here it fails to send), then no_workers_nearby.
+        vi.spyOn(providers.messaging, "sendText").mockRejectedValueOnce("carrier down");
+        await expect(askAt(places[2])).rejects.toMatchObject({ code: "no_workers_nearby" });
+
+        // Pinging itself throws: the ask still succeeds, with no re-offer timer.
+        vi.spyOn(providers.messaging, "sendText").mockImplementationOnce(() => {
+          throw new RangeError("bad ping");
+        });
+        expect((await askAt(places[3])).workers_notified).toBe(1);
+        expect(timers).toHaveLength(2);
+        expect(error.mock.calls.map((call) => String(call[0]))).toEqual([
+          `re-offer for task ${second.task_id} failed: TypeError`,
+          "ping failed: string",
+          "location pings failed: RangeError",
+        ]);
+      } finally {
+        timer.mockRestore();
+        error.mockRestore();
+        vi.restoreAllMocks();
+      }
+    });
   });
 });

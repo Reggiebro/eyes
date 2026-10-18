@@ -6,7 +6,8 @@
     ".": "./src/server.ts"
   },
   "scripts": {
-    "start": "node src/server.ts"
+    "start": "node src/server.ts",
+    "build": "node --disable-warning=ExperimentalWarning ../../../scripts/build-ops-view.ts"
   },
   "dependencies": {
     "@eyes/core": "workspace:*",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@eyes/engine": "workspace:*",
+    "happy-dom": "21.0.3",
     "postgres": "3.4.9"
   }
 }

@@ -142,7 +142,8 @@ test("an agent asks over MCP, a texted worker captures on site, the agent gets a
   for (const w of [...NEAR, FAR]) {
     await post("/w/join", w);
     await textEyes(w.phone, "START");
-    expect(String(sent(w.phone, "text").at(-1)?.payload)).toContain("You are in.");
+    // START is one text: the app, payouts and setup links, then YES and STOP.
+    expect(String(sent(w.phone, "text").at(-1)?.payload)).toMatch(/^You're in\..*\n1\. Get the app/s);
   }
   const connectUrl = String(sent(PAYEE.phone, "text").at(-1)?.payload).match(/\S+\/w\/connect\/\S+/)?.[0];
   expect(connectUrl?.startsWith(`${API}/w/connect/`)).toBe(true);
@@ -186,8 +187,8 @@ test("an agent asks over MCP, a texted worker captures on site, the agent gets a
   await page.getByLabel("Anything to add?").fill(ANSWER);
   await page.getByRole("button", { name: "Send to Eyes" }).click();
   await expect(page.getByRole("heading", { name: "Verified and paid" })).toBeVisible();
-  await expect(page.getByText("Verified and paid. $3.00 is on its way to your account.")).toBeVisible();
-  for (const check of ["Location matches the place", "Photo taken in time", "Photo answers the question"]) {
+  await expect(page.locator("#message")).toHaveText("$3.00 is on its way to your account. Thank you!");
+  for (const check of ["Location matches the place", "Photo taken in time", "Photo is safe to share"]) {
     await expect(page.getByText(`${check}: passed`)).toBeVisible();
   }
 
@@ -217,7 +218,7 @@ test("an agent asks over MCP, a texted worker captures on site, the agent gets a
       task_id: taskId,
       place_label: CAFE.label,
       amount_cents: 300,
-      earnings_url: expect.stringContaining(`${API}/w/earnings/`),
+      me_url: expect.stringMatching(/\/me#c=[\w-]+\.[\w-]+$/),
       live_payouts: true,
     },
   ]);

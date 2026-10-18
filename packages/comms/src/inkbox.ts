@@ -75,8 +75,8 @@ export function alreadyClaimedText(msg: Parameters<Messaging["sendAlreadyClaimed
 export function paidText(msg: Parameters<Messaging["sendPaid"]>[1]): string {
   const place = placeText(msg.place_label);
   return msg.live_payouts
-    ? `Eyes: you've been paid ${dollars(msg.amount_cents)} for the task at ${place}. Thank you! Your earnings: ${msg.earnings_url}`
-    : `Eyes: your answer for the task at ${place} was accepted. No money was sent because payouts are simulated on this test server. Your earnings: ${msg.earnings_url}`;
+    ? `Eyes: you've been paid ${dollars(msg.amount_cents)} for the task at ${place}. Thank you! Your tasks: ${msg.me_url}`
+    : `Eyes: your answer for the task at ${place} was accepted. No money was sent because payouts are simulated on this test server. Your tasks: ${msg.me_url}`;
 }
 
 const INTENTS: Record<string, ReplyIntent> = {
@@ -112,7 +112,37 @@ const INTENTS: Record<string, ReplyIntent> = {
   unstop: "start",
   help: "help",
   info: "help",
+  here: "here",
+  location: "here",
+  "i m here": "here",
+  "im here": "here",
+  "i am here": "here",
+  shortcut: "shortcut",
+  auto: "shortcut",
+  automation: "shortcut",
+  app: "app",
+  install: "install",
+  download: "install",
+  testflight: "install",
+  task: "task",
+  link: "task",
 };
+
+// Optimal string alignment distance: insert, delete, substitute and adjacent swap each cost 1.
+function osa(a: string, b: string): number {
+  const w = b.length + 1;
+  const d = Array.from({ length: (a.length + 1) * w }, (_, k) => Math.floor(k / w) + (k % w));
+  const at = (i: number, j: number) => d[i * w + j] as number;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i * w + j] = Math.min(
+        at(i - 1, j) + 1,
+        at(i, j - 1) + 1,
+        at(i - 1, j - 1) + (a[i - 1] === b[j - 1] ? 0 : 1),
+        i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1] ? at(i - 2, j - 2) + 1 : Infinity,
+      );
+  return at(a.length, b.length);
+}
 
 export function parseReplyIntent(text: string): ReplyIntent {
   const tokens =
@@ -125,7 +155,18 @@ export function parseReplyIntent(text: string): ReplyIntent {
   if (words.length === 0) return asked ? "help" : "unknown";
   const lookup = (phrase: string) => (Object.hasOwn(INTENTS, phrase) ? INTENTS[phrase] : undefined);
   const [first, ...rest] = words.map(lookup);
-  const intent = (rest.every((i) => i === first) && first) || lookup(words.join(" ")) || "unknown";
+  const word = words.join(" ");
+  let intent: ReplyIntent = (rest.every((i) => i === first) && first) || lookup(word) || "unknown";
+  // Typo tolerance for a lone word: 4+ letters within one edit, 3 letters only by an adjacent swap.
+  if (intent === "unknown" && words.length === 1 && word.length >= 3) {
+    const near = new Set(
+      Object.entries(INTENTS)
+        .filter(([k]) => !k.includes(" ") && osa(word, k) === 1)
+        .filter(([k]) => word.length > 3 || [...k].sort().join("") === [...word].sort().join(""))
+        .map(([, i]) => i),
+    );
+    if (near.size === 1) intent = [...near][0] as ReplyIntent;
+  }
   return asked && intent !== "stop" && intent !== "help" ? "unknown" : intent;
 }
 
@@ -208,7 +249,10 @@ type Received = {
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
-function inboundReply(body: string): { id: string; phone: string; text: string } | null {
+// Inkbox delivers an Apple "Share My Location" as content "\ufffd" (or empty) with no media.
+function inboundReply(
+  body: string,
+): { id: string; phone: string; text: string; locationShare?: boolean } | null {
   let evt: Received | null;
   try {
     evt = JSON.parse(body) as Received | null;
@@ -221,10 +265,14 @@ function inboundReply(body: string): { id: string; phone: string; text: string }
     return { id: str(evt?.id) || str(sms.id), phone: str(sms.remote_phone_number), text: str(sms.text) };
   }
   if (imessage && !imessage.is_group) {
+    const text = str(imessage.content);
+    const media = imessage.media;
     return {
       id: str(evt?.id) || str(imessage.id),
       phone: str(imessage.remote_number),
-      text: str(imessage.content),
+      text,
+      locationShare:
+        /^[\ufffc\ufffd]+$/.test(text) || (text === "" && !(Array.isArray(media) ? media.length : media)),
     };
   }
   return null;
@@ -243,7 +291,7 @@ export function inkboxRoutes(deps: RouteDeps, env: Env): Hono {
       return c.text("ignored");
     }
     try {
-      const intent = parseReplyIntent(reply.text);
+      const intent = reply.locationShare ? "location_share" : parseReplyIntent(reply.text);
       await deps.service.handleWorkerReply({ phone: reply.phone, intent, text: reply.text });
     } catch (err) {
       const kind =

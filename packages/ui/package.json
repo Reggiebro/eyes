@@ -1,0 +1,14 @@
+{
+  "name": "@eyes/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tokens.css": "./tokens.css",
+    "./components.css": "./components.css",
+    "./tailwind.css": "./tailwind.css",
+    "./chatgpt.css": "./chatgpt.css",
+    "./icons.svg": "./icons.svg",
+    "./header": "./header.ts",
+    "./page": "./page.ts"
+  }
+}

@@ -660,16 +660,20 @@
                               "type": "object",
                               "properties": {
                                 "gps_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The worker was within about 150 m of the place."
                                 },
                                 "fresh_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The photo was taken live, before the deadline."
                                 },
                                 "vision_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct."
                                 },
                                 "vision_reason": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "description": "Why the photo is or is not safe to share."
                                 }
                               },
                               "required": ["gps_ok", "fresh_ok", "vision_ok", "vision_reason"],
@@ -848,16 +852,20 @@
                               "type": "object",
                               "properties": {
                                 "gps_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The worker was within about 150 m of the place."
                                 },
                                 "fresh_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The photo was taken live, before the deadline."
                                 },
                                 "vision_ok": {
-                                  "type": "boolean"
+                                  "type": "boolean",
+                                  "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct."
                                 },
                                 "vision_reason": {
-                                  "type": "string"
+                                  "type": "string",
+                                  "description": "Why the photo is or is not safe to share."
                                 }
                               },
                               "required": ["gps_ok", "fresh_ok", "vision_ok", "vision_reason"],
@@ -893,6 +901,30 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "dispute": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["open", "upheld", "rejected"],
+                              "description": "open: a person is reviewing your dispute. upheld: the answer was fake; bounty and fee were refunded to your balance. rejected: the answer stands and the worker keeps the pay."
+                            },
+                            "refunded_usd": {
+                              "description": "What was refunded to your balance when the dispute was upheld.",
+                              "type": ["number", "null"]
+                            }
+                          },
+                          "required": ["status", "refunded_usd"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Your dispute_answer on this task and its outcome; null if you never disputed it."
                     }
                   },
                   "required": [
@@ -906,7 +938,8 @@
                     "deadline_at",
                     "created_at",
                     "claimed_at",
-                    "answer"
+                    "answer",
+                    "dispute"
                   ],
                   "additionalProperties": false
                 }

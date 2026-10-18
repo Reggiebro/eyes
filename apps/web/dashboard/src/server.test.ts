@@ -1,9 +1,10 @@
 import { once } from "node:events";
 import { request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect, Server } from "node:net";
 import type { Rpc } from "@eyes/db";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDashboardServer } from "./server.ts";
+import { Window } from "happy-dom";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDashboardServer, dbFromEnv, OPS_PAGE, startFromEnv } from "./server.ts";
 
 const FEED = {
   tasks: [],
@@ -13,12 +14,13 @@ const FEED = {
 };
 
 let calls: { fn: string; args: unknown }[] = [];
-let failNext = false;
+let failNext: unknown;
 const rpc = (async (fn: string, args: Record<string, unknown>) => {
   calls.push({ fn, args });
-  if (failNext) {
-    failNext = false;
-    throw new Error("connection refused");
+  if (failNext !== undefined) {
+    const err = failNext;
+    failNext = undefined;
+    throw err;
   }
   return [FEED];
 }) as Rpc;
@@ -51,11 +53,13 @@ function get(path: string, host = `127.0.0.1:${port}`, method = "GET") {
 }
 
 describe("dashboard server", () => {
-  it("serves the page at /", async () => {
+  it("serves the page at /, with the shared @eyes/ui tokens inlined", async () => {
     const res = await get("/");
     expect(res.status).toBe(200);
     expect(res.type).toContain("text/html");
     expect(res.body).toContain("<title>Eyes live</title>");
+    expect(res.body).toContain("--eyes-surface:");
+    expect(res.body).not.toContain("/* @eyes/ui */");
   });
 
   it("serves the feed function's row at /feed, with worker positions at full precision", async () => {
@@ -68,7 +72,7 @@ describe("dashboard server", () => {
   });
 
   it("answers 502 when the database call fails and keeps serving", async () => {
-    failNext = true;
+    failNext = new Error("connection refused");
     expect((await get("/feed")).status).toBe(502);
     expect((await get("/feed")).status).toBe(200);
   });
@@ -84,5 +88,163 @@ describe("dashboard server", () => {
   it("answers 404 for other paths and methods", async () => {
     expect((await get("/nope")).status).toBe(404);
     expect((await get("/feed", undefined, "POST")).status).toBe(404);
+  });
+
+  it("answers 502 for a rejection that is not an Error", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    failNext = "pool exhausted";
+    expect((await get("/feed")).status).toBe(502);
+    expect(spy).toHaveBeenCalledWith("feed failed:", "pool exhausted");
+    spy.mockRestore();
+  });
+});
+
+describe("dbFromEnv", () => {
+  it("prefers DATABASE_URL", () => {
+    expect(
+      dbFromEnv({
+        DATABASE_URL: "postgres://test",
+        INSFORGE_BASE_URL: "https://insforge.test",
+        INSFORGE_API_KEY: "key",
+      }),
+    ).toEqual({ kind: "postgres", url: "postgres://test" });
+  });
+
+  it("uses InsForge only when both of its variables are set, and refuses to start otherwise", () => {
+    expect(dbFromEnv({ INSFORGE_BASE_URL: "https://insforge.test", INSFORGE_API_KEY: "key" })).toEqual({
+      kind: "insforge",
+      base_url: "https://insforge.test",
+      api_key: "key",
+    });
+    expect(() => dbFromEnv({ INSFORGE_BASE_URL: "https://insforge.test" })).toThrow("Set DATABASE_URL");
+    expect(() => dbFromEnv({})).toThrow("to read the feed.");
+  });
+});
+
+describe("startFromEnv", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("listens on PORT on loopback and logs the URL", () => {
+    const listen = mockListen();
+    const log = vi.fn();
+    startFromEnv({ INSFORGE_BASE_URL: "https://insforge.test", INSFORGE_API_KEY: "key", PORT: "5123" }, log);
+    expect(listen).toHaveBeenCalledWith(5123, "127.0.0.1", expect.any(Function));
+    expect(log).toHaveBeenCalledWith("EYES dashboard on http://127.0.0.1:5123");
+  });
+
+  it("defaults to port 4400 when PORT is unset", () => {
+    const listen = mockListen();
+    const log = vi.fn();
+    startFromEnv({ INSFORGE_BASE_URL: "https://insforge.test", INSFORGE_API_KEY: "key" }, log);
+    expect(listen).toHaveBeenCalledWith(4400, "127.0.0.1", expect.any(Function));
+    expect(log).toHaveBeenCalledWith("EYES dashboard on http://127.0.0.1:4400");
+  });
+
+  it("throws before listening when no database is configured", () => {
+    const listen = mockListen();
+    expect(() => startFromEnv({}, vi.fn())).toThrow("Set DATABASE_URL");
+    expect(listen).not.toHaveBeenCalled();
+  });
+});
+
+describe("host guard", () => {
+  it("answers 403 and never calls the database when the Host header is missing", async () => {
+    const before = calls.length;
+    expect(await getWithoutHost("/feed")).toBe(403);
+    expect(calls).toHaveLength(before);
+  });
+});
+
+function mockListen() {
+  return vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server, ...args: unknown[]) {
+    const done = args.find((arg): arg is () => void => typeof arg === "function");
+    done?.();
+    return this;
+  } as never);
+}
+
+async function getWithoutHost(path: string): Promise<number> {
+  const socket = connect(port, "127.0.0.1");
+  socket.setEncoding("utf8");
+  let raw = "";
+  socket.on("data", (chunk: string) => {
+    raw += chunk;
+  });
+  socket.end(`GET ${path} HTTP/1.0\r\n\r\n`);
+  await once(socket, "end");
+  return Number(raw.match(/^HTTP\/1\.[01] (\d{3})/)?.[1] ?? 0);
+}
+
+describe("OPS_PAGE", () => {
+  it("draws the header logo with the shared viewfinder mark from @eyes/ui, not a local square", () => {
+    expect(OPS_PAGE).toContain('<span class="ui-mark" aria-hidden="true"></span>Eyes ops');
+    expect(OPS_PAGE).toMatch(/\.ui-mark \{[^}]*radial-gradient/);
+    expect(OPS_PAGE).not.toMatch(/^\.mark \{/m);
+  });
+
+  it("inlines the ops-view modules as the only inline script, and that script boots the page", async () => {
+    const inline = [...OPS_PAGE.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(
+      ([, s = ""]) => s,
+    );
+    expect(inline).toHaveLength(1);
+    const script = inline[0] as string;
+    expect(OPS_PAGE).not.toContain("/* @eyes/ops-view */");
+    expect(script).not.toMatch(/^\s*(import|export) /m);
+    expect(script.trimEnd()).toMatch(/boot\(window\);\n}\)\(\);$/);
+
+    const happy = new Window({ url: "https://api.eyes.test/ops#money" });
+    const win = happy as unknown as globalThis.Window;
+    win.document.body.innerHTML = (/<body[^>]*>([\s\S]*)<\/body>/.exec(OPS_PAGE)?.[1] ?? "").replace(
+      /<script[\s\S]*?<\/script>/g,
+      "",
+    );
+    const replies: Record<string, unknown> = {
+      "/ops/feed": {
+        tasks: [],
+        ledger: [{ type: "fee", created_at: "2026-10-17T12:00:00Z", task_id: null, amount_cents: 75 }],
+        workers: [],
+        totals: { escrowed_cents: 0 },
+        ops: {
+          health: { uptime_s: 60, providers: {}, db: "local", classifier: "rules only", node: "v26" },
+          statuses: {},
+          partial: {},
+          money_24h: {},
+          queue: [],
+          workers: { opted_in: 0, online: 0, total: 0 },
+          errors: [],
+        },
+      },
+      "/ops/tickets": { tickets: [], total: 0, next_cursor: null },
+      "/ops/ledger": {
+        ledger: [
+          { id: "l1", type: "fee", created_at: "2026-10-17T12:00:00Z", task_id: null, amount_cents: 75 },
+        ],
+        total: 1,
+        total_cents: 75,
+        next_cursor: null,
+      },
+      "/ops/events": { source: "db", events: [] },
+      "/ops/series": {
+        source: "postgres",
+        requests: [],
+        errors: [],
+        p95_ms: [],
+        hours: [],
+        tasks: {},
+        payouts: { ok: [], failed: [] },
+      },
+    };
+    win.fetch = (async (input: RequestInfo | URL) =>
+      Response.json(replies[new URL(String(input), "https://api.eyes.test").pathname])) as typeof fetch;
+    win.setTimeout = (() => 0) as unknown as typeof setTimeout;
+    new Function("window", script)(win);
+    await vi.waitFor(() => expect(win.document.getElementById("state")?.textContent).toBe("Live"));
+    expect(win.document.getElementById("p-money")?.hidden).toBe(false);
+    await vi.waitFor(() => expect(win.document.getElementById("ledger")?.textContent).toContain("Fee$0.75"));
+    expect(win.document.getElementById("ledger-total")?.textContent).toBe("$0.75 across 1 row");
+    expect(win.document.getElementById("map")?.textContent).toBe("Map needs Leaflet from unpkg.com.");
+    await happy.happyDOM.close();
   });
 });

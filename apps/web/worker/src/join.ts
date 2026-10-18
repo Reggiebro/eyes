@@ -10,7 +10,7 @@ let spot: { lat: number; lng: number } | null = null;
 form.hidden = !inkboxNumber;
 $("closed").hidden = Boolean(inkboxNumber);
 
-function toE164(input: string): string | null {
+export function toE164(input: string): string | null {
   const digits = input.replace(/\D/g, "");
   const e164 = input.trim().startsWith("+") ? `+${digits}` : `+1${digits.replace(/^1(?=\d{10}$)/, "")}`;
   return /^\+(1[2-9]\d\d[2-9]\d{6}|[2-9]\d{6,14})$/.test(e164) ? e164 : null;
@@ -24,17 +24,26 @@ function invalid(id: string, problem: Problem) {
   showError(error, problem);
 }
 
+// States on the one button: busy (spinner, label kept) -> located ("✓ Location set" resolves from a
+// blur, data-settled) or failed ("Try location again", the error notice rises in). CSS in @eyes/ui.
 $("locate").addEventListener("click", () => {
+  const locate = $("locate");
   error.hidden = true;
-  $("where").textContent = "Finding you...";
+  locate.removeAttribute("data-settled");
+  locate.setAttribute("aria-busy", "true");
+  $("where").textContent = "Finding you…";
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
       spot = { lat: coords.latitude, lng: coords.longitude };
-      $("where").textContent = `Location set (within ${Math.round(coords.accuracy)} m).`;
+      locate.removeAttribute("aria-busy");
+      locate.setAttribute("data-settled", "");
+      locate.textContent = "✓ Location set";
+      $("where").textContent = `Accurate to ${Math.round(coords.accuracy)} m. Tap again to update it.`;
     },
     (err) => {
+      locate.removeAttribute("aria-busy");
       $("where").textContent = "";
-      $("locate").textContent = "Try location again";
+      locate.textContent = "Try location again";
       showError(
         error,
         new Problem(
@@ -92,10 +101,10 @@ form.addEventListener("submit", async (event) => {
     const textLink = (body: string, label: string) =>
       Object.assign(document.createElement("a"), {
         href: `sms:${number}?&body=${encodeURIComponent(body)}`,
-        className: "button",
+        className: "ui-button ui-button--primary ui-button--block",
         textContent: label,
       });
-    $("start").prepend(
+    ($("start").firstElementChild as HTMLElement).prepend(
       ...(connectCommand
         ? [
             textLink(connectCommand, `First text "${connectCommand}" to ${number}`),
