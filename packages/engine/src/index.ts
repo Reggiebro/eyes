@@ -376,7 +376,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
       "If your location stops updating and becomes stale, you will NOT receive new task offers.",
-      `Your setup: ${meUrl(worker.id)}`,
+      `Mandatory Setup: ${meUrl(worker.id)}`,
       "",
       "YES — take task",
       "NO — pass/give back",

@@ -508,7 +508,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       "You're in. Eyes texts you paid photo tasks near you.",
       expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
-      expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      expect.stringMatching(/^[^:\n]+: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
     ]);
     const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
     expect(await service.workerDevice(code)).toMatchObject({ registered: false });
@@ -518,7 +518,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       lines[0],
       expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: /),
-      expect.stringMatching(/^Your setup: /),
+      expect.stringMatching(/^[^:\n]+: https:\/\/w\.eyes\.test\/me#c=\S+$/),
     ]);
   });
 
@@ -531,7 +531,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       "You're in. Eyes texts you paid photo tasks near you.",
       expect.stringMatching(/^1\. .+: https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
-      expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      expect.stringMatching(/^[^:\n]+: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
     ]);
     expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
   });
@@ -745,7 +745,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         return hubLines(outbox.findLast((m) => m.to === w.phone)?.payload);
       };
       const head = "Eyes texts you paid photo tasks near you.";
-      const tail = [expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/)];
+      const tail = [expect.stringMatching(/^[^:\n]+: https:\/\/w\.eyes\.test\/me#c=\S+$/)];
       const hour = 3_600_000;
       const start = providers.clock.now();
       try {
@@ -1828,7 +1828,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       for (const { w, task_id } of [verified, old]) {
         await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
         expect(String(outbox.findLast((m) => m.to === w.phone)?.payload)).toMatch(
-          /^You're (in|all set)\. Eyes texts you paid photo tasks near you\.\n[\s\S]*Your setup: /,
+          /^You're (in|all set)\. Eyes texts you paid photo tasks near you\.\n[\s\S]*https:\/\/w\.eyes\.test\/me#c=\S+/,
         );
         await service.handleWorkerReply({ phone: w.phone, intent: "unknown", text: "hello?" });
         expect(outbox.findLast((m) => m.to === w.phone)?.payload).toMatch(
