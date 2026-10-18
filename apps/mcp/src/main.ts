@@ -127,7 +127,8 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
     verifySubmission,
     config,
   };
-  const engine = sandbox ? createSandboxService(deps) : createEyesService(deps);
+  // Engine notices carry no level, so the event log records them as info: never an Errors-tab issue.
+  const engine = sandbox ? createSandboxService(deps) : createEyesService(deps, events.log);
   const service = instrumentService(engine, events.log);
 
   const sweep = setInterval(() => {

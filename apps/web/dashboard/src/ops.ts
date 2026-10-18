@@ -69,7 +69,8 @@ const REDACTIONS: [RegExp, string | ((m: string) => string)][] = [
   ],
   [/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "[email]"],
   [/\b(?:sk|rk|pk)_(?:live|test)_\w+|\bwhsec_\w+/g, "[secret]"],
-  [/[\w-]{32,}/g, (m) => (UUID.test(m) ? m : "[secret]")],
+  // Lowercase snake_case words are identifiers (send_to_primitive_managed_domains), not random tokens.
+  [/[\w-]{32,}/g, (m) => (UUID.test(m) || /^[a-z]+(?:_[a-z]+)+$/.test(m) ? m : "[secret]")],
   [/\+\d[\d ().-]{7,}\d|\(?\b\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b/g, "[phone]"],
 ];
 

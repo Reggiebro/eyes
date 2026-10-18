@@ -222,7 +222,21 @@ function answerOf({ task, submission, worker_rating }: Detail): Answer | null {
   };
 }
 
-export function createEyesService(deps: EngineDeps): EyesService {
+/**
+ * The denied gate names when an email provider refused a recipient on its sending scope (Primitive's
+ * 403 recipient_not_allowed), else null. Names only: a gate's subject can carry the address.
+ */
+export function recipientGateDenial(err: unknown): string[] | null {
+  if (!(err instanceof Error) || !("status" in err) || err.status !== 403 || !/recipient/i.test(err.message))
+    return null;
+  const gates = "gates" in err && Array.isArray(err.gates) ? err.gates : [];
+  return gates.map((g) => (typeof g?.name === "string" ? g.name : "")).filter(Boolean);
+}
+
+/** Info lines for the ops event log (never the Errors tab): expected limits such as a gated recipient. */
+export type Notice = (e: { kind: string; summary: string }) => void;
+
+export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): EyesService {
   const { providers, config } = deps;
   const { messaging, payments } = providers;
   const rpc = createRpc(deps.db);
@@ -231,6 +245,8 @@ export function createEyesService(deps: EngineDeps): EyesService {
   const maybe = async <T>(fn: string, args: RpcArgs) => (await rpc<T>(fn, args))[0];
   const one = async <T>(fn: string, args: RpcArgs) => (await rpc<T>(fn, args))[0] as T;
   const simulatedPay = config.live_payouts ? "" : ` ${SIMULATED_PAY}`;
+  // Agents whose owner email was refused by the provider's recipient gate: noticed once each, per process.
+  const gated = new Set<string>();
 
   const topUpUrl = (agentId: string) =>
     `${config.public_api_url}/topup/${signToken(config.link_secret, `t:${agentId}`)}`;
@@ -331,13 +347,16 @@ export function createEyesService(deps: EngineDeps): EyesService {
       });
       return true;
     } catch (err) {
-      if (err instanceof Error && "status" in err && err.status === 403 && /recipient/i.test(err.message)) {
-        // Gate names only: a gate's subject can carry the recipient address.
-        const gates =
-          "gates" in err && Array.isArray(err.gates) ? err.gates.map((g) => g?.name).filter(Boolean) : [];
-        console.warn(
-          `owner email for agent ${agentId} not sent: the email provider refused the recipient (403${gates.length ? `, gates denied: ${gates.join(", ")}` : ""}); it sends replies only until any-domain sending is enabled`,
-        );
+      const gates = recipientGateDenial(err);
+      if (gates) {
+        // An expected limit until any-domain sending is on: an info event, never the Errors tab.
+        if (!gated.has(agentId)) {
+          gated.add(agentId);
+          notice({
+            kind: "email",
+            summary: `owner email for agent ${agentId} not sent: the email provider refused the recipient (403${gates.length ? `, gates denied: ${gates.join(", ")}` : ""}); it sends replies only until any-domain sending is enabled`,
+          });
+        }
       } else {
         console.error(`owner email for agent ${agentId} failed: ${describeSendError(err)}`);
       }

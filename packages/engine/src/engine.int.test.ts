@@ -51,6 +51,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     payload: Record<string, unknown>;
   }[];
   let safety = ALLOW;
+  const notices: { kind: string; summary: string }[] = [];
   const deps: EngineDeps = {
     db: { kind: "postgres", url: url ?? "" },
     providers,
@@ -69,7 +70,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       live_payouts: true,
     }),
   };
-  const service = createEyesService(deps);
+  const service = createEyesService(deps, (e) => notices.push(e));
 
   beforeAll(() => migrate(url ?? ""));
   afterAll(() => sql.end());
@@ -1917,12 +1918,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
       }
     });
 
-    it("skips owner email to reserved test domains at debug level and logs a provider 403 recipient denial as a warning", async () => {
+    it("skips owner email to reserved test domains at debug level and notes a provider 403 recipient denial once per agent at info level", async () => {
       const send = vi.spyOn(providers.email, "send");
       const logs = (["debug", "warn", "error"] as const).map((m) =>
         vi.spyOn(console, m).mockImplementation(() => {}),
       );
       const [debug, warn, error] = logs;
+      notices.length = 0;
       try {
         for (const to of [
           "o@example.com",
@@ -1955,6 +1957,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
             name: "PrimitiveApiError",
             status: 403,
             gates: [
+              { name: "send_to_primitive_managed_domains", subject: "gmail.com" },
               { name: "send_to_confirmed_domains", subject: "o@gmail.com" },
               { name: "send_to_known_addresses", subject: "o@gmail.com" },
             ],
@@ -1962,13 +1965,28 @@ describe.skipIf(!url)("engine on Postgres", () => {
         );
         const gated = await service.signupAgent({ name: "gated-agent", owner_email: "o@gmail.com" });
         expect(gated.next_step).toContain("could not email your user at o@gmail.com");
+        // The first payer's email to the same agent is denied again: no second notice.
+        send.mockRejectedValueOnce(Object.assign(new Error("recipient not allowed"), { status: 403 }));
+        await service.creditTopup({
+          agent_id: gated.agent_id,
+          amount_cents: 500,
+          stripe_ref: `cs_gate_${gated.agent_id}`,
+          payer_email: "p@gmail.com",
+        });
+        expect(send).toHaveBeenCalledTimes(3);
         expect(error).not.toHaveBeenCalled();
-        const warned = warn?.mock.calls.map((call) => String(call[0]));
-        expect(warned).toEqual([
-          `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient (403); it sends replies only until any-domain sending is enabled`,
-          `owner email for agent ${gated.agent_id} not sent: the email provider refused the recipient (403, gates denied: send_to_confirmed_domains, send_to_known_addresses); it sends replies only until any-domain sending is enabled`,
+        expect(warn).not.toHaveBeenCalled();
+        expect(notices).toEqual([
+          {
+            kind: "email",
+            summary: `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient (403); it sends replies only until any-domain sending is enabled`,
+          },
+          {
+            kind: "email",
+            summary: `owner email for agent ${gated.agent_id} not sent: the email provider refused the recipient (403, gates denied: send_to_primitive_managed_domains, send_to_confirmed_domains, send_to_known_addresses); it sends replies only until any-domain sending is enabled`,
+          },
         ]);
-        expect(warned?.join()).not.toContain("@");
+        expect(JSON.stringify(notices)).not.toContain("@");
       } finally {
         send.mockRestore();
         for (const log of logs) log.mockRestore();

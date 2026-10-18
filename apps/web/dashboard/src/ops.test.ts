@@ -23,6 +23,13 @@ describe("redact", () => {
     const line = `task ${ID} at 2026-10-17 20:51:00 paid 350 cents`;
     expect(redact(line)).toBe(line);
   });
+
+  it("keeps long snake_case identifiers such as gate names, still masks mixed-case or digit tokens", () => {
+    const line = "gates denied: send_to_primitive_managed_domains, send_to_confirmed_domains";
+    expect(redact(line)).toBe(line);
+    expect(redact("send_to_Primitive_managed_domains_x")).toBe("[secret]");
+    expect(redact("abcdefgh_ijklmnop_qrstuvwx_yz012345")).toBe("[secret]");
+  });
 });
 
 describe("summarize", () => {

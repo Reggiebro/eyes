@@ -47,6 +47,15 @@ describe("instrumentProviders", () => {
     ]);
   });
 
+  it("logs no error for a recipient-gate refusal (the engine notes it at info) and rethrows", async () => {
+    const { events, log } = sink();
+    const base = fakeProviders();
+    const denied = Object.assign(new Error("cannot send: recipient-scope gates denied"), { status: 403 });
+    base.email.send = () => Promise.reject(denied);
+    await expect(instrumentProviders(base, log).email.send({} as never)).rejects.toBe(denied);
+    expect(events).toEqual([]);
+  });
+
   it("logs payouts with amount and outcome", async () => {
     const { events, log } = sink();
     const base = fakeProviders();
