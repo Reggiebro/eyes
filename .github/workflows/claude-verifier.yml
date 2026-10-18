@@ -3,6 +3,11 @@ name: claude-verifier
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "intent/**"
+      - "LICENSE"
 
 permissions:
   contents: read
