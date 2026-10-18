@@ -118,17 +118,16 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 | InsForge Storage | Public `photos` bucket for captures; face-rejected photos are deleted ([ADR-014](intent/decisions/ADR-014-delete-face-photos.md)) | [packages/db](packages/db) | live |
 | InsForge Sites | Earlier host of the worker web (`*.insforge.site`); replaced by `app.eyes.pictures` | [docs/DEPLOY.md](docs/DEPLOY.md) §3 | earlier |
 | Stripe | Checkout top-ups, Connect Express onboarding, $3 transfers on verified answers, transfer reversals on confirmed fraud, signed webhooks | [packages/payments](packages/payments) | test mode |
-| Inkbox | Shared iMessage line: inbound webhook, offer and paid texts, START/STOP/HELP/HERE replies, texts with location codes and the app link; uptime alerts | [packages/comms/src/inkbox.ts](packages/comms/src/inkbox.ts) | live |
+| Inkbox | Shared iMessage line: inbound webhook, offer and paid texts, START/STOP/HELP/HERE replies, texts with location codes and the app link; uptime alerts; first-contact owner/ops email fallback when Primitive refuses delivery | [packages/comms/src/inkbox.ts](packages/comms/src/inkbox.ts) | live |
 | Inkbox (limitation) | An iMessage "Share My Location" arrives as a lone U+FFFD, so Eyes replies with a HERE link instead ([ADR-024](intent/decisions/ADR-024-worker-location.md)) | [packages/comms](packages/comms) | live |
-| Primitive | Each agent's private email inbox ([ADR-007](intent/decisions/ADR-007-agent-email-identity.md)), inbound webhooks, owner console emails, ops login codes | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | live |
+| Primitive | Each agent's private email inbox ([ADR-007](intent/decisions/ADR-007-agent-email-identity.md)), inbound webhooks, normal email replies and worker mail; first-contact owner/ops delivery falls back to Inkbox | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | live |
 | Anthropic Claude | Fallback safety classifier and photo vision when clef is unsure or fails; used alone if Cloudflare is not configured | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | OpenStreetMap Nominatim | Geocodes place names in `quote_task` and `ask_eyes` | [apps/mcp/src/geo.ts](apps/mcp/src/geo.ts) | live |
 | OpenStreetMap tiles + Leaflet (unpkg) | Maps on the ops dashboard and live map | [apps/web/dashboard](apps/web/dashboard) | live |
 | Apple Maps / Google Maps links | Reads coordinates from map links a worker texts in; the capture page links to Google Maps directions | [packages/core/src/util.ts](packages/core/src/util.ts), [apps/web/worker/src/capture.ts](apps/web/worker/src/capture.ts) | live |
-| mcp-use | MCP server framework for the 9 tools and widgets | [apps/mcp](apps/mcp) | live |
-| Manufact | The CLI connect path on the landing page; Manufact Cloud was the earlier host | [apps/web/landing](apps/web/landing), [docs/DEPLOY.md](docs/DEPLOY.md) | CLI live, hosting earlier |
+| mcp-use | MCP server framework for the 10 tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
 | OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with OAuth sign-in | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | live |
-| Expo / React Native + Apple | iPhone app that sends background location; TestFlight link sent once Apple approves the beta | [apps/mobile](apps/mobile) | TestFlight pending |
+| Expo / React Native + Apple | iPhone app that sends background location; TestFlight distribution paused by the user | [apps/mobile](apps/mobile) | TestFlight paused |
 | ClickHouse | Optional copy of the ops event log and Trends charts; Postgres stays the source of truth | [apps/web/dashboard/src/clickhouse.ts](apps/web/dashboard/src/clickhouse.ts) | optional, off on the host |
 | Astro, Tailwind, GSAP | Landing and worker web; Better-T-Stack conventions | [apps/web](apps/web) | live |
 | Playwright, Vitest, Biome | E2E, unit/contract/safety/integration tests, lint and format | [e2e](e2e), [vitest.config.ts](vitest.config.ts), [biome.json](biome.json) | test |
