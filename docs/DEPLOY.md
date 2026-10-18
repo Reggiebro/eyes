@@ -15,6 +15,23 @@ Current production (2026-10-18): the actual MCP/API server runs on **Manufact Cl
 
 Cloudflare's `eyes-api` Worker is a thin forwarder for both `api.eyes.pictures` and `internal.eyes.pictures`. Keep its `ORIGIN` set to `https://warm-spark-aocdd.run.mcp-use.com`. The optional Manufact gateway `https://dark-steel-ofaoa.run.mcp-use.com/mcp` is a separate proxy, not the server host. The landing site and worker app remain on Cloudflare.
 
+### Dedicated MCP domain staging
+
+The requested target is `https://mcp.eyes.pictures/mcp` on the same Manufact server. The connector is **prepared, not active**. `https://api.eyes.pictures` remains the REST, upload and webhook base; `internal.eyes.pictures` remains the ops host. The domain owner provisioned `mcp.eyes.pictures` on the existing Cloudflare `eyes-api` Worker with the same Manufact `ORIGIN`. Cloudflare provides the edge and static sites, not the MCP/API application host.
+
+The staged server setting is optional `EYES_PUBLIC_MCP_URL=https://mcp.eyes.pictures/mcp`; keep `EYES_PUBLIC_API_URL=https://api.eyes.pictures`. It separates MCP/OAuth/card metadata from REST URLs. The normalized, trusted edge host selects the matching metadata: existing API-host connectors retain their API issuer and card origins. Provisioning and deployment belong to the domain owner, not this documentation change.
+
+Provisioning evidence (2026-10-18 10:48 UTC): DNS/TLS ready, `/healthz` 200, both protected-resource metadata paths and issuer discovery 200. The resource is `https://mcp.eyes.pictures/mcp`, but `authorization_servers` and `issuer` still name `https://api.eyes.pictures`. This does **not** pass the activation gates. Existing API health, metadata and API/ops domain bindings were unchanged. Domain-owner evidence: `/Users/xiao/tmp/mcp-domain-provision-evidence.json`.
+
+Before activation, the domain owner must verify:
+
+1. New-host MCP initialization and authenticated tool calls reach the intended Manufact deployment.
+2. OAuth discovery advertises resource `https://mcp.eyes.pictures/mcp`, issuer `https://mcp.eyes.pictures`, and authorize/token/registration URLs on that same host; the 401 challenge points to its metadata.
+3. ChatGPT and Claude card origins match the exact connector URL, with card resources loading successfully. Expected metadata and origins are in [CONNECT.md](CONNECT.md#dedicated-mcp-domain-prepared-not-active).
+4. Existing REST, uploads, webhooks and ops routes remain unchanged; existing connectors and the optional third-party gateway are not migrated without an owner decision.
+
+The post-deploy checks below describe the existing `api.eyes.pictures` baseline, not proof that the new MCP host is ready. Keep current client instructions until the owner provides activation evidence.
+
 ### Permanent operator deployment
 
 The operator loop runs with `bash /Users/xiao/tmp/eyes-deployer/deployer.sh` as service `eyes-manufact-deployer`. It is already running; do not start a second copy. Its `api-paused` sentinel was removed after successful authenticated smoke checks. It reads `origin/jerry/live-setup` into a clean archive, applies database migrations first, and deploys the API to Manufact rather than Cloudflare Containers.
@@ -49,6 +66,9 @@ Ops and ClickHouse settings (any host):
 Historical worker-page hosting: `npx @insforge/cli deployments deploy ./apps/web/worker/dist` deployed the static output to InsForge Sites. The dated `*.insforge.site` results in STATUS refer to that earlier deployment, not the current public app.
 
 ## 4. Webhooks
+
+For this section, `<public>` remains `https://api.eyes.pictures`; the MCP-domain split does not move provider webhooks.
+
 - Inkbox (iMessage line, chosen for cost): subscribe identity `eyes-dispatch` to `imessage.received` at `<public>/webhooks/inkbox`; put the signing key in `INKBOX_WEBHOOK_SIGNING_KEY`. Worker phones must be iPhones. If the console gives a shared router number plus a connect command instead of a dedicated number (the free plan: `inkbox.imessages.getTriageNumber()` returns it, and `inkbox.imessages.listNumbers()` is empty), set `INKBOX_PHONE_NUMBER` to the router number and build the worker web with `VITE_INKBOX_CONNECT`; each worker texts the connect command to the router first, then START. Cold first messages are limited to 159 chars with no links (our offers comply). Inkbox caps agent-initiated conversations at 10 new recipients per hour and 40 per 24 h, but "recipients who message the line first do not consume these first-contact slots": every worker texts START first, so the cap does not apply to Eyes.
 - Stripe: two event destinations to `<public>/webhooks/stripe`: "Your account" with `checkout.session.completed` (`STRIPE_WEBHOOK_SECRET`) and "Connected accounts" with `account.updated` (`STRIPE_CONNECT_WEBHOOK_SECRET`). Fund the platform: `node --env-file=.env packages/payments/scripts/fund-platform.ts 100`.
 - Primitive: HTTP endpoint webhook to `<public>/webhooks/primitive` (`PRIMITIVE_WEBHOOK_SECRET`); note the assigned domain as `PRIMITIVE_DOMAIN`. A new Primitive org can only send to Primitive-managed domains, its own members and addresses that emailed it first, so agent answers go out but an owner's control-link email to a normal domain (gmail.com) is refused with `403 recipient_not_allowed`; so Eyes sends what the gate refuses (owner links, ops sign-in codes, worker email) from the Inkbox dispatcher mailbox instead (`INKBOX_API_KEY` + `INKBOX_AGENT_HANDLE`, no extra setting; Inkbox allows 100 new recipients a day per org and adds a "Sent via Inkbox" footer on the free plan), and `/status` shows Email as "live (first contact via Inkbox …)". Without Inkbox those sends fail, Eyes notes it once per agent as an info event in the ops log (never the Errors tab), and `/status` says "replies only". Once Primitive grants the org `send_to_any_domain` (check `npx -y primitive account show`, field `entitlements`), set `PRIMITIVE_SEND_ANY_DOMAIN=1` and redeploy.
