@@ -1,6 +1,6 @@
 # ADR-014: Photos rejected for prominent faces are deleted
 
-Status: accepted (2026-10-17, orchestrator). Adds to the frozen contract: `Storage.deletePhoto(i: { key: string }): Promise<void>`, implemented by `fakeStorage` and `createInsforgeStorage`.
+Status: superseded for photo moderation by [ADR-025](ADR-025-vision-is-moderation.md) on 2026-10-18: faces no longer reject photos or trigger deletion. Historical decision below. `Storage.deletePhoto(i: { key: string }): Promise<void>` remains for lost-claim upload cleanup.
 
 ## Context
 `submitCapture` uploads the photo to the InsForge `photos` bucket before vision judges it, because `VisionJudgeInput` takes a `photo_url` and Claude vision fetches the image by URL. A photo the judge rejects for `prominent_faces` kept a permanent public URL in the bucket and in `submissions.photo_url`, so the agent received it in `await_answer` and `get_task`, the email reply attached it, and the dashboard feed showed it. SPEC §12 promises no photos of identifiable people, and this is the one photo we know shows a face (issue #27).
