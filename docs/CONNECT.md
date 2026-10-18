@@ -46,7 +46,7 @@ Both client URLs reach the same server and the same 13 tools: `quote_task`, `ask
 
 ## Dedicated MCP domain: ready for connector migration
 
-`https://mcp.eyes.pictures/mcp` is ready for new connectors; the ChatGPT web steps above use it. Existing connectors have not been switched. The domain owner verified the deployed host's OAuth flow, all 12 tools and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors can keep using `https://api.eyes.pictures/mcp`.
+`https://mcp.eyes.pictures/mcp` supports new ChatGPT and Claude connectors using the web steps above. The domain owner verified the deployed host's OAuth flow, tool registry and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors at `https://api.eyes.pictures/mcp` remain supported.
 
 Verified dedicated-host values:
 
