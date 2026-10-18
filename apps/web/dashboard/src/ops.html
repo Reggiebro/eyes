@@ -26,7 +26,7 @@ main { padding: var(--eyes-space-4) var(--eyes-space-6) var(--eyes-space-6); }
 @media (max-width: 1100px) { .panel > .ui-card { grid-column: span 12; } }
 @media (min-width: 1101px) {
   /* Overview: the top row keeps its content height, Trends takes the rest. */
-  .overview { min-height: var(--fill); grid-template-rows: auto 1fr; }
+  .overview { min-height: var(--fill); grid-template-rows: auto auto 1fr; }
   .overview .trends { display: flex; flex-direction: column; }
   .overview .charts { flex: 1; grid-auto-rows: 1fr; }
   .overview .chart { grid-template-rows: auto auto auto 1fr; }
@@ -393,6 +393,16 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
   .ui-button:active:not(:disabled), .tbl-sort:active, .new-events:active { transform: none; }
   @starting-style { .new-events, #review-panel[open] { transform: none; } }
 }
+/* Safety stays compact; the native slider keeps touch and keyboard behavior. */
+.safety-card[hidden] { display: none; }
+.safety-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--eyes-space-3); margin: 0; padding: 0; border: 0; min-width: 0; }
+.safety-controls label { font-size: var(--eyes-text-sm); }
+.safety-controls output { font-family: var(--eyes-font-mono); font-variant-numeric: tabular-nums; font-weight: var(--eyes-weight-semibold); }
+.safety-controls input { flex: 1; min-width: 8rem; height: 2.75rem; accent-color: var(--eyes-accent); }
+.safety-controls input:focus-visible { outline: 2px solid var(--eyes-accent); outline-offset: 2px; border-radius: var(--eyes-radius-sm); }
+.safety-card p { margin: var(--eyes-space-2) 0 0; }
+.safety-status[data-state="error"] { color: var(--eyes-danger-text); }
+.safety-status[data-state="success"] { color: var(--eyes-success-text); }
 </style>
 </head>
 <body class="ui">
@@ -439,6 +449,20 @@ th[aria-sort="descending"] .tbl-sort::after { content: " ↓"; }
         <p class="lead"><span id="escrowed" class="big"></span> <span class="sub">held in escrow now</span></p>
         <table id="money-kv" class="money"></table>
       </div>
+    </section>
+
+    <section id="safety-settings" class="ui-card c12 safety-card" aria-labelledby="safety-title" aria-busy="true">
+      <header class="ui-card__header"><h2 id="safety-title" class="ui-card__title">Safety classifier</h2><span id="safety-saved" class="sub"></span></header>
+      <form id="safety-form">
+        <fieldset id="safety-controls" class="safety-controls" disabled>
+          <label for="safety-threshold">Block-confidence score <output id="safety-value" for="safety-threshold">—</output></label>
+          <input id="safety-threshold" name="classifier_block_min" type="range" min="0.50" max="1.00" step="0.01" aria-describedby="safety-help">
+          <button id="safety-save" class="ui-button ui-button--primary ui-button--sm" type="submit" disabled>Save</button>
+        </fieldset>
+        <p id="safety-help" class="muted">Higher = more permissive. Fixed rules for homes, private people and license plates always apply. A higher confidence cutoff means fewer classifier blocks; this model score is not a calibrated probability.</p>
+        <p id="safety-status" class="safety-status tiny" role="status">Loading settings…</p>
+        <button id="safety-retry" class="ui-button ui-button--ghost ui-button--sm" type="button" hidden>Retry</button>
+      </form>
     </section>
 
     <section class="ui-card c12 trends">

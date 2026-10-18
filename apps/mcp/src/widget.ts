@@ -93,10 +93,19 @@ function openLink(url) {
   if (window.openai?.openExternal) window.openai.openExternal({ href: url });
   else request("ui/open-link", { url });
 }
+function errorText(value) {
+  let detail = value?.fix !== undefined ? value : value?.message ?? value;
+  if (typeof detail === "string") {
+    try { detail = JSON.parse(detail); } catch {}
+  }
+  if (detail && typeof detail === "object")
+    return [detail.message, detail.fix].filter((v) => typeof v === "string" && v.trim()).join(" ") || "The tool failed.";
+  return typeof detail === "string" && detail ? detail : "The tool failed.";
+}
 async function call(name, args) {
   const r = window.openai?.callTool ? await window.openai.callTool(name, args) : await request("tools/call", { name, arguments: args });
   const text = r?.content?.find?.((c) => c.type === "text")?.text;
-  if (r?.isError) throw new Error(text || "The tool failed.");
+  if (r?.isError) throw new Error(errorText(r.structuredContent ?? text));
   return r?.structuredContent ?? JSON.parse(text ?? r?.result ?? "null");
 }
 function theme(t) { if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; }
@@ -234,7 +243,7 @@ async function act(b) {
     render(merge ? { ...last, ...out } : out);
   } catch (err) {
     b.disabled = false;
-    card.insertAdjacentHTML("beforeend", '<div class="ui-notice ui-notice--danger" data-error role="alert">' + icon("alert") + "<span>" + esc(err.message) + "</span></div>");
+    card.insertAdjacentHTML("beforeend", '<div class="ui-notice ui-notice--danger" data-error role="alert">' + icon("alert") + "<span>" + esc(errorText(err)) + "</span></div>");
     size();
   }
 }

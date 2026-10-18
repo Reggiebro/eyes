@@ -5,10 +5,15 @@ Every task is checked before any money is held and before any worker sees it. Fa
 ## How it works
 
 - `checkRules` uses regular expressions to catch clear cases such as "my ex's house", license plates, "follow her" and "photo of the cashier's face".
-- If the rules pass the task and `ANTHROPIC_API_KEY` is set, a Claude Haiku classifier judges it against 8 categories, from `private_person` to `illegal_or_dangerous`.
+- With Cloudflare credentials, Clef blocks only when a blocked category has confidence at least `EYES_CLASSIFIER_BLOCK_MIN` (default `0.95`, finite range `0.5`–`1` inclusive). Otherwise it allows, including uncertain results. Higher values are more permissive; `1` still blocks confidence `1` and never disables deterministic rules.
+- `createAssessTask(env, blockMin?: () => Promise<number>)` accepts an optional async threshold getter, read on each classifier assessment. Invalid environment values fail startup; invalid or rejected getter results fail closed.
+- Clef provider errors fall back to Claude when `ANTHROPIC_API_KEY` is set. Claude's schema has no numeric confidence: its explicit allow/block result remains authoritative, independently of the Clef threshold. With neither provider configured, only rules run.
 - The task is passed to the classifier as data inside `<task>` tags. Any attempt in the task to override the policy is itself blocked.
 - Failing closed: if the classifier errors or times out, the task is refused as "temporarily unavailable" and nothing is charged.
 - `quote_task` checks the place and returns `allowed: false` with a `reason_if_not`. `ask_eyes` checks the question too and refuses with `unsafe_task` (HTTP 422).
+- Widget tool errors display the escaped human message and suggested fix, not the raw JSON response, in both MCP Apps and ChatGPT.
+
+The threshold is a model score, not a calibrated probability or a safety guarantee. In the unchanged 200-fixture evaluation, the demo default `0.95` produced 0 false blocks and 62 false allows (precision `1.000`, recall `0.415`), with no provider failures. The exact YC hackathon question was allowed. The user accepted this demo trade-off; the deterministic rules and fixture labels are unchanged.
 
 ## How to try it
 

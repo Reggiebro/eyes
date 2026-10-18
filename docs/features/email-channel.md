@@ -21,7 +21,7 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 4. Refresh `/me`. The Email row now shows your address (masked).
 5. Later, sign in at https://app.eyes.pictures/login: enter that email, tap "Email me a sign-in link", and open the link within 15 minutes.
 
-You can also change or remove the email from the Email row on `/me`. Changing it emails a confirmation link to the new address.
+To change the email, tap Change on `/me` and send the message that opens from the new address. Remove stops email right away.
 
 ## Where in the code
 
