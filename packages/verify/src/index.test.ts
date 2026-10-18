@@ -106,20 +106,19 @@ describe("verifySubmission", () => {
     expect((await verifySubmission(input({ captured_at: "2026-10-17T19:11:00.001Z" }))).fresh_ok).toBe(false);
   });
 
-  it("rejects photos with prominent faces and says so", async () => {
-    const r = await verifySubmission(input({}, fakeVision({ prominent_faces: true })));
-    expect(r.vision_ok).toBe(false);
-    expect(r.vision_reason).toMatch(/face/i);
-    expect(r.auto_approve).toBe(false);
+  it("allows ordinary photos even when content confidence is low", async () => {
+    const r = await verifySubmission(input({}, fakeVision({ confidence: 0.1 })));
+    expect(r.vision_ok).toBe(true);
+    expect(r.auto_approve).toBe(true);
   });
 
-  it("holds a photo that moderation blocks, with the moderation reason", async () => {
+  it("holds confirmed gore with the moderation reason", async () => {
     const r = await verifySubmission(
-      input({}, fakeVision({ allowed: false, reason: "A screen shows personal details." })),
+      input({}, fakeVision({ allowed: false, reason: "The photo shows graphic gore." })),
     );
     expect(r).toMatchObject({
       vision_ok: false,
-      vision_reason: "A screen shows personal details.",
+      vision_reason: "The photo shows graphic gore.",
       auto_approve: false,
     });
   });
@@ -212,15 +211,17 @@ describe("createClaudeVision", () => {
   });
 
   it("sends only the photo by URL and returns the parsed moderation verdict", async () => {
-    const verdict = { allowed: true, reason: "Safe to share.", prominent_faces: false, confidence: 0.8 };
+    const verdict = { gore: false, explicit_sexual: false, reason: "Safe to share.", confidence: 0.8 };
     const fetch = vi.fn<typeof globalThis.fetch>(async () =>
       message([{ type: "text", text: JSON.stringify(verdict) }]),
     );
     vi.stubGlobal("fetch", fetch);
 
-    await expect(createClaudeVision({ ANTHROPIC_API_KEY: "test" }).judge(judgeInput)).resolves.toEqual(
-      verdict,
-    );
+    await expect(createClaudeVision({ ANTHROPIC_API_KEY: "test" }).judge(judgeInput)).resolves.toEqual({
+      allowed: true,
+      reason: verdict.reason,
+      confidence: verdict.confidence,
+    });
 
     const init = fetch.mock.calls[0]?.[1];
     const body = JSON.parse(String(init?.body));
@@ -229,6 +230,30 @@ describe("createClaudeVision", () => {
     expect(image.source).toEqual({ type: "url", url: judgeInput.photo_url });
     expect(text.text).toBe("Moderate this photo.");
     expect(JSON.stringify(body.system)).not.toMatch(/answers_question/);
+    expect(body.system).toContain("If content is uncertain, set the corresponding flag to false");
+    expect(body.system).toContain("Never infer adultery");
+    expect(body.system).not.toContain("prominent_faces");
+  });
+
+  it.each([
+    [false, false, 0.1, true],
+    [true, false, 0.79, true],
+    [false, true, 0.79, true],
+    [true, false, 0.8, false],
+    [false, true, 0.8, false],
+    [true, false, 0.9, false],
+    [false, true, 0.9, false],
+  ])("maps gore=%s explicit_sexual=%s to allowed=%s", async (gore, explicit_sexual, confidence, allowed) => {
+    vi.stubGlobal("fetch", async () =>
+      message([
+        { type: "text", text: JSON.stringify({ gore, explicit_sexual, confidence, reason: "Result" }) },
+      ]),
+    );
+    await expect(createClaudeVision({ ANTHROPIC_API_KEY: "test" }).judge(judgeInput)).resolves.toEqual({
+      allowed,
+      confidence,
+      reason: "Result",
+    });
   });
 
   it("rejects a verdict that does not match the schema", async () => {
@@ -246,18 +271,26 @@ describe("createClaudeVision", () => {
 
 describe("createClefVision", () => {
   const env = { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_API_TOKEN: "cf-test" };
-  const stub = (safe: number, faces: number) => {
+  const response = (gore: unknown, explicit_sexual: unknown) =>
+    Response.json({
+      success: true,
+      result: {
+        answers: {
+          gore: { type: "noul", noul: gore },
+          explicit_sexual: { type: "noul", noul: explicit_sexual },
+        },
+      },
+    });
+  const stub = (gore: number, explicit_sexual: number) => {
     const calls: string[] = [];
-    const bodies: { questions: Record<string, unknown> }[] = [];
+    const bodies: { questions: Record<string, unknown>; images: { base64: string }[] }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       calls.push(String(url));
       if (String(url) === judgeInput.photo_url) {
         return new Response(new Uint8Array([0xff, 0xd8]), { headers: { "content-type": "image/jpeg" } });
       }
       bodies.push(JSON.parse(String(init?.body)));
-      return Response.json({
-        result: { answers: { safe_to_share: { noul: safe }, prominent_faces: { noul: faces } } },
-      });
+      return response(gore, explicit_sexual);
     });
     return Object.assign(calls, { bodies });
   };
@@ -266,34 +299,40 @@ describe("createClefVision", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns clef's moderation verdict when it is sure, sending only the photo bytes", async () => {
-    const calls = stub(0.95, 0.05);
+  it("sends only photo bytes and the two blocked content questions", async () => {
+    const calls = stub(0.05, 0.01);
     const v = await createClefVision(env).judge(judgeInput);
-    expect(v).toMatchObject({ allowed: true, prominent_faces: false, confidence: 0.95 });
+    expect(v).toMatchObject({ allowed: true, confidence: 0.95 });
     expect([...calls]).toEqual([
       judgeInput.photo_url,
       expect.stringContaining("/ai/run/@cf/cloudflare/clef-omni"),
     ]);
-    expect(Object.keys(calls.bodies[0]?.questions ?? {})).toEqual(["safe_to_share", "prominent_faces"]);
+    expect(Object.keys(calls.bodies[0]?.questions ?? {})).toEqual(["gore", "explicit_sexual"]);
+    expect(calls.bodies[0]?.images[0]?.base64).toBe("/9g=");
   });
 
-  it("blocks a photo clef is sure is unsafe", async () => {
-    stub(0.05, 0.05);
-    expect(await createClefVision(env).judge(judgeInput)).toMatchObject({ allowed: false, confidence: 0.95 });
+  it.each([
+    [0, 0],
+    [0.5, 0.5],
+    [0.79, 0.79],
+  ])("allows ordinary or uncertain content (%s, %s), even with Claude configured", async (gore, sexual) => {
+    const calls = stub(gore, sexual);
+    const r = await verifySubmission(
+      input(judgeInput, createClefVision({ ...env, ANTHROPIC_API_KEY: "test" })),
+    );
+    expect(r).toMatchObject({ vision_ok: true, auto_approve: true });
+    expect(calls).toHaveLength(2);
   });
 
-  it("sends an unsure photo to human review when Claude is not configured", async () => {
-    stub(0.6, 0.05);
-    expect(await createClefVision(env).judge(judgeInput)).toMatchObject({
-      allowed: false,
-      prominent_faces: false,
-      reason: expect.stringContaining("a person will review it"),
-    });
-  });
-
-  it("fails closed when clef is down and Claude is not configured", async () => {
-    vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
-    await expect(createClefVision(env).judge(judgeInput)).rejects.toThrow();
+  it.each([
+    [0.8, 0.01, "gore"],
+    [0.01, 0.8, "sexual"],
+    [1, 1, "gore"],
+  ])("blocks confirmed content (%s, %s)", async (gore, sexual, reason) => {
+    stub(gore, sexual);
+    const r = await verifySubmission(input(judgeInput, createClefVision(env)));
+    expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+    expect(r.vision_reason).toContain(reason);
   });
 
   it("refuses to construct without both Cloudflare variables", () => {
@@ -305,68 +344,118 @@ describe("createClefVision", () => {
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       if (url === judgeInput.photo_url) return new Response(new Uint8Array([1, 2]));
       bodies.push(JSON.parse(String(init?.body)));
-      return Response.json({
-        result: { answers: { safe_to_share: { noul: 1 }, prominent_faces: { noul: 0 } } },
-      });
+      return response(0, 0);
     });
     await createClefVision(env).judge(judgeInput);
     expect(bodies[0]?.images[0]?.content_type).toBe("image/jpeg");
   });
 
   it.each([
-    ["the photo fetch fails", () => new Response("gone", { status: 404 }), null, "photo fetch HTTP 404"],
-    ["clef answers an HTTP error", null, () => new Response("err", { status: 500 }), "clef HTTP 500"],
+    ["photo HTTP failure", () => new Response("gone", { status: 404 }), null],
+    ["clef HTTP failure", null, () => new Response("err", { status: 500 })],
+    ["missing scores", null, () => Response.json({ success: true, result: { answers: {} } })],
     [
-      "clef answers without both scores",
+      "unsuccessful envelope",
       null,
-      () => Response.json({ result: { answers: {} } }),
-      "clef returned no verdict",
+      () =>
+        Response.json({
+          success: false,
+          result: {
+            answers: { gore: { type: "noul", noul: 0 }, explicit_sexual: { type: "noul", noul: 0 } },
+          },
+        }),
     ],
-  ] as const)("fails closed when %s and Claude is not configured", async (_, photo, clef, message) => {
+    ["score above one", null, () => response(1.01, 0)],
+    ["score below zero", null, () => response(0, -0.1)],
+    ["non-number score", null, () => response("0.1", 0)],
+    ["null score", null, () => response(null, 0)],
+    [
+      "wrong answer type",
+      null,
+      () =>
+        Response.json({
+          success: true,
+          result: {
+            answers: {
+              gore: { type: "choice", noul: 0 },
+              explicit_sexual: { type: "noul", noul: 0 },
+            },
+          },
+        }),
+    ],
+    ["malformed JSON", null, () => new Response("{")],
+    [
+      "network error",
+      null,
+      () => {
+        throw new TypeError("network unavailable");
+      },
+    ],
+  ] as const)("keeps %s unavailable rather than passing safety", async (_, photo, clef) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal("fetch", async (url: string) =>
       url === judgeInput.photo_url
         ? (photo?.() ?? new Response(new Uint8Array([1]), { headers: { "content-type": "image/png; q=1" } }))
-        : (clef?.() ?? Response.json({})),
+        : (clef?.() ?? response(0, 0)),
     );
-    await expect(createClefVision(env).judge(judgeInput)).rejects.toThrow(message);
+    try {
+      await expect(createClefVision(env).judge(judgeInput)).rejects.toThrow();
+      const r = await verifySubmission(input(judgeInput, createClefVision(env)));
+      expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+      expect(r.vision_reason).toContain("unavailable");
+      expect(log).toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   });
 
-  describe("with Claude configured", () => {
-    const verdict = { allowed: true, reason: "Claude says safe.", prominent_faces: false, confidence: 0.7 };
-    const claudeEnv = { ...env, ANTHROPIC_API_KEY: "test" };
-    const route = (clef: () => Response | Promise<Response>) => {
-      const hits: string[] = [];
-      vi.stubGlobal("fetch", async (url: string) => {
-        hits.push(url.includes("anthropic") ? "claude" : url === judgeInput.photo_url ? "photo" : "clef");
-        if (url.includes("anthropic")) return message([{ type: "text", text: JSON.stringify(verdict) }]);
-        if (url === judgeInput.photo_url) return new Response(new Uint8Array([1]));
-        return clef();
+  it("uses Claude on clef failure and logs the failure without private URLs", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const hits: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      hits.push(url.includes("anthropic") ? "claude" : url === judgeInput.photo_url ? "photo" : "clef");
+      if (url.includes("anthropic"))
+        return message([
+          {
+            type: "text",
+            text: JSON.stringify({
+              gore: false,
+              explicit_sexual: false,
+              reason: "Neither confirmed.",
+              confidence: 0.2,
+            }),
+          },
+        ]);
+      if (url === judgeInput.photo_url) return new Response(new Uint8Array([1]));
+      throw new TypeError("private photo URL must not be logged");
+    });
+    try {
+      await expect(
+        createClefVision({ ...env, ANTHROPIC_API_KEY: "test" }).judge(judgeInput),
+      ).resolves.toEqual({
+        allowed: true,
+        reason: "Neither confirmed.",
+        confidence: 0.2,
       });
-      return hits;
-    };
-
-    it("asks Claude when clef is unsure", async () => {
-      const hits = route(() =>
-        Response.json({
-          result: { answers: { safe_to_share: { noul: 0.9 }, prominent_faces: { noul: 0.55 } } },
-        }),
-      );
-      await expect(createClefVision(claudeEnv).judge(judgeInput)).resolves.toEqual(verdict);
       expect(hits).toEqual(["photo", "clef", "claude"]);
-    });
-
-    it("asks Claude when clef fails, logging only the failure message", async () => {
-      const log = vi.spyOn(console, "error").mockImplementation(() => {});
-      route(() => new Response("down", { status: 503 }));
-      await expect(createClefVision(claudeEnv).judge(judgeInput)).resolves.toEqual(verdict);
-      route(() => Promise.reject("socket hang up"));
-      await expect(createClefVision(claudeEnv).judge(judgeInput)).resolves.toEqual(verdict);
-      expect(log.mock.calls).toEqual([
-        ["verify: clef failed, asking Claude: clef HTTP 503"],
-        ["verify: clef failed, asking Claude: socket hang up"],
-      ]);
+      expect(log.mock.calls).toEqual([["verify: clef failed, asking Claude", "TypeError"]]);
+    } finally {
       log.mockRestore();
-    });
+    }
+  });
+
+  it("keeps failure of both providers unavailable", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
+    try {
+      const r = await verifySubmission(
+        input(judgeInput, createClefVision({ ...env, ANTHROPIC_API_KEY: "test" })),
+      );
+      expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+      expect(r.vision_reason).toContain("unavailable");
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 

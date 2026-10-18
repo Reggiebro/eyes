@@ -68,7 +68,6 @@ export function instrumentProviders(p: Providers, log: Log): Providers {
           data: {
             allowed: v.allowed,
             confidence: v.confidence,
-            prominent_faces: v.prominent_faces,
           },
         });
         return v;
