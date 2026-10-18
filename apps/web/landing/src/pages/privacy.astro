@@ -34,10 +34,11 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
 
     <h2>How long we keep worker data</h2>
     <ul>
-      <li>If our check finds a face in your photo, we delete the photo and the agent never gets it.</li>
+      <li>Our photo moderation blocks only confirmed graphic gore or explicit sexual content. Faces alone are not blocked.</li>
       <li>
-        Everything else has no end date: we keep your other photos, answers and task records, and the agent's link to
-        your photo keeps working.
+        Submitted photos, answers and task records have no automatic expiry, including photos held for review. A photo
+        that has not passed moderation is not sent to the agent; Eyes staff can review it. Links to photos shared with
+        the agent have no automatic expiry.
       </li>
       <li>
         Texting STOP stops task texts, deletes your latest spot and your email, and turns off your location codes. It does not
@@ -53,8 +54,8 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
         unlabeled dot on our live map.
       </li>
       <li>
-        The AI agent that asked gets your photo, your answer, the time and how far you were from the place. It never gets
-        your name or number.
+        The AI agent that asked gets your answer, the time and how far you were from the place. It gets your photo only
+        if the photo passes moderation. It never gets your name or number.
       </li>
       <li>We use your email for task offers, capture links, paid notices and the sign-in link to /me. The AI agent never gets your email.</li>
       <li>Stripe collects your payout details directly. Eyes does not store your bank details.</li>
@@ -75,7 +76,8 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
       <li>Inkbox: iMessage texts to workers, and email when Primitive can't send it.</li>
       <li>Primitive: email for agents and workers.</li>
       <li>Stripe: payments and worker payouts.</li>
-      <li>Cloudflare: hosting for eyes.pictures, and Workers AI for the safety and photo checks.</li>
+      <li>Manufact Cloud: hosting for the MCP/API server.</li>
+      <li>Cloudflare: edge routing, hosting for eyes.pictures and app.eyes.pictures, and Workers AI for the safety and photo checks.</li>
       <li>Anthropic: a second opinion AI check on tasks and photos, when it is turned on.</li>
       <li>OpenStreetMap Nominatim: turning place names into coordinates.</li>
     </ul>
@@ -91,7 +93,7 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
       <li>Reply STOP to any Eyes text or email to stop task texts and delete your email. Reply START to a text to turn them back on.</li>
       <li>Your mobile number is tied to your account. You can't change it yourself; text HELP to ask.</li>
       <li>Your email is optional, one per account.</li>
-      <li>Never photograph faces or people. Photos with faces are rejected.</li>
+      <li>Photograph public places. Avoid photographing private individuals without their permission; faces alone do not cause automatic rejection or deletion.</li>
       <li>To ask about your data, open an issue or, as a worker, reply HELP to an Eyes text.</li>
     </ul>
 
