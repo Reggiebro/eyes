@@ -1897,6 +1897,183 @@ describe("ops workers map, story and worker panel", () => {
     ],
     earnings: { paid_cents: 300, payouts: 1, released_cents: 300, last_paid_at: "2026-10-17T12:06:00Z" },
   };
+  const HOLD_AT = "2026-10-18T12:00:00Z";
+  const reviewData = {
+    worker_id: W,
+    dispute_hold_at: HOLD_AT as string | null,
+    dispute_reviewed_at: null as string | null,
+    disputed_tasks: 3,
+    history: [TASK_ID, HELD, "33333333-2222-4333-8444-555555555555"].map((task_id) => ({
+      task_id,
+      created_at: HOLD_AT,
+      message: "<script>untrusted dispute</script>",
+      dispute_status: "open",
+    })),
+    last_review: null as { actor: string; at: string; note: string; decision: "lift_hold" } | null,
+  };
+  async function withDisputeReview(
+    opts: { root?: boolean; banned?: boolean; hold?: boolean; get?: Route; post?: Route } = {},
+  ) {
+    const worker = {
+      ...detail.worker,
+      banned: opts.banned ?? false,
+      dispute_hold_at: opts.hold === false ? null : HOLD_AT,
+      dispute_reviewed_at: null,
+      test: true,
+    };
+    const data = structuredClone(reviewData);
+    if (opts.hold === false) {
+      data.dispute_hold_at = null;
+      data.disputed_tasks = 2;
+      data.history = data.history.slice(0, 2);
+    }
+    const page = await setup(
+      {
+        "GET /ops/feed": () => ok(feed({}, { workers: [worker] })),
+        [`GET /ops/workers/${W}`]: () => ok({ ...detail, worker }),
+        [`GET /ops/workers/${W}/dispute-review`]: opts.get ?? (() => ok(data)),
+        [`POST /ops/workers/${W}/dispute-review`]:
+          opts.post ??
+          (() => {
+            data.dispute_hold_at = null;
+            data.dispute_reviewed_at = HOLD_AT;
+            data.disputed_tasks = 0;
+            data.history = [];
+            data.last_review = {
+              actor: "reviewer@example.test",
+              at: HOLD_AT,
+              note: "Reviewed all three tasks",
+              decision: "lift_hold",
+            };
+            return ok(data);
+          }),
+      },
+      { hash: `#workers?w=${W.slice(0, 8)}`, root: opts.root },
+    );
+    await page.settle();
+    await page.settle();
+    return { ...page, panel: page.$<HTMLDialogElement>("review-panel") };
+  }
+
+  for (const root of [false, true]) {
+    it(`reviews only the temporary hold with a required note (${root ? "internal host" : "/ops"})`, async () => {
+      const page = await withDisputeReview({ root });
+      const { panel, button, click, requests } = page;
+      expect(page.text("workers")).toContain("Paused: dispute review");
+      expect(panel.textContent).toContain("3 distinct disputed tasks since last review");
+      expect(panel.querySelectorAll(".worker-disputes a")).toHaveLength(3);
+      expect(panel.querySelector(".worker-disputes script")).toBeNull();
+      expect(panel.textContent).toContain("<script>untrusted dispute</script>");
+      const note = panel.querySelector("textarea") as HTMLTextAreaElement;
+      expect([note.minLength, note.maxLength, note.required]).toEqual([5, 1000, true]);
+      await click(button(panel, "Review and lift temporary hold"));
+      expect(note.getAttribute("aria-invalid")).toBe("true");
+      note.value = "four";
+      await click(button(panel, "Review and lift temporary hold"));
+      expect(panel.querySelector(".decide__question")?.textContent).toContain(
+        "Existing payments and disputes do not change",
+      );
+      expect(panel.querySelector(".decide__question")?.textContent).toContain(
+        "permanent fraud ban is not overridden",
+      );
+      await click(button(panel, "Lift temporary hold"));
+      expect(panel.textContent).toContain("5–1000 characters");
+      expect(requests.filter((r) => r.method === "POST")).toHaveLength(0);
+      note.value = "  Reviewed all three tasks  ";
+      await click(button(panel, "Review and lift temporary hold"));
+      await click(button(panel, "Lift temporary hold"));
+      expect(requests.filter((r) => r.method === "POST")).toEqual([
+        {
+          method: "POST",
+          path: `/ops/workers/${W}/dispute-review`,
+          body: { note: "Reviewed all three tasks" },
+        },
+      ]);
+      expect(page.raw).toContain(`${root ? "" : "/ops"}/workers/${W}/dispute-review`);
+      expect(panel.textContent).toContain("No temporary dispute hold.");
+      expect(panel.textContent).toContain("reviewer@example.test");
+      expect(panel.textContent).toContain("Reviewed all three tasks");
+      expect(page.text("workers")).not.toContain("Paused: dispute review");
+      expect(panel.textContent).toContain("earned $3.00 in 1 payout");
+      expect(panel.querySelector(".decide")).toBeNull();
+    });
+  }
+
+  it("keeps a permanent ban separate and never lifts it when reviewing the temporary hold", async () => {
+    const page = await withDisputeReview({ banned: true });
+    const { panel, click, button } = page;
+    expect([...panel.querySelectorAll(".task-head .ui-badge")].map((b) => b.textContent)).toEqual([
+      "Banned",
+      "Paused: dispute review",
+      "test",
+    ]);
+    (panel.querySelector("textarea") as HTMLTextAreaElement).value = "Reviewed all three tasks";
+    await click(button(panel, "Review and lift temporary hold"));
+    await click(button(panel, "Lift temporary hold"));
+    expect(panel.querySelector(".task-head .ui-badge")?.textContent).toBe("Banned");
+    expect(page.text("workers")).toContain("Banned");
+    expect(page.text("workers")).not.toContain("Paused: dispute review");
+    expect(panel.textContent).toContain("No temporary dispute hold.");
+  });
+
+  it("shows unheld history without a lift action and links distinct tasks to Support", async () => {
+    const page = await withDisputeReview({ hold: false });
+    expect(page.panel.textContent).toContain("2 distinct disputed tasks since last review");
+    expect(page.panel.querySelector(".decide")).toBeNull();
+    const link = page.panel.querySelector(".worker-disputes a") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(`#support?q=${TASK_ID}`);
+    await page.click(link);
+    expect(page.panel.open).toBe(false);
+    expect(page.win.location.hash).toBe(`#support?q=${TASK_ID}`);
+    expect(page.requests.filter((r) => r.method === "POST")).toHaveLength(0);
+  });
+
+  it("retries a failed history read without offering an unseen decision", async () => {
+    let reads = 0;
+    const page = await withDisputeReview({
+      get: () => (++reads === 1 ? ok({ error: "forbidden" }, 403) : ok(reviewData)),
+    });
+    expect(page.panel.querySelector('[role="alert"]')?.textContent).toContain("forbidden");
+    expect(page.panel.querySelector(".decide")).toBeNull();
+    await page.click(page.button(page.panel, "Retry dispute review"));
+    expect(page.panel.textContent).toContain("3 distinct disputed tasks");
+    expect(page.panel.querySelector(".decide")).not.toBeNull();
+  });
+
+  it("locks pending review, retains notes on errors, and never auto-clears a stale hold", async () => {
+    let finish!: (response: Response) => void;
+    const page = await withDisputeReview({
+      post: () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const { panel, button, click } = page;
+    const note = panel.querySelector("textarea") as HTMLTextAreaElement;
+    note.value = "Reviewed all three tasks";
+    await click(button(panel, "Review and lift temporary hold"));
+    await click(button(panel, "Lift temporary hold"));
+    expect(panel.querySelector(".worker-disputes")?.getAttribute("aria-busy")).toBe("true");
+    expect(button(panel, "Lift temporary hold…").disabled).toBe(true);
+    expect(button(panel, "Close").disabled).toBe(true);
+    const cancel = new page.happy.Event("cancel", { cancelable: true });
+    panel.dispatchEvent(cancel as unknown as Event);
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(page.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    finish(ok({ error: "temporarily_unavailable" }, 503));
+    await page.settle();
+    expect(note.value).toBe("Reviewed all three tasks");
+    expect(note.disabled).toBe(false);
+    expect(panel.textContent).toContain("temporarily_unavailable");
+    await click(button(panel, "Review and lift temporary hold"));
+    await click(button(panel, "Lift temporary hold"));
+    finish(ok({ error: "worker_not_held" }, 409));
+    await page.settle();
+    expect(panel.textContent).toContain("Close and reopen the worker to refresh");
+    expect(page.text("workers")).toContain("Paused: dispute review");
+    expect(button(panel, "Close").disabled).toBe(false);
+    expect(note.value).toBe("Reviewed all three tasks");
+  });
   const OLD_REVIEW = {
     ...feed().tasks[1],
     id: "old-review",
@@ -2094,7 +2271,7 @@ describe("ops workers map, story and worker panel", () => {
     await page.settle();
     await page.settle();
     const panel = page.$("review-panel");
-    expect(panel.querySelector(".ui-badge")?.textContent).toBe("banned");
+    expect(panel.querySelector(".ui-badge")?.textContent).toBe("Banned");
     expect(panel.querySelector(".line")?.textContent).toContain("No location");
     expect(panel.querySelector(".line")?.textContent).toContain("earned $0.00 in 0 payouts");
     expect(panel.querySelector(".panel__sub")?.textContent).toBe("No tasks yet");
