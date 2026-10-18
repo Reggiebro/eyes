@@ -413,7 +413,7 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
 
 <script>
   import { $, call, Problem, showError } from "../api.ts";
-  import { type EmailAction, type EmailRow, emailRow, saveEmail, validEmail } from "../email.ts";
+  import { type EmailAction, type EmailRow, emailRow, saveEmail, startEmail, validEmail } from "../email.ts";
   import {
     FILTERS,
     type Filter,
@@ -518,11 +518,26 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
         showError(error, err);
       }
     };
+    // Add: the API hands back a mailto; the worker sends that email and the sender's address connects, verified.
+    const start = async (button: HTMLElement) => {
+      button.setAttribute("aria-busy", "true");
+      try {
+        location.href = await startEmail(code as string, call);
+        error.hidden = true;
+        part(li, ".ui-check__detail").textContent = "Check: send the email we opened, then refresh.";
+      } catch (err) {
+        if (err instanceof Problem && err.status === 401) return show({ step: "expired" });
+        showError(error, err);
+      } finally {
+        button.removeAttribute("aria-busy");
+      }
+    };
     li.addEventListener("click", (e) => {
       const button = (e.target as Element).closest<HTMLElement>("button[data-act]");
       const act = button?.dataset.act;
       if (!button || button.hasAttribute("aria-busy")) return;
-      if (act === "add" || act === "change") mode("form");
+      if (act === "add") void start(button);
+      else if (act === "change") mode("form");
       else if (act === "resend") typed ? void save(typed, button) : mode("form", "Enter it again to resend the link.");
       else if (act === "remove") mode("confirm");
       else if (act === "confirm-remove") void save(null, button);
