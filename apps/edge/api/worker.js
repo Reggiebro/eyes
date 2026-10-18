@@ -10,16 +10,15 @@ const READY_WAIT_MS = 60_000;
 // Larger bodies (photo uploads) stream once on the normal path instead of being held in memory.
 const BUFFER_MAX_BYTES = 1024 * 1024;
 // The runtime's errors when nothing reached the server: no process listening on the port (booting,
-// or draining after SIGTERM in a rollout), or no instance free yet (max_instances 1 while the old one
-// stops). Strings as matched by @cloudflare/containers. Any other error may come after the server
-// got the request, so that request is never replayed.
-const NOT_DELIVERED = [
-  "the container is not listening",
-  "there is no container instance that can be provided",
-];
+// or draining after SIGTERM in a rollout), the process has exited and the instance is not running,
+// or no instance is free yet (max_instances 1 while the old one stops). Texts seen live during a
+// rollout: "The container is not running, consider calling start()" and "The container is not
+// listening in the TCP address 10.0.0.1:3000". Any other error may come after the server got the
+// request, so that request is never replayed.
+const NOT_DELIVERED = /container is not (listening|running)|no container instance that can be provided/i;
 
 function notDelivered(err) {
-  return NOT_DELIVERED.some((text) => String(err?.message).includes(text));
+  return NOT_DELIVERED.test(String(err?.message));
 }
 
 function unavailable(status, err) {

@@ -50,10 +50,12 @@ describe("withShortLinks", () => {
     ]);
   });
 
-  it("sends a text without our links unchanged and stores nothing", async () => {
+  it("sends a text without our links, or with an /s/ link already, unchanged and stores nothing", async () => {
     const { short, outbox, stored } = setup();
     await short.sendText("+15550000000", "Eyes: you're opted out. See https://x.test/a");
     expect(outbox.at(-1)?.payload).toBe("Eyes: you're opted out. See https://x.test/a");
+    await short.sendText("+15550000000", "Tap this and press Send: https://api.eyes.test/s/AbCd1234");
+    expect(outbox.at(-1)?.payload).toBe("Tap this and press Send: https://api.eyes.test/s/AbCd1234");
     expect(stored()).toEqual([]);
   });
 

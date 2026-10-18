@@ -11,6 +11,7 @@ import {
   type EyesService,
   FAKE_STRIPE_SIGNATURE,
   fakeProviders,
+  JoinWorkerInput,
   type OfferView,
   type OwnerPolicyInput,
   type PhotoUpload,
@@ -89,7 +90,11 @@ const OPS_KEY = "ops-5f2c9a1e7b3d4c8a9e0f1a2b3c4d5e6f";
 const FEED = {
   tasks: [{ id: TASK_ID, lat: 37.78246, lng: -122.40776, photo_url: "https://storage.eyes.test/p.jpg" }],
   ledger: [],
-  workers: [{ lat: 37.78246, lng: -122.40776, available: true, opted_in: true }],
+  workers: [
+    { lat: 37.78246, lng: -122.40776, available: true, opted_in: true },
+    { lat: null, lng: null, available: false, opted_in: true, test: true },
+    { lat: 0, lng: 0, available: true, opted_in: true },
+  ],
   totals: { escrowed_cents: 0, released_today_cents: 0, paid_out_today_cents: 0 },
 };
 
@@ -342,6 +347,8 @@ describe("worker setup page (ADR-028)", () => {
     app: { last_at: "2026-10-17T18:00:00.000Z", sending: true },
     payouts: { set_up: false, live: true, setup_url: "http://api.eyes.test/w/connect/c" },
     here_url: "http://worker.eyes.test/here.html?t=l",
+    email_masked: null,
+    email_status: "none",
   };
   const TASKS: WorkerTasks = {
     paid_usd: 0,
@@ -451,6 +458,175 @@ describe("worker setup page (ADR-028)", () => {
   });
 });
 
+describe("worker email routes (T6.48)", () => {
+  const post = (
+    fetch: (url: string, init?: RequestInit) => Promise<Response>,
+    path: string,
+    body: unknown,
+    headers = {},
+  ) =>
+    fetch(`http://eyes.test${path}`, {
+      method: "POST",
+      headers: { origin: "http://worker.eyes.test", "x-forwarded-for": "203.0.113.9", ...headers },
+      body: JSON.stringify(body),
+    });
+
+  it("POST /w/me/email passes the bearer code and trimmed address (or null), uncached, 5 an hour per code", async () => {
+    const calls: unknown[][] = [];
+    const { fetch, clock } = setup({
+      workerSetEmail: async (token, email) => {
+        calls.push([token, email]);
+        if (token !== "good") throw new EyesError("unauthorized");
+        return {
+          email_masked: email ? "a***@example.com" : null,
+          email_status: email ? "pending" : "none",
+        } as never;
+      },
+    });
+    const auth = { authorization: "Bearer good" };
+    const res = await post(fetch, "/w/me/email", { email: " ana@example.com " }, auth);
+    expect([res.status, await res.json()]).toEqual([
+      200,
+      { email_masked: "a***@example.com", email_status: "pending" },
+    ]);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+    expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    const refused = await post(fetch, "/w/me/email", { email: null });
+    expect([refused.status, refused.headers.get("cache-control")]).toEqual([401, "no-store"]);
+    expect((await post(fetch, "/w/me/email", {}, auth)).status).toBe(400);
+    expect(calls).toEqual([
+      ["good", "ana@example.com"],
+      ["good", null],
+      ["", null],
+    ]);
+    for (let i = 0; i < 3; i++)
+      expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    const limited = await post(
+      fetch,
+      "/w/me/email",
+      { email: null },
+      { ...auth, "x-forwarded-for": "198.51.100.1" },
+    );
+    expect([limited.status, (await limited.json()).error]).toEqual([429, "rate_limited"]);
+    expect(
+      (await post(fetch, "/w/me/email", { email: null }, { authorization: "Bearer other" })).status,
+    ).toBe(401);
+    clock.advance(3600 * 1000);
+    expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+  });
+
+  it("POST /w/me/email/start returns the mailto for the bearer code, uncached, sharing /w/me/email's 5 an hour", async () => {
+    const { fetch } = setup({
+      workerEmailStart: async (token) => {
+        if (token !== "good") throw new EyesError("unauthorized");
+        return { mailto: "mailto:work@eyes.test?subject=Eyes%20c" };
+      },
+      workerSetEmail: async () => ({}) as never,
+    });
+    const auth = { authorization: "Bearer good" };
+    const res = await post(fetch, "/w/me/email/start", {}, auth);
+    expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+      200,
+      { mailto: "mailto:work@eyes.test?subject=Eyes%20c" },
+      "no-store",
+    ]);
+    expect((await post(fetch, "/w/me/email/start", {})).status).toBe(401);
+    for (let i = 0; i < 4; i++)
+      expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    expect((await post(fetch, "/w/me/email/start", {}, auth)).status).toBe(429);
+  });
+
+  it("POST /w/login/email always answers 200 without waiting for the send, 5 an hour per address and per caller", async () => {
+    const asked: string[] = [];
+    let finish = () => {};
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { fetch } = setup({
+        workerEmailLogin: (email) => {
+          asked.push(email);
+          if (email === "boom@example.com") return Promise.reject(new TypeError("down"));
+          if (email === "odd@example.com") return Promise.reject("down");
+          return new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      });
+      const res = await post(fetch, "/w/login/email", { email: " Ana@Example.com " });
+      expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+        200,
+        { ok: true },
+        "no-store",
+      ]);
+      expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+      finish();
+      const probe = await post(fetch, "/w/login/email", {});
+      expect([probe.status, (await probe.json()).error]).toEqual([400, "invalid_input"]);
+      expect((await post(fetch, "/w/login/email", { email: "boom@example.com" })).status).toBe(200);
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledWith("worker email login failed: TypeError"));
+      await post(
+        fetch,
+        "/w/login/email",
+        { email: "odd@example.com" },
+        { "x-forwarded-for": "198.51.100.77" },
+      );
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledWith("worker email login failed: string"));
+      for (let i = 0; i < 4; i++)
+        await post(
+          fetch,
+          "/w/login/email",
+          { email: "ana@example.com" },
+          { "x-forwarded-for": `198.51.100.${i}` },
+        );
+      const perAddress = await post(
+        fetch,
+        "/w/login/email",
+        { email: "ANA@example.com" },
+        { "x-forwarded-for": "198.51.100.50" },
+      );
+      expect(perAddress.status).toBe(429);
+      for (let i = 0; i < 3; i++) await post(fetch, "/w/login/email", { email: `x${i}@example.com` });
+      expect((await post(fetch, "/w/login/email", { email: "new@example.com" })).status).toBe(429);
+      expect(asked).toEqual([
+        "ana@example.com",
+        "boom@example.com",
+        "odd@example.com",
+        ...Array(4).fill("ana@example.com"),
+        "x0@example.com",
+        "x1@example.com",
+        "x2@example.com",
+      ]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("POST /w/login/code trades a code for the /me token, 401 for a bad one, 10 tries an hour per caller", async () => {
+    const { fetch } = setup({
+      workerLoginCode: async (code) => {
+        if (code !== "good-code") throw new EyesError("unauthorized");
+        return { token: "e:token" };
+      },
+    });
+    const res = await post(fetch, "/w/login/code", { code: "good-code" });
+    expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+      200,
+      { token: "e:token" },
+      "no-store",
+    ]);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+    expect((await post(fetch, "/w/login/code", {})).status).toBe(400);
+    for (let i = 0; i < 9; i++)
+      expect((await post(fetch, "/w/login/code", { code: `bad${i}` })).status).toBe(401);
+    const limited = await post(fetch, "/w/login/code", { code: "good-code" });
+    expect([limited.status, (await limited.json()).retry_after_s]).toEqual([429, 3600]);
+    expect(
+      (await post(fetch, "/w/login/code", { code: "good-code" }, { "x-forwarded-for": "198.51.100.1" }))
+        .status,
+    ).toBe(200);
+  });
+});
+
 describe("worker location", () => {
   it.each(["/w/location", "/v1/worker/location"])(
     "%s passes the bearer token and body to the service and answers 204, with no agent key",
@@ -504,6 +680,13 @@ describe("worker location", () => {
     { lng: ok.lng, source: ok.source },
   ])("rejects %j", (body) => {
     expect(WorkerLocationInput.safeParse(body).success).toBe(false);
+  });
+  it("refuses 0,0 when a worker joins, like every other location write", () => {
+    const join = { name: "Ana Diaz", phone: "+14155550121", lat: 37.78246, lng: -122.40776 };
+    expect(JoinWorkerInput.safeParse(join).success).toBe(true);
+    expect(JoinWorkerInput.safeParse({ ...join, lat: 0, lng: 0 }).error?.issues[0]?.message).toBe(
+      "0,0 is not a real location.",
+    );
   });
 });
 
@@ -1324,6 +1507,19 @@ describe("routes", () => {
     expect(bare).toContain("money ledger (Postgres)");
     expect(bare).not.toContain("Deployed commit");
     expect(bare).not.toContain("not recorded");
+    const email = { EYES_PROVIDERS: "live", PRIMITIVE_API_KEY: "prim_test" };
+    const gated = await (await setup({}, email).fetch("http://eyes.test/status")).text();
+    expect(gated).toContain("Email: live (replies only until Primitive enables any-domain sending)");
+    const inkbox = await (
+      await setup({}, { ...email, INKBOX_API_KEY: "ik_test" }).fetch("http://eyes.test/status")
+    ).text();
+    expect(inkbox).toContain(
+      "Email: live (first contact via Inkbox until Primitive enables any-domain sending)",
+    );
+    const open = await (
+      await setup({}, { ...email, PRIMITIVE_SEND_ANY_DOMAIN: "1" }).fetch("http://eyes.test/status")
+    ).text();
+    expect(open).toContain("Email: live</b>");
   });
 
   it("says on /status and the home page what is simulated and whether the safety classifier is on", async () => {
@@ -1669,15 +1865,20 @@ describe("ops dashboard", () => {
     expect(feed.status).toBe(200);
     expect(await feed.json()).toMatchObject({
       ...FEED,
-      workers: [{ lat: 37.782, lng: -122.408, available: true, opted_in: true }],
+      // A missing location stays missing (not 0,0, "Null Island"), and 0,0 counts as missing.
+      workers: [
+        { lat: 37.782, lng: -122.408, available: true, opted_in: true },
+        { lat: null, lng: null, available: false, opted_in: true, test: true },
+        { lat: null, lng: null, available: true, opted_in: true },
+      ],
       ops: {
         operator: "break-glass",
         health: { db: "insforge", classifier: "rules only", commit: null, db_error: null },
-        workers: { total: 1, opted_in: 1, online: 1 },
+        workers: { total: 2, opted_in: 2, online: 2 },
         queue: [],
-        errors: [],
       },
     });
+    // Errors live in the Errors tab (/ops/issues) now, not in the feed.
     expect(rpcCalls).toEqual([{ fn: "eyes_dashboard_feed", args: { p_limit: 500 } }]);
     // The old live map is the Workers tab now.
     expect([live.status, live.headers.get("location")]).toEqual([301, "/ops#workers"]);
@@ -1726,7 +1927,7 @@ describe("ops dashboard", () => {
       classifier: "clef",
       db_error: "connect ECONNREFUSED postgres://[redacted]@db.internal",
     });
-    expect(body.ops.errors).toMatchObject([{ kind: "log", level: "error", summary: "boom" }]);
+    expect(body.ops).not.toHaveProperty("errors");
     expect(body.tasks).toEqual([]);
   });
 
@@ -1770,7 +1971,24 @@ describe("ChatGPT and Claude widget", () => {
           "openai/outputTemplate": "ui://eyes/card.html",
         });
       } else {
-        expect(meta?.ui, tool.name).toBeUndefined();
+        expect((meta?.ui as { resourceUri?: string } | undefined)?.resourceUri, tool.name).toBeUndefined();
+      }
+    }
+  });
+
+  it("lets the card's buttons call their tools in ChatGPT and MCP Apps hosts", async () => {
+    const client = await connect(setup().fetch);
+    const { tools } = await client.listTools();
+    const callable = ["ask_eyes", "get_task", "await_answer", "cancel_task", "dispute_answer", "get_balance"];
+    for (const tool of tools) {
+      const meta = tool._meta as Record<string, unknown> | undefined;
+      if (callable.includes(tool.name)) {
+        expect(meta, tool.name).toMatchObject({
+          ui: { visibility: ["model", "app"] },
+          "openai/widgetAccessible": true,
+        });
+      } else {
+        expect(meta?.["openai/widgetAccessible"], tool.name).toBeUndefined();
       }
     }
   });
@@ -2198,7 +2416,6 @@ describe("ops data routes", () => {
     });
     const feed = await (await get("/ops/feed")).json();
     expect(feed.ops.health).toMatchObject({ classifier: "Claude", db_error: "socket closed" });
-    expect(feed.ops.errors).toEqual([]);
     expect(await (await get("/ops/series")).json()).toMatchObject({ source: "postgres" });
     expect(await (await get("/ops/events?q=x")).json()).toMatchObject({ source: "memory", events: [] });
     errors.mockRestore();
@@ -2291,6 +2508,56 @@ describe("ops data routes", () => {
     expect(bad.status).toBe(404);
     expect(await bad.json()).toMatchObject({ error: "task_not_found", message: "No task with this id." });
     expect(calls.length).toBe(before);
+  });
+
+  it("lists issues, an issue's occurrences, and changes an issue's status with a log line", async () => {
+    const FP = "0123456789abcdef";
+    let rows: unknown[] = [{ fingerprint: FP, title: "TypeError: x", status: "unresolved" }];
+    const { get, post, calls, events } = opsServer(() => rows);
+    expect(await (await get("/ops/issues")).json()).toEqual({ issues: rows });
+    expect(calls.at(-1)?.fn).toBe("eyes_issues");
+    expect(calls.at(-1)?.args).toHaveProperty("p_now");
+    rows = [{ id: 1, at: "2026-10-17T12:00:00Z", message: "TypeError: x", tags: {} }];
+    expect(await (await get(`/ops/issues/${FP}`)).json()).toEqual({ events: rows });
+    expect(calls.at(-1)).toMatchObject({ fn: "eyes_issue_events", args: { p_fingerprint: FP, p_limit: 20 } });
+    const before = calls.length;
+    expect(await (await get("/ops/issues/not-a-fingerprint")).json()).toEqual({ events: [] });
+    expect(calls.length).toBe(before);
+
+    rows = [{ fingerprint: FP, title: "TypeError: x", status: "ignored" }];
+    const ignored = await post(`/ops/issues/${FP}/status`, { status: "ignored", more: 10 });
+    expect([ignored.status, (await ignored.json()).issue.status]).toEqual([200, "ignored"]);
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_issue_status",
+      args: { p_fingerprint: FP, p_status: "ignored", p_more: 10, p_by: "break-glass" },
+    });
+    await post(`/ops/issues/${FP}/status`, { status: "resolved" });
+    expect(calls.at(-1)?.args).toMatchObject({ p_status: "resolved", p_more: null });
+    expect(
+      events
+        .recent()
+        .filter((e) => e.kind === "ops")
+        .map((e) => e.summary),
+    ).toEqual([`issue ${FP} resolved by break-glass`, `issue ${FP} ignored until 10 more by break-glass`]);
+    expect((await post(`/ops/issues/${FP}/status`, { status: "deleted" })).status).toBe(400);
+    rows = [];
+    const missing = await post(`/ops/issues/${FP}/status`, { status: "resolved" });
+    expect([missing.status, (await missing.json()).error]).toEqual([404, "issue_not_found"]);
+  });
+
+  it("serves the map's tasks for the Tasks tab's status and window, ignoring unknown statuses and bad dates", async () => {
+    const { get, calls } = opsServer(() => [{ id: "t1", status: "needs_review" }]);
+    expect(
+      await (await get("/ops/map/tasks?status=needs_review&from=2026-10-17T07:00:00.000Z&to=nope")).json(),
+    ).toEqual({
+      tasks: [{ id: "t1", status: "needs_review" }],
+    });
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_map_tasks",
+      args: { p_status: "needs_review", p_from: "2026-10-17T07:00:00.000Z", p_to: null },
+    });
+    await get("/ops/map/tasks?status=bogus");
+    expect(calls.at(-1)?.args).toMatchObject({ p_status: null, p_from: null, p_to: null });
   });
 
   it("shows one worker with a rounded position, their tasks and earnings, and 404s unknown or malformed ids", async () => {

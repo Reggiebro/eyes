@@ -165,10 +165,13 @@ export function renderFunnel(doc: Document, root: HTMLElement, statuses: Record<
         `funnel__step${n ? "" : " is-zero"}${LIVE.includes(s) && n ? " is-live" : ""}${n ? (TINT[s] ?? "") : ""}${s === AFTER[0] ? " is-first-after" : ""}`,
         node(doc, "span", "funnel__track", bar),
         node(doc, "b", null, String(n)),
-        node(doc, "span", "funnel__label", statusLabel(s)),
+        node(doc, "span", "funnel__label", s === "needs_review" ? "Review" : statusLabel(s)),
       );
       link.href = `#tasks?status=${s}`;
-      link.setAttribute("aria-label", `${statusLabel(s)}: ${n}. Show in Tasks`);
+      link.setAttribute(
+        "aria-label",
+        `${s === "needs_review" ? "Review" : statusLabel(s)}: ${n}. Show in Tasks`,
+      );
       return node(doc, "li", null, link);
     }),
   );

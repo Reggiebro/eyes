@@ -1,11 +1,13 @@
-# Connect Eyes to ChatGPT, Claude, Claude Code and Cursor
+# Connect Eyes to an MCP client
 
-MCP server URL: `https://api.eyes.pictures/mcp`
+| URL | Use it for |
+| --- | --- |
+| `https://dark-steel-ofaoa.run.mcp-use.com/mcp` | **Manufact gateway (default).** Cursor, VS Code, Claude Code, Gemini CLI, Codex, Instinct, the mcp-use SDKs and any other MCP client. |
+| `https://api.eyes.pictures/mcp` | **Direct.** ChatGPT and claude.ai / Claude Desktop connectors (cards and OAuth), and the fallback if the gateway is down. |
 
-There are two ways to sign in. Both use the same Eyes API key.
+Both URLs reach the same server and the same 10 tools: `quote_task`, `ask_eyes`, `await_answer`, `get_task`, `show_task`, `list_tasks`, `cancel_task`, `dispute_answer`, `get_balance`, `get_spend_policy`. The gateway is a [Manufact](https://docs.manufact.com/dashboard/connect-existing-server) proxy in front of `api.eyes.pictures`. It adds usage analytics and sessions, but it does not host the server and does not hold your key. Every client sends its own Eyes API key.
 
-- **OAuth (ChatGPT, claude.ai, Claude Desktop):** the app opens an Eyes page. On that page, paste an API key or click **Create a key**. A new test key starts with a $20 balance, and the page shows the key once, so save it.
-- **Bearer header (Claude Code, Cursor, your own agents):** send `Authorization: Bearer eyes_test_...`. To get a key without a browser:
+## 1. Get an Eyes API key
 
 ```sh
 curl -s -X POST https://api.eyes.pictures/v1/signup \
@@ -13,73 +15,154 @@ curl -s -X POST https://api.eyes.pictures/v1/signup \
   -d '{"name": "my-agent"}'
 ```
 
-In ChatGPT and Claude, `quote_task`, `ask_eyes`, `await_answer`, `get_task` and `get_balance` show a card:
-
-- a quote with workers nearby, ETA and price;
-- the live task: status steps, the worker's photo, the answer and the three checks (on site, fresh photo, photo is safe to share);
-- your balance, with a Top up button.
-
-The other tools answer in text.
-
-## ChatGPT (developer mode)
-
-1. Open **Settings > Apps & Connectors > Advanced settings** and turn on **Developer mode**. This needs a Plus, Pro, Business, Enterprise or Edu plan.
-2. In **Settings > Apps & Connectors**, click **Create**.
-3. Fill in the form:
-   - Name: `Eyes`.
-   - MCP server URL: `https://api.eyes.pictures/mcp`.
-   - Authentication: **OAuth**.
-4. Tick "I trust this application", then click **Create**.
-5. ChatGPT opens the Eyes sign-in page. Paste your key, or click **Create a key**, then **Continue to ChatGPT**.
-6. In a new chat, click **+**, choose **Developer mode**, and enable **Eyes**. Then ask, for example: "Is the line at Blue Bottle Coffee, Mint Plaza, San Francisco long right now?"
-
-## Claude (claude.ai and Claude Desktop)
-
-1. Open **Settings > Connectors** and click **Add custom connector**.
-2. Fill in the form:
-   - Name: `Eyes`.
-   - Remote MCP server URL: `https://api.eyes.pictures/mcp`.
-3. Click **Add**, then **Connect**.
-4. On the Eyes page, paste your key or create one, then continue back to Claude.
-5. In a chat, open the tools menu and make sure **Eyes** is on.
-
-Claude Desktop uses the connectors from your claude.ai account, so you add the connector only once. On Team and Enterprise plans, an owner adds it first, in **Organization settings > Connectors**.
-
-## Claude Code
-
-With a key:
+Save `api_key` from the reply. The reply shows it only once. A new test key starts with a $20 balance. The header every client sends is `Authorization: Bearer <api_key>`, so for the commands below:
 
 ```sh
-claude mcp add --transport http eyes https://api.eyes.pictures/mcp \
-  --header "Authorization: Bearer $EYES_API_KEY"
-claude -p 'Use quote_task to check the line at the Ferry Building, San Francisco'
+export AUTHORIZATION="Bearer <api_key>"
 ```
 
-Without a key: run `claude mcp add --transport http eyes https://api.eyes.pictures/mcp`. Then, inside Claude Code, run `/mcp`, choose **eyes** and then **Authenticate**. The Eyes sign-in page opens in your browser.
+## 2. Connect through Manufact
 
-## Cursor
+These are the configs that Manufact's **Add to client** dialog generates for this server (server page > URL chip > **Add to client**). Replace `your-AUTHORIZATION-value` with `Bearer <api_key>`.
 
-Add this to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project):
+### Claude Code
+
+```sh
+claude mcp add --transport http "eyes" \
+    'https://dark-steel-ofaoa.run.mcp-use.com/mcp' \
+    --header 'Authorization:${AUTHORIZATION}'
+```
+
+### Cursor
+
+One-click install (Cursor asks for the `AUTHORIZATION` value):
+
+```text
+cursor://anysphere.cursor-deeplink/mcp/install?config=eyJ1cmwiOiJodHRwczovL2Rhcmstc3RlZWwtb2Zhb2EucnVuLm1jcC11c2UuY29tL21jcCIsImhlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6Int7QVVUSE9SSVpBVElPTn19In19&name=eyes
+```
+
+Or add this to `~/.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "eyes": {
-      "url": "https://api.eyes.pictures/mcp",
-      "headers": { "Authorization": "Bearer eyes_test_..." }
+      "url": "https://dark-steel-ofaoa.run.mcp-use.com/mcp",
+      "headers": { "Authorization": "Bearer <api_key>" }
     }
   }
 }
 ```
 
-If you leave out `headers`, Cursor runs the OAuth sign-in instead.
+### VS Code and VS Code Insiders
+
+One-click install. For Insiders, change the `vscode:` prefix to `vscode-insiders:`. Then edit the `Authorization` value in the MCP server settings.
+
+```text
+vscode:mcp/install?%7B%22url%22%3A%22https%3A%2F%2Fdark-steel-ofaoa.run.mcp-use.com%2Fmcp%22%2C%22name%22%3A%22eyes%22%2C%22type%22%3A%22http%22%2C%22headers%22%3A%7B%22Authorization%22%3A%22your-AUTHORIZATION-value%22%7D%7D
+```
+
+### Gemini CLI
+
+```sh
+gemini mcp add --transport http "eyes" 'https://dark-steel-ofaoa.run.mcp-use.com/mcp' \
+  --header 'Authorization:${AUTHORIZATION}'
+```
+
+### Codex CLI and the Codex IDE extension
+
+Both read `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.eyes]
+url = "https://dark-steel-ofaoa.run.mcp-use.com/mcp"
+http_headers = { "Authorization" = "your-AUTHORIZATION-value" }
+
+# (optional) Use environment variables instead:
+# env_http_headers = { "Authorization" = "AUTHORIZATION" }
+```
+
+`codex mcp list` should show `eyes` as enabled.
+
+### Claude Desktop (local extension)
+
+In the **Add to client** dialog, **Claude Desktop** downloads `eyes.mcpb`, which contains `{ "url": "https://dark-steel-ofaoa.run.mcp-use.com/mcp", "name": "eyes", "headers": { "Authorization": "your-AUTHORIZATION-value" } }`. Set the header value before you install it. If you want the Eyes cards in Claude, use the connector in section 3 instead.
+
+### mcp-use SDKs
+
+```ts
+import { MCPClient } from "@mcp-use/client";
+
+const client = new MCPClient({
+  mcpServers: {
+    eyes: {
+      url: "https://dark-steel-ofaoa.run.mcp-use.com/mcp",
+      headers: { Authorization: "Bearer <api_key>" },
+    },
+  },
+});
+const connection = await client.connect("eyes");
+console.log((await connection.listTools()).map((t) => t.name));
+```
+
+Python: `MCPClient(config={"mcpServers": {"eyes": {"url": "https://dark-steel-ofaoa.run.mcp-use.com/mcp", "headers": {"Authorization": "Bearer <api_key>"}}}})`.
+
+### Instinct and other clients
+
+Any client that speaks streamable HTTP MCP: give it the gateway URL and the header `Authorization: Bearer <api_key>`. For Instinct, text it: "Connect the Eyes MCP server at https://dark-steel-ofaoa.run.mcp-use.com/mcp with the header Authorization: Bearer <api_key>". Instinct runs in the cloud, so it needs the remote URL. A local stdio bridge does not help.
+
+Clients without a header field can use OAuth. The gateway's 401 points to `/.well-known/oauth-protected-resource/mcp`, which names `https://api.eyes.pictures` as the authorization server. The Eyes sign-in page is described below. OAuth through the gateway has not been tested with a real client yet. If it fails, use the direct URL.
+
+### Check it works
+
+Ask the client: "Use Eyes to quote checking whether the Ferry Building in San Francisco is open." It should reply with `allowed: true`, a price of about $3, and the number of workers nearby. A quote spends nothing.
+
+## 3. Direct URL: ChatGPT, claude.ai, and fallback
+
+Use `https://api.eyes.pictures/mcp` for app connectors. Claude checks the card sandbox domain against the exact connector URL, and that domain is derived from `api.eyes.pictures`. Through the gateway, the cards would not render.
+
+In ChatGPT and Claude, `quote_task`, `ask_eyes`, `await_answer`, `get_task` and `get_balance` show a card: a quote (workers nearby, ETA, price), the live task (status, photo, answer and the three checks), or your balance with a Top up button. The other tools reply in text.
+
+### ChatGPT (developer mode)
+
+1. Open **Settings > Apps & Connectors > Advanced settings** and turn on **Developer mode**. This needs a Plus, Pro, Business, Enterprise or Edu plan.
+2. In **Settings > Apps & Connectors**, click **Create**. Set Name to `Eyes`, MCP server URL to `https://api.eyes.pictures/mcp`, and Authentication to **OAuth**.
+3. Tick "I trust this application", then click **Create**.
+4. On the Eyes sign-in page, paste your key or click **Create a key**, then click **Continue to ChatGPT**.
+5. In a new chat, click **+**, choose **Developer mode**, and enable **Eyes**.
+
+### Claude (claude.ai and Claude Desktop connectors)
+
+1. Open **Settings > Connectors** and click **Add custom connector**. Set Name to `Eyes` and URL to `https://api.eyes.pictures/mcp`, with no trailing slash.
+2. Click **Add**, then **Connect**. On the Eyes page, paste your key or create one.
+3. In a chat, open the tools menu and make sure **Eyes** is on.
+
+Claude Desktop uses the connectors from your claude.ai account. On Team and Enterprise plans, an owner adds the connector first, in **Organization settings > Connectors**.
+
+### Fallback for every other client
+
+If the gateway returns errors (for example `402` once the Manufact plan's monthly credits run out), use any config from section 2 with the URL changed to `https://api.eyes.pictures/mcp`. For example:
+
+```sh
+claude mcp add --transport http eyes https://api.eyes.pictures/mcp \
+  --header "Authorization: Bearer $EYES_API_KEY"
+codex mcp add eyes --url https://api.eyes.pictures/mcp --bearer-token-env-var EYES_API_KEY
+```
+
+## Troubleshooting
+
+- **401 `Missing or invalid API key`.** The header is missing, or the key was rotated. Check that the value is `Bearer <api_key>`, including the word `Bearer`.
+- **`0 workers nearby`.** The quote still works. A task waits for a worker, and `cancel_task` refunds it before anyone accepts it.
+- **Text, not cards.** Expected in every client except ChatGPT and Claude connectors on the direct URL.
+- **Out of money.** Call `get_balance`. The reply includes a top-up link.
 
 ## How the sign-in works (for operators)
 
-- **Discovery:** `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server`. A 401 from `/mcp` also points to the first one through `WWW-Authenticate`.
+- **Discovery:** `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server`. A 401 from `/mcp` also points to the first one through `WWW-Authenticate`. The Manufact gateway rewrites `resource` to its own URL and keeps `authorization_servers: ["https://api.eyes.pictures"]`.
 - **Registration:** `POST /oauth/register` is dynamic client registration. Only https redirect URIs are accepted, plus loopback http.
 - **Sign-in page:** `GET /oauth/authorize`. It requires PKCE S256. **Create a key** counts against the same per-IP limit as `/v1/signup` (5 per hour).
 - **Token:** `POST /oauth/token` returns the Eyes API key as the access token, so existing bearer clients work unchanged. The token does not expire. To revoke it, rotate the key.
 - **Server secret:** set `EYES_OAUTH_SECRET` to at least 32 random characters, for example from `openssl rand -hex 32`. Without it, the OAuth routes are off and only bearer keys work. If you change the secret, open sign-in pages and registered clients stop working; connected apps just register and sign in again.
-- **Claude sandbox origin:** when the client looks like Claude (client name or user agent contains "claude"), the widget resource carries `_meta.ui.domain` = the first 32 hex characters of SHA-256 of `https://api.eyes.pictures/mcp` plus `.claudemcpcontent.com`. Claude checks this value against the exact connector URL, so add the connector as `https://api.eyes.pictures/mcp`, with no trailing slash. Other hosts get no `ui.domain`; ChatGPT reads `openai/widgetDomain` (`https://api.eyes.pictures`).
+- **Claude sandbox origin:** when the client looks like Claude (client name or user agent contains "claude"), the widget resource carries `_meta.ui.domain` = the first 32 hex characters of SHA-256 of `https://api.eyes.pictures/mcp` plus `.claudemcpcontent.com`. Other hosts get no `ui.domain`; ChatGPT reads `openai/widgetDomain` (`https://api.eyes.pictures`).
 - **Photos:** the widget CSP allows `https://pagp38bu.us-west.insforge.app` and `https://cdn.insforge.dev`.
+- **Manufact gateway:** external server `Eyes` (slug `dark-steel-ofaoa`) in the operator's Manufact org, in proxy mode, with upstream `https://api.eyes.pictures/mcp`. It does not inject a key for public traffic: an unauthenticated request gets the upstream 401. The dashboard's own bearer key is used only by Manufact's Chat, inspector and checks.

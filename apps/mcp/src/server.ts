@@ -57,7 +57,14 @@ import { type Operator, opsAuth } from "./ops-auth.ts";
 import { opsHost, opsOriginFor } from "./ops-host.ts";
 import { opsLists } from "./ops-lists.ts";
 import { keylessAgents, SANDBOX, SANDBOX_NOTICE } from "./sandbox.ts";
-import { WIDGET_HTML, WIDGET_MIME, WIDGET_URI, widgetResourceMeta, widgetToolMeta } from "./widget.ts";
+import {
+  WIDGET_CALLABLE,
+  WIDGET_HTML,
+  WIDGET_MIME,
+  WIDGET_URI,
+  widgetResourceMeta,
+  widgetToolMeta,
+} from "./widget.ts";
 
 type Env = Record<string, string | undefined>;
 type AppEnv = { Variables: { agent: Agent; operator: Operator } };
@@ -65,6 +72,7 @@ type AppEnv = { Variables: { agent: Agent; operator: Operator } };
 const PROGRESS_INTERVAL_MS = 5000;
 const HOUR_MS = 60 * 60 * 1000;
 const PUBLIC_CALLS_PER_HOUR = 5;
+const LOGIN_CODES_PER_HOUR = 10;
 const THROTTLE_MAX_KEYS = 10_000;
 // ask_eyes over MCP: the REST result, or "not_sent" when no worker is nearby. One object (MCP tool
 // outputSchema roots must be type object), so the dispatched-only fields are optional.
@@ -136,6 +144,21 @@ const TicketAction = z.object({
   outcome: z.enum(["release", "refund", "close"]),
   task_id: z.uuid(),
   note: z.string().trim().min(1).max(500),
+});
+const TASK_STATUSES = [
+  "dispatched",
+  "claimed",
+  "submitted",
+  "verified",
+  "paid",
+  "needs_review",
+  "disputed",
+  "expired",
+  "refunded",
+];
+const IssueStatus = z.object({
+  status: z.enum(["resolved", "ignored", "unresolved"]),
+  more: z.coerce.number().int().positive().max(100_000).optional(),
 });
 const DisputeAction = z.object({
   ticket_id: z.coerce.number().int().positive(),
@@ -241,6 +264,7 @@ const statusPage = (
   db: string,
   commit: string | undefined,
   sandbox: boolean,
+  emailNote: string | null,
 ) =>
   layout(
     "Eyes status",
@@ -250,7 +274,8 @@ ${simulatedNotice(live, sandbox)}
 <ul class="rows">
 ${Object.entries(PROVIDER_LINES).map(([name, [label, meaning]]) => {
   const on = live[name as keyof typeof live];
-  return statusRow(on ? "live" : "simulated", `${label}: ${on ? "live" : "simulated"}`, meaning);
+  const state = !on ? "simulated" : name === "email" && emailNote ? `live (${emailNote})` : "live";
+  return statusRow(on ? "live" : "simulated", `${label}: ${state}`, meaning);
 })}
 ${statusRow(
   classifier ? "live" : "neutral",
@@ -752,33 +777,53 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       return { contents: [{ uri: WIDGET_URI, mimeType: WIDGET_MIME, text: WIDGET_HTML, _meta }] };
     },
   );
-  // mcp-use strips `_meta.ui.resourceUri` from tools that have no mcp-use `view` (a React build), so
-  // put the MCP Apps link back on the tools that carry the ChatGPT template.
+  // mcp-use strips `_meta.ui` from tools that have no mcp-use `view` (a React build), so put the
+  // MCP Apps link back on the tools that carry the ChatGPT template, and let the card's buttons call
+  // WIDGET_CALLABLE (ChatGPT: openai/widgetAccessible; MCP Apps: ui.visibility includes "app").
   server.use("mcp:tools/list", async (_ctx, next) =>
-    (await next()).map((tool) =>
-      tool._meta?.["openai/outputTemplate"] === WIDGET_URI
-        ? { ...tool, _meta: { ...tool._meta, ui: { resourceUri: WIDGET_URI }, "ui/resourceUri": WIDGET_URI } }
-        : tool,
-    ),
+    (await next()).map((tool) => {
+      const card = tool._meta?.["openai/outputTemplate"] === WIDGET_URI;
+      const callable = WIDGET_CALLABLE.includes(tool.name);
+      if (!card && !callable) return tool;
+      const ui = {
+        ...(card && { resourceUri: WIDGET_URI }),
+        ...(callable && { visibility: ["model", "app"] }),
+      };
+      return {
+        ...tool,
+        _meta: {
+          ...tool._meta,
+          ui,
+          ...(card && { "ui/resourceUri": WIDGET_URI }),
+          ...(callable && { "openai/widgetAccessible": true }),
+        },
+      };
+    }),
   );
 
   const hits = new Map<string, number[]>();
-  const throttle = (c: Context, path = c.req.path) => {
+  // `who` defaults to the caller's address; the worker email routes also key by code or address.
+  const throttle = (
+    c: Context,
+    path = c.req.path,
+    who = clientKey(c.req.header("x-forwarded-for")),
+    max = PUBLIC_CALLS_PER_HOUR,
+  ) => {
     const now = deps.providers.clock.now().getTime();
     for (const [key, times] of hits) {
       if ((times.at(-1) ?? 0) > now - HOUR_MS && hits.size < THROTTLE_MAX_KEYS) break;
       hits.delete(key);
     }
-    const key = `${path} ${clientKey(c.req.header("x-forwarded-for"))}`;
+    const key = `${path} ${who}`;
     const recent = (hits.get(key) ?? []).filter((at) => at > now - HOUR_MS);
-    if (recent.length >= PUBLIC_CALLS_PER_HOUR) {
+    if (recent.length >= max) {
       const until = (recent[0] ?? now) + HOUR_MS;
       const retry_after_s = Math.ceil((until - now) / 1000);
       throw new EyesError(
         "rate_limited",
         { retry_after_s },
         {
-          fix: `${c.req.path} allows ${PUBLIC_CALLS_PER_HOUR} calls per hour from one address. Wait ${retry_after_s} seconds (until ${new Date(until).toISOString()}) and try again.`,
+          fix: `${c.req.path} allows ${max} calls per hour from one address or for one account. Wait ${retry_after_s} seconds (until ${new Date(until).toISOString()}) and try again.`,
         },
       );
     }
@@ -896,6 +941,47 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "",
       ),
     );
+  });
+  // Worker email (T6.48): the /me code adds, changes or (null) removes the address, and a repeat POST
+  // re-sends the confirmation; the engine mails the link. 5 changes an hour per code.
+  server.post("/w/me/email", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const token = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+    const { email } = parse(z.object({ email: z.string().trim().max(254).nullable() }), await readJson(c));
+    throttle(c, c.req.path, `code ${createHash("sha256").update(token).digest("hex")}`);
+    return c.json(await service.workerSetEmail(token, email));
+  });
+  // The worker emails first (T6.51): a one-time mailto to work@ whose email connects the sender,
+  // verified. 5 an hour per code, shared with /w/me/email.
+  server.post("/w/me/email/start", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const token = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+    throttle(c, "/w/me/email", `code ${createHash("sha256").update(token).digest("hex")}`);
+    return c.json(await service.workerEmailStart(token));
+  });
+  // Always 200, and the send is not awaited, so neither the answer nor its timing tells whether the
+  // address is on an account. 5 an hour per address and per caller.
+  server.post("/w/login/email", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const { email } = parse(
+      z.object({ email: z.string().trim().toLowerCase().min(3).max(254) }),
+      await readJson(c),
+    );
+    throttle(c);
+    throttle(c, c.req.path, `email ${email}`);
+    void service
+      .workerEmailLogin(email)
+      .catch((err: unknown) =>
+        console.error(`worker email login failed: ${err instanceof Error ? err.name : typeof err}`),
+      );
+    return c.json({ ok: true });
+  });
+  // The one-time code from the emailed link becomes the /me "e:" token. 10 tries an hour per caller.
+  server.post("/w/login/code", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const { code } = parse(z.object({ code: z.string().min(1).max(512) }), await readJson(c));
+    throttle(c, c.req.path, undefined, LOGIN_CODES_PER_HOUR);
+    return c.json(await service.workerLoginCode(code));
   });
   server.get("/w/device/profile/:ticket", (c) => {
     const ticket = c.req.param("ticket");
@@ -1016,7 +1102,13 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     Object.entries(live).map(([name, on]) => [name, on ? "live" : "fake"]),
   );
   server.get("/healthz", (c) => c.json({ ok: true, providers, db }));
-  const status = statusPage(live, classifier, db, env.EYES_COMMIT, sandbox);
+  // Primitive gates outbound mail per org: until it grants send_to_any_domain, first contact (owner links,
+  // sign-in codes, worker email) goes out through Inkbox when it is configured, or not at all.
+  const emailNote =
+    env.PRIMITIVE_SEND_ANY_DOMAIN === "1"
+      ? null
+      : `${live.messaging ? "first contact via Inkbox" : "replies only"} until Primitive enables any-domain sending`;
+  const status = statusPage(live, classifier, db, env.EYES_COMMIT, sandbox, emailNote);
   server.get("/status", (c) => c.html(status, 200, PAGE_HEADERS));
   // The Eyes viewfinder (apps/web/worker/public/favicon.svg); browsers asking for .ico get the SVG.
   server.get("/favicon.svg", (c) =>
@@ -1079,7 +1171,12 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         dbError = err instanceof Error ? err.message : String(err);
         console.error("ops feed: database read failed:", dbError);
       }
-      const workers = feed.workers.map((w) => ({ ...w, lat: coarse(w.lat), lng: coarse(w.lng) }));
+      // No location (null) or a 0,0 placeholder stays off the map: coarse(null) would read as 0.
+      const workers = feed.workers.map((w) =>
+        w.lat == null || w.lng == null || (w.lat === 0 && w.lng === 0)
+          ? { ...w, lat: null, lng: null }
+          : { ...w, lat: coarse(w.lat), lng: coarse(w.lng) },
+      );
       return c.json(
         {
           ...feed,
@@ -1095,7 +1192,6 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
               db_error: dbError && redact(dbError),
             },
             ...summarize(feed, OPS_FEED_LIMIT, now),
-            errors: (deps.events?.recent() ?? []).filter((e) => e.kind === "log").slice(0, 50),
           },
         },
         200,
@@ -1160,6 +1256,19 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         FEED_HEADERS,
       );
     });
+    // The Workers map's tasks: the Tasks tab's status and date window, plus every open or attention task.
+    server.app.get("/ops/map/tasks", ops.operator, async (c) => {
+      const q = c.req.query();
+      const instant = (text: string | undefined) =>
+        text && !Number.isNaN(Date.parse(text)) ? new Date(text).toISOString() : null;
+      const tasks = await rpc<Record<string, unknown>>("eyes_map_tasks", {
+        p_status: TASK_STATUSES.includes(q.status ?? "") ? q.status : null,
+        p_from: instant(q.from),
+        p_to: instant(q.to),
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      return c.json({ tasks }, 200, FEED_HEADERS);
+    });
     // One worker for the Workers panel: state, rounded last fix, their tasks, what they earned.
     server.app.get("/ops/workers/:id", ops.operator, async (c) => {
       const id = c.req.param("id");
@@ -1208,6 +1317,39 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         data: { action: body.outcome, operator, ...result },
       });
       return c.json(result, 200, FEED_HEADERS);
+    });
+    // Errors tab: issues grouped from console errors (migration 028), one issue's occurrences, and its status.
+    server.app.get("/ops/issues", ops.operator, async (c) => {
+      const issues = await rpc<Record<string, unknown>>("eyes_issues", {
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      return c.json({ issues }, 200, FEED_HEADERS);
+    });
+    server.app.get("/ops/issues/:fp", ops.operator, async (c) => {
+      const fp = c.req.param("fp");
+      const events = /^[0-9a-f]{16}$/.test(fp)
+        ? await rpc<Record<string, unknown>>("eyes_issue_events", { p_fingerprint: fp, p_limit: 20 })
+        : [];
+      return c.json({ events }, 200, FEED_HEADERS);
+    });
+    server.app.post("/ops/issues/:fp/status", ops.sameOrigin, ops.operator, async (c) => {
+      const body = parse(IssueStatus, await readJson(c));
+      const operator = c.get("operator").label;
+      const [issue] = await rpc<{ fingerprint: string; title: string }>("eyes_issue_status", {
+        p_fingerprint: c.req.param("fp"),
+        p_status: body.status,
+        p_more: body.more ?? null,
+        p_by: operator,
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      if (!issue)
+        return c.json({ error: "issue_not_found", message: "No issue with this id." }, 404, FEED_HEADERS);
+      log({
+        kind: "ops",
+        summary: `issue ${issue.fingerprint} ${body.status}${body.more ? ` until ${body.more} more` : ""} by ${operator}`,
+        data: { action: body.status, fingerprint: issue.fingerprint, operator },
+      });
+      return c.json({ issue }, 200, FEED_HEADERS);
     });
     // Dispute tickets (ADR-026): confirm fraud (refund + reverse + ban) or reject. Each runs once;
     // a second click returns the same shape with already_resolved true and moves no money.

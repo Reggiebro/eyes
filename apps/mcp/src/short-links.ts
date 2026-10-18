@@ -36,7 +36,9 @@ export function withShortLinks(
     ...messaging,
     sendText: async (to, body) => {
       let text = body;
-      for (const url of body.match(ours) ?? []) text = text.replace(url, await shorten(to, url));
+      // An /s/ link is already short (the engine stores mailto links itself).
+      for (const url of body.match(ours) ?? [])
+        if (!url.startsWith(`${config.public_api_url}/s/`)) text = text.replace(url, await shorten(to, url));
       return messaging.sendText(to, text);
     },
     sendCaptureLink: async (to, msg) =>

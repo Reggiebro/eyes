@@ -1,5 +1,6 @@
 import type { TaskStatus, WorkerSetup, WorkerTask, WorkerTasks, WorkerTasksQuery } from "@eyes/core";
 import { Problem, smsHref } from "./api.ts";
+import { type EmailRow, emailRow } from "./email.ts";
 import { serverProblem } from "./here.ts";
 
 /** A checklist action: a link, or (href null) the button that mints an install link first. */
@@ -63,7 +64,7 @@ export type ListDeps = {
 export type MeView =
   | { step: "loading" | "missing" | "expired" }
   | { step: "error"; error: unknown }
-  | { step: "loaded"; title: string; rows: Row[]; live: boolean };
+  | { step: "loaded"; title: string; rows: Row[]; live: boolean; email: EmailRow | null };
 
 export type MeDeps = {
   send: (path: string, init: RequestInit) => Promise<unknown>;
@@ -100,15 +101,13 @@ const PAYOUT = {
  * Reads the code (a signed `body.mac` token) from the URL fragment, which browsers never send to a server, and
  * clears the fragment so a shared screenshot or copied URL does not carry it. Null when missing or malformed.
  */
-export function takeCode(d: {
-  hash: string;
-  pathname: string;
-  search: string;
-  replaceUrl: (url: string) => void;
-}): string | null {
+export function takeCode(
+  d: { hash: string; pathname: string; search: string; replaceUrl: (url: string) => void },
+  pattern = /^[\w-]+\.[\w-]+$/,
+): string | null {
   const code = new URLSearchParams(d.hash.slice(1)).get("c") ?? "";
   if (d.hash) d.replaceUrl(d.pathname + d.search);
-  return /^[\w-]+\.[\w-]+$/.test(code) ? code : null;
+  return pattern.test(code) ? code : null;
 }
 
 /** "just now", "12 min ago", "3 h ago", "2 days ago". A time ahead of the clock reads "just now". */
@@ -304,7 +303,7 @@ export function taskList(code: string, d: ListDeps) {
 export function meView(s: WorkerSetup, now: number): MeView {
   const rows = checklist(s, now);
   const title = rows.some((r) => r.state === "todo") ? "Finish setting up" : "You're set up";
-  return { step: "loaded", title, rows, live: s.payouts.live };
+  return { step: "loaded", title, rows, live: s.payouts.live, email: emailRow(s) };
 }
 
 /** Loads the setup with the code in the Authorization header only (never the URL) and shows the result. */

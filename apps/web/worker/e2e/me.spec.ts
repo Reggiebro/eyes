@@ -52,7 +52,7 @@ const makeTasks = (n: number): Task[] =>
     question: QUESTIONS[i % 3] as string,
     place_label: PLACES[i % 3] as string,
     status: STATES[i % 5]?.[0] as string,
-    bounty_usd: 3 + (i % 4) * 0.25,
+    bounty_usd: 3,
     payout: STATES[i % 5]?.[1] ?? null,
     claimed_at: minAgo(60 + i * 24 * 60),
   }));
@@ -141,7 +141,7 @@ test("/me sends the fragment code only as a Bearer header, clears it, and shows 
   await expect(page.locator("#tasks > li").nth(1)).toContainText("Payout pending");
   await expect(page.locator("#tasks > li").nth(2)).toContainText("Reply HELP for a manual review.");
   await expect(page.locator("#paid")).toHaveText("$3.00");
-  await expect(page.locator("#pending")).toHaveText("$3.25");
+  await expect(page.locator("#pending")).toHaveText("$3.00");
   await expect(page.getByRole("button", { name: "Load more" })).toBeHidden();
   await expect(page.getByRole("link", { name: /earnings/i })).toHaveCount(0);
 });
@@ -160,8 +160,11 @@ test("/me searches what the rows show, filters by status, and loads 30 tasks 20 
   await search.fill("ferry");
   await expect(page.locator("#tasks > li")).toHaveCount(10);
   await expect(page.locator("#tasks > li").first()).toContainText("Ferry Building");
+  // Every bounty is $3.00: an amount search matches them all, a wrong amount none.
   await search.fill("$3.75");
-  await expect(page.locator("#tasks > li")).toHaveCount(7);
+  await expect(page.locator("#tasks > li")).toHaveCount(0);
+  await search.fill("$3.00");
+  await expect(page.locator("#tasks > li")).not.toHaveCount(0);
   const shownDate = await page.locator("#tasks .me-task__date").first().textContent();
   await search.fill(shownDate ?? "");
   await search.press("Enter");

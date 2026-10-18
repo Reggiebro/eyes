@@ -8,7 +8,7 @@ Hacking: Sat Oct 17 10:30 AM to Sun Oct 18 10:00 AM (submissions). Feature freez
 
 | Area | State |
 |---|---|
-| Live mode | `EYES_PROVIDERS=live` on Manufact (main fec9f09): Inkbox texting (shared line +16504849720, `connect @hackathon` then START), Claude vision and safety classifier, InsForge storage, place lookup. Stripe and Primitive simulated, and every worker-facing text and page says so (#75) |
+| Live mode | `EYES_PROVIDERS=live` on Cloudflare Containers (`eyes-api` Worker, api.eyes.pictures): Inkbox texting (shared line +16504849720, `connect @hackathon` then START), Claude vision and safety classifier, InsForge storage, place lookup. Stripe and Primitive simulated, and every worker-facing text and page says so (#75) |
 | Live-verified (STATUS) | safety rules and classifier refusals; Claude vision verdicts; face-photo deletion; real Claude over the MCP connector through quote, ask and await with a stand-in worker; worker sign-up page against the live API; owner console; smoke 13/13 |
 | Not yet live-verified | a real iMessage to a phone (G1), Stripe top-up and transfer (G2), Primitive email thread, Armature analytics |
 | CI and tests | lint, typecheck, unit, contract, integration, golden and demo e2e, safety rules, intent, secrets; `pnpm ax:eval` (Claude client passes locally); `safety-llm-eval` and the Claude PR reviewer run with the repo secret |
@@ -64,4 +64,4 @@ Claude asks "Is the line at Blue Bottle Coffee, Mint Plaza long right now? Use E
 | Stripe Connect onboarding friction | pre-onboard one teammate worker before demos; show the transfer in the dashboard |
 | Claude API slow or down during the demo | the classifier fails closed within 12 seconds (refusal, nothing charged) and vision sends the task to review; rules still refuse the demo's unsafe task |
 | Venue GPS drift | verify radius 150 m; capture at the cafe door |
-| Manufact deploy breaks on a merge | redeploy the previous deployment (`npx mcp-use deployments restart <id>`); the same Docker image runs anywhere |
+| Container deploy breaks | check out the last good commit and run the deploy step in [DEPLOY §2](DEPLOY.md); if a fix is not quick, roll back to the Mac ([DEPLOY](DEPLOY.md#roll-back-to-the-mac)) |
