@@ -172,3 +172,140 @@ describe("ci-scope CLI", () => {
     expect(result.stdout).toBe("");
   });
 });
+
+// Execute the actual workflow shell so security guards cannot drift from their tests.
+const workflowShell = (file: string, job: string) => {
+  const text = readFileSync(join(REPO, ".github/workflows", file), "utf8");
+  const block = text.split(`\n  ${job}:\n`)[1]?.split(/\n {2}[\w-]+:\n/)[0] ?? "";
+  const shell = block.match(/ {8}run: \|\n((?: {10}[^\n]*\n?)+)/)?.[1];
+  if (!shell) throw new Error(`Missing shell for ${file}:${job}`);
+  return shell.replace(/^ {10}/gm, "");
+};
+
+const runWorkflowShell = (shell: string, env: Record<string, string | undefined> = {}) => {
+  const output = join(mkdtempSync(join(tmpdir(), "ci-workflow-")), "output");
+  const result = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-e",
+      "-o",
+      "pipefail",
+      "-c",
+      `
+    node() { :; }
+    git() {
+      case "$*" in
+        *--name-only*) [ "\${DIFF_FAIL:-}" != names ] || return 1; printf '%s' "$FILES";;
+        *--raw*) [ "\${DIFF_FAIL:-}" != modes ] || return 1; printf '%s' "\${MODES:-}";;
+        *) return 91;;
+      esac
+    }
+    gh() {
+      printf '%s\\n' "$*" >&2
+      case "$*" in
+        *--disable-auto*) return "\${DISABLE_STATUS:-0}";;
+        *autoMergeRequest*) [ "\${VIEW_FAIL:-}" != 1 ] || return 1; printf '%s' "\${ARMED:-false}";;
+        *headRefOid*) [ "\${VIEW_FAIL:-}" != 1 ] || return 1; printf '%s' "$CURRENT";;
+        *--match-head-commit*) return "\${MERGE_STATUS:-0}";;
+        *) return 92;;
+      esac
+    }
+    ${shell}
+  `,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH ?? "",
+        EVENT: "pull_request",
+        BASE: "origin/main",
+        FILES: "README.md",
+        GITHUB_OUTPUT: output,
+        PR_URL: "https://github.com/owner/repo/pull/1",
+        TESTED_HEAD: "tested",
+        CURRENT: "tested\tfalse\tOPEN",
+        ...env,
+      },
+    },
+  );
+  return {
+    ...result,
+    output: result.status === 0 ? readFileSync(output, { encoding: "utf8", flag: "a+" }) : "",
+  };
+};
+
+describe("workflow docs classification", () => {
+  for (const file of ["ci.yml", "claude-verifier.yml"]) {
+    const shell = workflowShell(file, "scope");
+    it(`${file}: accepts only non-executable documentation`, () => {
+      for (const files of ["README.md\nSTATUS.md\nLICENSE", "docs/DEPLOY.md\nintent/decisions/ADR-030.md"]) {
+        expect(runWorkflowShell(shell, { FILES: files }).output).toContain("docs_only=true");
+      }
+      for (const files of [
+        "",
+        "README.md\napps/mcp/src/server.ts",
+        "docs/generated.js",
+        "intent/run.sh",
+        "apps/web/src/pages/index.md",
+        ".github/README.md",
+        "docs/.hidden/note.md",
+        "docs/old.ts\ndocs/new.md",
+        "package.json",
+      ]) {
+        expect(runWorkflowShell(shell, { FILES: files }).output, files).toContain("docs_only=false");
+      }
+      for (const modes of [
+        ":100644 100755 abc def M\tREADME.md",
+        ":100755 000000 abc def D\tREADME.md",
+        ":000000 120000 abc def A\tdocs/link.md",
+      ]) {
+        expect(runWorkflowShell(shell, { MODES: modes }).output).toContain("docs_only=false");
+      }
+    });
+    it(`${file}: fails closed when either git diff fails`, () => {
+      for (const failure of ["names", "modes"]) {
+        expect(runWorkflowShell(shell, { DIFF_FAIL: failure }).status).not.toBe(0);
+      }
+      expect(shell).toContain("--no-renames --name-only");
+      expect(shell).toContain("--no-renames --raw");
+    });
+  }
+  it("never classifies push, schedule, or manual runs as docs-only", () => {
+    for (const event of ["push", "schedule", "workflow_dispatch"]) {
+      expect(runWorkflowShell(workflowShell("ci.yml", "scope"), { EVENT: event }).output).toContain(
+        "docs_only=false",
+      );
+    }
+  });
+});
+
+describe("workflow auto-merge guards", () => {
+  const enable = workflowShell("ci.yml", "docs-automerge");
+  const disable = workflowShell("ci.yml", "docs-automerge-disable");
+  it("enables only the tested, open, non-draft head and binds merge to it", () => {
+    const result = runWorkflowShell(enable);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("--auto --merge --match-head-commit tested");
+    expect(result.stderr).not.toContain("--admin");
+    for (const env of [
+      { CURRENT: "newer\tfalse\tOPEN" },
+      { CURRENT: "tested\ttrue\tOPEN" },
+      { CURRENT: "tested\tfalse\tCLOSED" },
+      { VIEW_FAIL: "1" },
+    ]) {
+      const failed = runWorkflowShell(enable, env);
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).not.toContain("--auto --merge");
+    }
+    expect(runWorkflowShell(enable, { MERGE_STATUS: "1" }).status).not.toBe(0);
+  });
+  it("accepts successful disable or confirmed unarmed state, never a failed lookup", () => {
+    expect(runWorkflowShell(disable).status).toBe(0);
+    expect(runWorkflowShell(disable, { DISABLE_STATUS: "1", ARMED: "false" }).status).toBe(0);
+    for (const env of [{ ARMED: "true" }, { ARMED: "unexpected" }, { VIEW_FAIL: "1" }]) {
+      expect(runWorkflowShell(disable, { DISABLE_STATUS: "1", ...env }).status).not.toBe(0);
+    }
+  });
+});
