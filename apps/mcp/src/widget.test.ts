@@ -224,8 +224,11 @@ describe.each(["MCP Apps", "ChatGPT"])("%s answer acceptance", (bridge) => {
   }
 
   it.each(["verified", "paid"])("accepts an answered %s task once while busy", async (status) => {
-    const pending = Promise.withResolvers<Result>();
-    const w = setup(() => pending.promise);
+    let resolve!: (result: Result) => void;
+    const pending = new Promise<Result>((done) => {
+      resolve = done;
+    });
+    const w = setup(() => pending);
     w.show({ ...answered, status });
     const button = w.button("accept");
     expect(button.textContent).toBe("Looks good");
@@ -237,7 +240,7 @@ describe.each(["MCP Apps", "ChatGPT"])("%s answer acceptance", (bridge) => {
       w.button(action).click();
     }
     expect(w.invoke).toHaveBeenCalledExactlyOnceWith("accept_answer", { task_id: taskId });
-    pending.resolve({ content: [{ type: "text", text: JSON.stringify(accepted) }] });
+    resolve({ content: [{ type: "text", text: JSON.stringify(accepted) }] });
     await w.settle();
     expect(w.root.querySelector("[data-accepted]")?.textContent).toBe("Accepted");
     expect(w.button("accept")).toBeNull();
