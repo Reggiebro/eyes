@@ -18,7 +18,7 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 
 1. Join at https://app.eyes.pictures with your mobile number.
 2. From your phone, text START.
-3. Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email. Open it and send the prepared message from the address you want to use.
+3. Reply EMAIL in your existing Eyes iMessage conversation. We’ll reply with a link to send your first email. Open it and send the prepared message from the address you want to use.
 4. Refresh your setup page at `/me`. The Email row shows your address (masked); it has text instructions, not an Add email button or provider chooser.
 5. Later, sign in at https://app.eyes.pictures/login: enter that email, tap "Email me a sign-in link", and open the link within 15 minutes.
 
