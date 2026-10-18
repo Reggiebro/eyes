@@ -12,6 +12,18 @@ When an agent asks Eyes a question about a place, Eyes texts the nearest free wo
 - Workers can reply NO to give the task back, HELP for instructions, or STOP to opt out.
 - Workers who add an email can also get offers by email. See [email channel](email-channel.md).
 
+## Worker commands
+
+START and HELP (when no held answer opens a review ticket) show the same full menu below the worker's open setup steps. Two or more steps are numbered; one is unnumbered; none says "You're all set." Live texts keep all links short and send the whole reply in one message.
+
+- **Tasks:** YES (Y, YEP, YUP, YEAH, YEA, OK, OKAY, SURE, CLAIM, 👍) takes a task; NO (N, NOPE, NAH, PASS) declines or gives it back; TASK (LINK) resends the current capture link.
+- **Setup:** START (UNSTOP) joins/resumes; HELP (INFO, ?) shows setup or requests review of a held answer; APP / INSTALL (DOWNLOAD, TESTFLIGHT) gets the app.
+- **Location:** HERE (LOCATION, I'M HERE, IM HERE, I AM HERE) sends an update link; SHORTCUT (AUTO, AUTOMATION) sends automatic-location instructions and a device code.
+- **Email, by text only:** EMAIL (E-MAIL) sends the first-email link; EMAIL OFF (E-MAIL OFF) removes email. `EMAILOFF` without a space is not a command.
+- **Stop:** STOP (STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPTOUT, OPT OUT, STOP TEXTING ME, PLEASE STOP) pauses tasks, deletes location and email, and disables location codes.
+
+Accepted inputs, not additional commands: an email address by text; an Apple/Google Maps link with coordinates or a `lat,lng` pair with at least three decimal places per number; an iMessage location share or short map link (answered with an update link); and details for an open review ticket. Commands are case-insensitive and tolerate punctuation. The parser also tolerates some single-word typos; these are not extra advertised aliases. Email replies cannot opt a phone into tasks.
+
 ## How to try it
 
 Become a worker: open https://app.eyes.pictures and tap **JOIN**. After you sign up, Eyes texts you when a paid task is posted near you. Reply YES to claim it.

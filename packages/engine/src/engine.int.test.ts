@@ -24,10 +24,12 @@ import {
   WorkerSetup,
   WorkerTasks,
 } from "@eyes/core";
-import { migrate } from "@eyes/db";
+import { createRpc, migrate } from "@eyes/db";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { inkboxRoutes } from "../../comms/src/inkbox.ts";
+import { withShortLinks } from "../../../apps/mcp/src/short-links.ts";
+import { inkboxRoutes, parseReplyIntent } from "../../comms/src/inkbox.ts";
+import { withWorkerEmail } from "../../comms/src/primitive.ts";
 import { verifySubmission } from "../../verify/src/index.ts";
 import { createEyesService } from "./index.ts";
 
@@ -43,6 +45,16 @@ const PASS: VerificationResult = {
   confidence: 0.9,
   auto_approve: true,
 };
+
+const menuLines = [
+  "Commands (aliases in parentheses):",
+  expect.stringMatching(/^Tasks: YES .*; NO .*; TASK /),
+  expect.stringMatching(/^Setup: START .*; HELP .*; APP \/ INSTALL /),
+  expect.stringMatching(/^Location: HERE .*; SHORTCUT .*Inputs: /),
+  expect.stringMatching(/^Email \(text only\): EMAIL .*; EMAIL OFF .*Input: email address\.$/),
+  expect.stringMatching(/^Stop: STOP .*pause, delete spot\/email and disable location codes\.$/),
+  "You can also reply with details to an open review ticket.",
+];
 
 describe.skipIf(!url)("engine on Postgres", () => {
   const sql = postgres(url ?? "", { onnotice: () => {} });
@@ -440,7 +452,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const eToken = (workerId: string) => signToken("test-link-secret-0123456789", `e:${workerId}`);
     const lastText = (phone: string) => String(outbox.findLast((m) => m.to === phone)?.payload);
     const text = (phone: string, body: string) =>
-      service.handleWorkerReply({ phone, intent: "unknown", text: body });
+      service.handleWorkerReply({ phone, intent: parseReplyIntent(body), text: body });
     const off = await worker(somewhere(), false);
     await text(off.phone, "a@workers.test");
     expect(lastText(off.phone)).toBe("Text START first, then send your email.");
@@ -557,8 +569,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       ),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
-      "Text EMAIL to also get tasks by email.",
-      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+      ...menuLines,
     ]);
     const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
     expect(await service.workerDevice(code)).toMatchObject({ registered: false });
@@ -569,12 +580,11 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: /),
       expect.stringMatching(/^Your setup: /),
-      lines[4],
-      lines[5],
+      ...menuLines,
     ]);
   });
 
-  it("HELP is the hub text: the open steps, the worker's setup page, YES and STOP", async () => {
+  it("HELP is the shared hub text: open steps, setup page and the complete command menu", async () => {
     const { phone } = await worker(somewhere());
     await service.handleWorkerReply({ phone, intent: "help", text: "HELP" });
     const help = String(outbox.findLast((m) => m.to === phone)?.payload).split("\n");
@@ -584,10 +594,117 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
-      "Text EMAIL to also get tasks by email.",
-      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+      ...menuLines,
     ]);
     expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
+  });
+
+  it("START emits every supported command and finite alias, plus inputs, through the live phone/email wrappers", async () => {
+    const w = await worker(somewhere(), false);
+    const email = `menu-${randomUUID()}@workers.test`;
+    const rpc = createRpc(deps.db);
+    const wrapped = createEyesService({
+      ...deps,
+      providers: {
+        ...providers,
+        messaging: withShortLinks(
+          withWorkerEmail(providers.messaging, providers.email, deps.config.email_domain),
+          rpc,
+          deps.config,
+          () => providers.clock.now(),
+        ),
+      },
+    });
+    const before = outbox.length;
+    await wrapped.handleWorkerReply({ phone: w.phone, intent: parseReplyIntent("START"), text: "START" });
+    const sent = outbox.slice(before);
+    expect(sent).toHaveLength(1);
+    const text = String(sent[0]?.payload);
+    expect(text.split("\n").slice(4)).toEqual(menuLines);
+    expect(text.length).toBeLessThanOrEqual(1600);
+    const links = text.match(/https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}/g) ?? [];
+    expect(links).toHaveLength(3);
+    const targets = await Promise.all(
+      links.map(async (link) => {
+        const [row] = await rpc<{ target: string }>("eyes_short_link", {
+          p_id: link.split("/").at(-1) ?? "",
+          p_now: providers.clock.now().toISOString(),
+        });
+        return row?.target;
+      }),
+    );
+    expect(targets).toEqual([
+      expect.stringMatching(/^https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/),
+      expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/\S+$/),
+      expect.stringMatching(/^https:\/\/w\.eyes\.test\/me#c=\S+$/),
+    ]);
+    const advertised = Object.fromEntries(
+      [...text.matchAll(/([A-Z][A-Z /]+) \(([^)]+)\)/g)].map(
+        (m) => [m[1] ?? "", (m[2] ?? "").split(", ")] as const,
+      ),
+    );
+    const expected = {
+      YES: ["Y", "YEP", "YUP", "YEAH", "YEA", "OK", "OKAY", "SURE", "CLAIM", "👍"],
+      NO: ["N", "NOPE", "NAH", "PASS"],
+      TASK: ["LINK"],
+      START: ["UNSTOP"],
+      HELP: ["INFO", "?"],
+      "APP / INSTALL": ["DOWNLOAD", "TESTFLIGHT"],
+      HERE: ["LOCATION", "I'M HERE", "IM HERE", "I AM HERE"],
+      SHORTCUT: ["AUTO", "AUTOMATION"],
+      EMAIL: ["E-MAIL"],
+      "EMAIL OFF": ["E-MAIL OFF"],
+      STOP: [
+        "STOPALL",
+        "STOP ALL",
+        "UNSUBSCRIBE",
+        "CANCEL",
+        "END",
+        "QUIT",
+        "REVOKE",
+        "OPTOUT",
+        "OPT OUT",
+        "STOP TEXTING ME",
+        "PLEASE STOP",
+      ],
+    };
+    expect(advertised).toEqual(expected);
+    for (const [canonical, aliases] of Object.entries(advertised)) {
+      for (const command of [...canonical.split(" / "), ...aliases]) {
+        const intent =
+          canonical === "APP / INSTALL"
+            ? command === "APP"
+              ? "app"
+              : "install"
+            : canonical.startsWith("EMAIL")
+              ? "unknown"
+              : canonical.toLowerCase();
+        expect(parseReplyIntent(command), command).toBe(intent);
+      }
+    }
+    expect(text).toContain("Inputs: Apple/Google Maps link or lat,lng (3+ decimals)");
+    expect(text).toContain("iMessage share/short map links get an update link");
+    expect(text).toContain("Input: email address.");
+
+    // Already-opted-in email replies use the same hub; no second phone message.
+    await sql`update workers set email = ${email}, email_verified_at = now() where id = ${w.worker_id}`;
+    await wrapped.handleWorkerReply({ email, intent: parseReplyIntent("START"), text: "START" });
+    const emailed = providers.email.outbox.findLast((m) => m.to === email);
+    expect(emailed?.text.split("\n").slice(4)).toEqual(menuLines);
+    expect(outbox.slice(before)).toHaveLength(1);
+
+    // These engine-only commands bypass the parser but must actually reach emailByText.
+    for (const command of ["EMAIL", "E-MAIL"]) {
+      await wrapped.handleWorkerReply({ phone: w.phone, intent: parseReplyIntent(command), text: command });
+      expect(String(outbox.at(-1)?.payload)).toMatch(/^To get tasks by email, tap this and press Send: /);
+    }
+    for (const command of ["EMAIL OFF", "E-MAIL OFF"]) {
+      await sql`update workers set email = ${email} where id = ${w.worker_id}`;
+      await wrapped.handleWorkerReply({ phone: w.phone, intent: parseReplyIntent(command), text: command });
+      expect(String(outbox.at(-1)?.payload)).toMatch(/^Email removed\./);
+      expect(await sql`select email from workers where id = ${w.worker_id}`).toEqual([{ email: null }]);
+    }
+    expect(text).not.toContain("EMAILOFF");
   });
 
   describe("worker setup page (ADR-028)", () => {
@@ -691,11 +808,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         return String(outbox.findLast((m) => m.to === w.phone)?.payload).split("\n");
       };
       const head = "Eyes texts you paid photo tasks near you.";
-      const tail = [
-        expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/),
-        "Text EMAIL to also get tasks by email.",
-        "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
-      ];
+      const tail = [expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/), ...menuLines];
       const hour = 3_600_000;
       const start = providers.clock.now();
       try {
