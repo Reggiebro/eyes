@@ -57,7 +57,7 @@ describe("withShortLinks", () => {
     expect(stored()).toEqual([]);
   });
 
-  it("shortens the capture and earnings links, and stores no worker for an unknown phone", async () => {
+  it("shortens the capture and tasks links, and stores no worker for an unknown phone", async () => {
     const { short, outbox, stored } = setup(null);
     const capture = "https://w.eyes.test/capture.html?t=x.y";
     await short.sendCaptureLink("+15550000001", {
@@ -70,15 +70,15 @@ describe("withShortLinks", () => {
       task_id: "t1",
       place_label: "Cafe",
       amount_cents: 500,
-      earnings_url: "https://api.eyes.test/w/earnings/e.f",
+      me_url: "https://w.eyes.test/me#c=e.f",
       live_payouts: true,
     });
     const [sentCapture, sentPaid] = outbox.slice(-2).map((m) => m.payload as Record<string, string>);
     expect(sentCapture?.capture_url).toMatch(/^https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}$/);
-    expect(sentPaid?.earnings_url).toMatch(/^https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}$/);
+    expect(sentPaid?.me_url).toMatch(/^https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}$/);
     expect(stored().map((a) => [a.p_target, a.p_worker_id])).toEqual([
       [capture, null],
-      ["https://api.eyes.test/w/earnings/e.f", null],
+      ["https://w.eyes.test/me#c=e.f", null],
     ]);
   });
 });

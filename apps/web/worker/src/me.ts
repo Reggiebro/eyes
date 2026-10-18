@@ -1,4 +1,4 @@
-import type { TaskStatus, WorkerSetup } from "@eyes/core";
+import type { TaskStatus, WorkerSetup, WorkerTask, WorkerTasks, WorkerTasksQuery } from "@eyes/core";
 import { Problem, smsHref } from "./api.ts";
 import { serverProblem } from "./here.ts";
 
@@ -14,13 +14,56 @@ export type Row = {
   action: Action | null;
 };
 
-export type TaskLine = { question: string; place: string; amount: string; state: string; paid: boolean };
+/** One task row as shown: every text here is also what the server search matches (question, place, date, amount). */
+export type TaskLine = {
+  id: string;
+  question: string;
+  place: string;
+  date: string;
+  amount: string;
+  status: string;
+  tone: "success" | "warning" | "";
+  payout: string | null;
+  review: boolean;
+};
+
+export type Filter = NonNullable<WorkerTasksQuery["status"]> | "all";
+
+export const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "paid", label: "Paid" },
+  { id: "pending", label: "Pending" },
+  { id: "review", label: "Needs review" },
+  { id: "expired", label: "Expired" },
+];
+
+/** The list: what is shown, the totals over all tasks, and whether more pages, a request or a failure are pending. */
+export type TaskList = {
+  q: string;
+  filter: Filter;
+  tasks: TaskLine[];
+  paid: string;
+  pending: string;
+  /** The worker has tasks at all (false only when an unfiltered, unsearched list came back empty). */
+  any: boolean;
+  cursor: string | null;
+  state: "loading" | "idle" | "more" | "error";
+  error: unknown;
+};
+
+export type ListDeps = {
+  send: MeDeps["send"];
+  show: (list: TaskList) => void;
+  /** The browser's IANA zone: rows show dates in it, and the server search matches them that way. */
+  tz: string;
+  live: boolean;
+};
 
 /** Ids of the page sections; exactly one is shown. */
 export type MeView =
   | { step: "loading" | "missing" | "expired" }
   | { step: "error"; error: unknown }
-  | { step: "loaded"; title: string; rows: Row[]; tasks: TaskLine[]; earningsUrl: string };
+  | { step: "loaded"; title: string; rows: Row[]; live: boolean };
 
 export type MeDeps = {
   send: (path: string, init: RequestInit) => Promise<unknown>;
@@ -35,20 +78,20 @@ export type InstallDeps = {
   report: (err: unknown) => void;
 };
 
-const STATUS: Record<TaskStatus, string> = {
-  dispatched: "Offered",
-  claimed: "Claimed",
-  submitted: "Checking",
-  verified: "Verified",
-  paid: "Paid",
-  expired: "Expired",
-  refunded: "Not paid",
-  disputed: "Disputed",
-  needs_review: "In review",
+const STATUS: Record<TaskStatus, { label: string; tone: TaskLine["tone"] }> = {
+  dispatched: { label: "Offered", tone: "" },
+  claimed: { label: "Claimed", tone: "" },
+  submitted: { label: "Checking", tone: "" },
+  verified: { label: "Verified", tone: "success" },
+  paid: { label: "Paid", tone: "success" },
+  expired: { label: "Expired", tone: "" },
+  refunded: { label: "Not paid", tone: "" },
+  disputed: { label: "Disputed", tone: "warning" },
+  needs_review: { label: "Needs review", tone: "warning" },
 };
 
 const PAYOUT = {
-  paid: "Paid",
+  paid: "Paid out",
   pending: "Payout pending",
   waiting_for_payout_setup: "Waiting for payout setup",
 };
@@ -172,25 +215,96 @@ export function checklist(s: WorkerSetup, now: number, startSms = smsHref("START
   return rows;
 }
 
-/** Up to 5 tasks, newest first: status and payout in plain words, the payout only when it adds something. */
-export function taskLines(tasks: WorkerSetup["tasks"]): TaskLine[] {
-  return tasks.slice(0, 5).map((t) => {
-    const status = STATUS[t.status];
-    const payout = t.payout ? PAYOUT[t.payout] : status;
-    return {
-      question: t.question,
-      place: t.place_label,
-      amount: `$${t.bounty_usd.toFixed(2)}`,
-      state: payout === status ? status : `${status} · ${payout}`,
-      paid: payout === "Paid",
-    };
-  });
+/** "Oct 17, 2026" in the worker's zone; the server search formats dates the same way (eyes_shown_date). */
+export function shownDate(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: tz,
+  }).format(new Date(iso));
+}
+
+/** A task in plain words: status badge, and the payout only when money moved and the badge does not say it already. */
+export function taskLine(t: WorkerTask, tz: string, live: boolean): TaskLine {
+  const status = STATUS[t.status];
+  return {
+    id: t.task_id,
+    question: t.question,
+    place: t.place_label,
+    date: shownDate(t.claimed_at, tz),
+    amount: `$${t.bounty_usd.toFixed(2)}`,
+    status: status.label,
+    tone: status.tone,
+    payout:
+      !t.payout || (live && t.status === "paid") ? null : live ? PAYOUT[t.payout] : "Simulated, nothing sent",
+    review: status.tone === "warning",
+  };
+}
+
+/**
+ * The /me task list: search, status filter and "load more", each a GET /w/me/tasks with the code in the header.
+ * Only the newest request may show its answer, so a slow page for "pie" never lands over the one for "pier".
+ */
+export function taskList(code: string, d: ListDeps) {
+  let list: TaskList = {
+    q: "",
+    filter: "all",
+    tasks: [],
+    paid: "$0.00",
+    pending: "$0.00",
+    any: false,
+    cursor: null,
+    state: "loading",
+    error: null,
+  };
+  let seq = 0;
+  let lastMore = false;
+  const update = (next: Partial<TaskList>) => {
+    list = { ...list, ...next };
+    d.show(list);
+    return list;
+  };
+  async function fetchPage(next: Partial<TaskList>, more: boolean): Promise<TaskList> {
+    const mine = ++seq;
+    lastMore = more;
+    const { q, filter, cursor } = update({ ...next, state: more ? "more" : "loading", error: null });
+    const query = new URLSearchParams({ tz: d.tz });
+    if (q.trim()) query.set("q", q.trim());
+    if (filter !== "all") query.set("status", filter);
+    if (more && cursor) query.set("cursor", cursor);
+    try {
+      const page = (await d.send(`/w/me/tasks?${query}`, {
+        headers: { Authorization: `Bearer ${code}` },
+      })) as WorkerTasks;
+      if (mine !== seq) return list;
+      const rows = page.tasks.map((t) => taskLine(t, d.tz, d.live));
+      return update({
+        tasks: more ? [...list.tasks, ...rows] : rows,
+        paid: `$${page.paid_usd.toFixed(2)}`,
+        pending: `$${page.pending_usd.toFixed(2)}`,
+        any: list.any || rows.length > 0,
+        cursor: page.next_cursor,
+        state: "idle",
+      });
+    } catch (error) {
+      return mine === seq ? update({ state: "error", error }) : list;
+    }
+  }
+  return {
+    /** The first page, or again whatever failed last (a page of more, or the search). */
+    load: () => fetchPage({}, lastMore),
+    search: (q: string) => fetchPage({ q }, false),
+    filter: (filter: Filter) => fetchPage({ filter }, false),
+    /** The next page; a no-op while a request runs or when there is none. */
+    more: () => (list.state === "idle" && list.cursor ? fetchPage({}, true) : Promise.resolve(list)),
+  };
 }
 
 export function meView(s: WorkerSetup, now: number): MeView {
   const rows = checklist(s, now);
   const title = rows.some((r) => r.state === "todo") ? "Finish setting up" : "You're set up";
-  return { step: "loaded", title, rows, tasks: taskLines(s.tasks), earningsUrl: s.earnings_url };
+  return { step: "loaded", title, rows, live: s.payouts.live };
 }
 
 /** Loads the setup with the code in the Authorization header only (never the URL) and shows the result. */

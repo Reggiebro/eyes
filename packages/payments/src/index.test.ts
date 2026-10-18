@@ -8,7 +8,6 @@ import {
   type OwnerConsole,
   type OwnerPolicyInput,
   type Payments,
-  type WorkerEarnings,
 } from "@eyes/core";
 import Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,64 +94,13 @@ const OWNER_VIEW: OwnerConsole = {
 };
 const NEW_KEY = 'eyes_test_<b>"new"</b>&key';
 
-const EARNINGS_VIEW: WorkerEarnings = {
-  paid_usd: 3,
-  pending_usd: 6.25,
-  tasks: [
-    {
-      task_id: "8b3e4d5c-6f7a-4b2c-9d0e-1f2a3b4c5d6e",
-      question: "Is the playground open?",
-      task_type: "is_open",
-      place_label: "Dolores Park",
-      status: "verified",
-      bounty_usd: 2,
-      payout: "pending",
-      claimed_at: "2026-10-17T11:00:00.000Z",
-      paid_at: null,
-    },
-    {
-      task_id: "7a2d3c4b-5e6f-4a1b-8c9d-0e1f2a3b4c5d",
-      question: "<b>Is</b> the line long?",
-      task_type: "line_length",
-      place_label: "<img src=x onerror=alert(1)> Cafe & Co",
-      status: "verified",
-      bounty_usd: 4.25,
-      payout: "waiting_for_payout_setup",
-      claimed_at: "2026-10-17T10:00:00.000Z",
-      paid_at: null,
-    },
-    {
-      task_id: TASK_ID,
-      question: "",
-      task_type: "in_stock",
-      place_label: "Ferry Building",
-      status: "paid",
-      bounty_usd: 3,
-      payout: "paid",
-      claimed_at: "2026-10-17T09:15:00.000Z",
-      paid_at: "2026-10-17T09:40:00.000Z",
-    },
-    {
-      task_id: "6c1b2a3d-4e5f-4a0b-8c7d-9e0f1a2b3c4d",
-      question: "How crowded is the pier?",
-      task_type: "crowd_level",
-      place_label: "37.76071452444879,-122.38585301300247",
-      status: "needs_review",
-      bounty_usd: 3,
-      payout: null,
-      claimed_at: "2026-10-17T08:00:00.000Z",
-      paid_at: null,
-    },
-  ],
-};
-
 const privateHeaders = (res: Response) => ({
   referrer: res.headers.get("referrer-policy"),
   cache: res.headers.get("cache-control"),
   csp: res.headers.get("content-security-policy"),
 });
-// The earnings page runs one inline script (local dates), allowed by hash on that route only.
-const EARNINGS_PRIVATE = (body: string) => ({
+// Owner pages run one inline script (local dates), allowed by hash on those routes only.
+const LOCAL_TIME_PRIVATE = (body: string) => ({
   ...PRIVATE,
   csp: PRIVATE.csp.replace(
     "default-src 'none';",
@@ -193,19 +141,6 @@ function setup(payments: Payments = fakeProviders().payments, live_payouts = tru
     updateSpendPolicy: vi.fn(async (token: string, _input: OwnerPolicyInput) => {
       if (token !== "owner-tok") throw new EyesError("owner_link_invalid");
       return OWNER_VIEW.policy;
-    }),
-    workerEarnings: vi.fn(async (token: string) => {
-      if (token !== "earnings-tok") {
-        throw new EyesError(
-          "offer_invalid",
-          {},
-          {
-            message: "This earnings link is invalid or has expired.",
-            fix: "Text HELP to the Eyes number for a fresh link.",
-          },
-        );
-      }
-      return EARNINGS_VIEW;
     }),
     rotateApiKey: vi.fn(async (token: string) => {
       if (token !== "owner-tok") throw new EyesError("owner_link_invalid");
@@ -409,7 +344,7 @@ describe("owner console routes", () => {
     const res = await app.request("/owner/owner-tok");
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(privateHeaders(res)).toEqual(EARNINGS_PRIVATE(body));
+    expect(privateHeaders(res)).toEqual(LOCAL_TIME_PRIVATE(body));
     expect(body).not.toContain("<script>alert");
     expect(body).toContain("&lt;script&gt;alert(&quot;owned&quot;)&lt;/script&gt; Is it open?");
     expect(body).toContain("Scout &lt;b&gt;bot&lt;/b&gt;");
@@ -556,87 +491,24 @@ describe("owner console routes", () => {
   });
 });
 
-describe("worker earnings page", () => {
-  it("shows the totals and each task as a card, escaping labels, rounding coordinates, behind private-link headers", async () => {
+describe("retired worker earnings page", () => {
+  it("moves an old earnings link to the worker's task list on /me, the code in the fragment only", async () => {
     const { app } = setup();
-    const res = await app.request("/w/earnings/earnings-tok");
-    expect(res.status).toBe(200);
-    const body = await res.text();
-    expect(privateHeaders(res)).toEqual(EARNINGS_PRIVATE(body));
-    expect(body).toContain("<dt>Paid to you</dt><dd>$3.00</dd>");
-    expect(body).toContain("<dt>Earned, not sent yet</dt><dd>$6.25</dd>");
-    expect(body).toContain(
-      '<span class="ui-badge ui-badge--success">Verified</span><span class="task__bounty">$2.00</span>',
-    );
-    expect(body).toContain(
-      '<p class="task__question">Is the playground open?</p>\n<p class="task__place">Dolores Park</p>',
-    );
-    expect(body).toContain(
-      '<p class="task__payout">Not sent yet. If you have not finished payout setup, use the link we texted, or text START for a new one.</p>',
-    );
-    expect(body).not.toContain("<img");
-    expect(body).not.toContain("<b>Is</b>");
-    expect(body).toContain('<p class="task__place">&lt;img src=x onerror=alert(1)&gt; Cafe &amp; Co</p>');
-    expect(body).toContain('<p class="task__payout">Waiting for your payout setup</p>');
-    expect(body).toContain("text START to the Eyes number");
-    // No question: the task type in plain words.
-    expect(body).toContain('<p class="task__question">Whether something is in stock</p>');
-    expect(body).toContain(
-      '<p class="task__payout">Paid <time datetime="2026-10-17T09:40:00.000Z">2026-10-17 09:40 UTC</time></p>',
-    );
-    expect(body).toContain(
-      '<p class="task__when">Claimed <time datetime="2026-10-17T09:15:00.000Z">2026-10-17 09:15 UTC</time></p>',
-    );
-    // Coordinate labels never show more than 3 decimals.
-    expect(body).toContain('<p class="task__place">Near 37.761, -122.386</p>');
-    expect(body).not.toContain("37.7607");
-    expect(body).toContain('<span class="ui-badge ui-badge--warning">Needs review</span>');
-    expect(body).toContain("Reply HELP for a manual review.");
+    const res = await app.request("/w/earnings/eyJ3IjoiYSJ9.c2lnbmF0dXJl");
+    expect([res.status, res.headers.get("location")]).toEqual([
+      301,
+      "https://w.eyes.test/me#c=eyJ3IjoiYSJ9.c2lnbmF0dXJl",
+    ]);
+    expect(privateHeaders(res)).toEqual(PRIVATE);
   });
 
-  it("says the amounts are not real money, instead of asking for payout setup, when payouts are simulated", async () => {
-    const { app } = setup(undefined, false);
-    const body = await (await app.request("/w/earnings/earnings-tok")).text();
-    expect(body).toContain(
-      "This is a test server and payouts are simulated, so the amounts on this page are not real money and nothing is sent to you.",
-    );
-    expect(body).not.toContain("waiting for you to set up payouts");
-    expect(body).toContain('<p class="task__payout">Simulated, nothing sent</p>');
-    expect(body).not.toMatch(/Waiting for your payout setup|Not sent yet|Paid <time/);
-  });
-
-  it("answers an invalid or expired link with a 404 page that says how to get a new one", async () => {
-    const { app } = setup();
-    const res = await app.request("/w/earnings/owner-tok");
-    expect(res.status).toBe(404);
-    const body = await res.text();
-    // Same route CSP as the page itself (its script hash), with no script on this page.
-    expect(privateHeaders(res)).toEqual({
-      ...PRIVATE,
-      csp: expect.stringMatching(
-        /^default-src 'none'; script-src 'sha256-[\w+/=]+'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'$/,
-      ),
-    });
-    expect(body).not.toContain("<script");
-    expect(body).toContain("This earnings link is invalid or has expired.");
-    expect(body).toContain("Text HELP to the Eyes number for a fresh link.");
-  });
-
-  it("shows no payout note once payouts are live and set up, a plain badge for a claimed task, and an empty list", async () => {
-    const { app, service } = setup();
-    const claimed = {
-      ...(EARNINGS_VIEW.tasks[0] as WorkerEarnings["tasks"][number]),
-      status: "claimed" as const,
-    };
-    service.workerEarnings.mockResolvedValueOnce({ ...EARNINGS_VIEW, tasks: [claimed] });
-    const body = await (await app.request("/w/earnings/earnings-tok")).text();
-    expect(body).toContain('<span class="ui-badge">Claimed</span>');
-    expect(body).not.toContain('class="note"');
-    service.workerEarnings.mockResolvedValueOnce({ paid_usd: 0, pending_usd: 0, tasks: [] });
-    const empty = await (await app.request("/w/earnings/earnings-tok")).text();
-    expect(empty).toContain("<p>No tasks yet. Reply YES to a task text to claim one.</p>");
-    expect(empty).not.toContain("<script");
-  });
+  it.each(["garbage", "a.b%0D%0ASet-Cookie:x=1", "a.b.c"])(
+    "opens /me without a code for a malformed token %s",
+    async (t) => {
+      const res = await setup().app.request(`/w/earnings/${t}`);
+      expect([res.status, res.headers.get("location")]).toEqual([301, "https://w.eyes.test/me"]);
+    },
+  );
 });
 
 describe("outbound Stripe requests", () => {

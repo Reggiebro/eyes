@@ -21,8 +21,8 @@ import {
   type TaskStatus,
   TOOLS,
   type VerificationResult,
-  WorkerEarnings,
   WorkerSetup,
+  WorkerTasks,
 } from "@eyes/core";
 import { migrate } from "@eyes/db";
 import postgres from "postgres";
@@ -86,8 +86,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       String(outbox.findLast((m) => m.to === phone && String(m.payload).includes("/w/connect/"))?.payload),
     )?.[1] ?? "";
 
-  const earningsToken = (url: unknown) => String(url).split("/w/earnings/")[1] ?? "";
-  // START and HELP link the setup page (ADR-028); its code is the same "e:" token as the earnings link.
+  // START, HELP and the paid text link the setup page (ADR-028) with the worker's "e:" token as its code.
   const meToken = (text: unknown) => /\/me#c=(\S+)/.exec(String(text))?.[1] ?? "";
   async function helpEarnings(phone: string) {
     await service.handleWorkerReply({ phone, intent: "help", text: "HELP" });
@@ -300,7 +299,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ]);
-    expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true, tasks: [] });
+    expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
   });
 
   describe("worker setup page (ADR-028)", () => {
@@ -316,7 +315,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       fix: "Text HELP to the Eyes number for a fresh link.",
     };
 
-    it("shows the spot's age, whether the app sends it, payout setup and the 5 newest tasks", async () => {
+    it("shows the spot's age, whether the app sends it, payout setup, and every task with its payout", async () => {
       const at = somewhere();
       const agents = [await agent(), await agent()];
       const w = await worker(north(at, 50));
@@ -334,11 +333,9 @@ describe.skipIf(!url)("engine on Postgres", () => {
           setup_url: expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/[\w-]+\.[\w-]+$/),
         },
         here_url: expect.stringMatching(/^https:\/\/w\.eyes\.test\/here\.html\?t=[\w-]+\.[\w-]+$/),
-        earnings_url: expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/earnings\/[\w-]+\.[\w-]+$/),
-        tasks: [],
       });
 
-      // Six claims from two agents (each stays within its $20 grant); the page lists the 5 newest.
+      // Six claims from two agents (each stays within its $20 grant); the list has all of them, newest first.
       const questions: string[] = [];
       for (let i = 1; i <= 6; i++) {
         const question = `Is the line longer than ${i} people?`;
@@ -350,7 +347,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
         providers.clock.advance(1000);
       }
       const rows = (payout: string) =>
-        questions.slice(0, 5).map((question) => ({
+        questions.map((question) => ({
+          task_id: expect.any(String),
           question,
           place_label: expect.any(String),
           status: "verified",
@@ -358,14 +356,18 @@ describe.skipIf(!url)("engine on Postgres", () => {
           payout,
           claimed_at: expect.any(String),
         }));
-      expect(WorkerSetup.parse(await service.workerSetup(token)).tasks).toEqual(
-        rows("waiting_for_payout_setup"),
-      );
+      const list = async () => WorkerTasks.parse(await service.workerTasks(token, {}));
+      expect(await list()).toEqual({
+        paid_usd: 0,
+        pending_usd: 18,
+        tasks: rows("waiting_for_payout_setup"),
+        next_cursor: null,
+      });
       await service.workerConnectUrl(connectToken(w.phone));
       expect(await service.workerSetup(token)).toMatchObject({
         payouts: { set_up: true, live: true, setup_url: null },
-        tasks: rows("pending"),
       });
+      expect((await list()).tasks).toEqual(rows("pending"));
 
       const start = providers.clock.now();
       try {
@@ -443,6 +445,66 @@ describe.skipIf(!url)("engine on Postgres", () => {
       } finally {
         providers.clock.set(start);
       }
+    });
+
+    it("pages every task 20 at a time and searches only what a row shows, dates in the browser's zone", async () => {
+      const a = await agent();
+      const w = await worker(somewhere());
+      const token = setupToken(w.phone);
+      // 25 claims, one a day back from 2026-03-10 05:30 UTC (the evening before in Los Angeles).
+      const status = (i: number) =>
+        (["verified", "needs_review", "expired", "disputed", "refunded"] as const)[i % 5] ?? "verified";
+      for (let i = 0; i < 25; i++) {
+        const at = new Date(Date.UTC(2026, 2, 10 - i, 5, 30));
+        await sql`insert into tasks (agent_id, question, task_type, place_label, lat, lng, bounty_cents, fee_cents,
+          deadline_at, status, claimed_by, claimed_at)
+          values (${a.id}, ${`Question ${i}`}, 'is_open', ${i === 7 ? "Ferry Building" : "Pier 39"}, 1, 1,
+          ${100 + i}, 0, ${at}, ${status(i)}, ${w.worker_id}, ${at})`;
+      }
+      const ids = (r: { tasks: { question: string }[] }) => r.tasks.map((t) => t.question);
+      const first = await service.workerTasks(token, {});
+      expect(ids(first)).toEqual(Array.from({ length: 20 }, (_, i) => `Question ${i}`));
+      expect(first.next_cursor).toMatch(/\|[0-9a-f-]{36}$/);
+      const second = await service.workerTasks(token, { cursor: first.next_cursor ?? "" });
+      expect([ids(second), second.next_cursor]).toEqual([
+        ["Question 20", "Question 21", "Question 22", "Question 23", "Question 24"],
+        null,
+      ]);
+      // A malformed cursor starts from the top instead of failing.
+      expect(ids(await service.workerTasks(token, { cursor: "x|y" }))).toEqual(ids(first));
+
+      const search = async (q: string, tz?: string) => ids(await service.workerTasks(token, { q, tz }));
+      expect(await search("ferry")).toEqual(["Question 7"]);
+      expect(await search("$1.07")).toEqual(["Question 7"]);
+      expect(await search("question 1")).toHaveLength(11);
+      expect(await search("Mar 10, 2026")).toEqual(["Question 0"]);
+      expect(await search("Mar 9, 2026", "America/Los_Angeles")).toEqual(["Question 0"]);
+      expect(await search("Mar 10, 2026", "Not/AZone")).toEqual(["Question 0"]);
+      // Nothing a row does not show: not the cents, the task id or a UTC timestamp.
+      expect(await search("107")).toEqual([]);
+      expect(await search(first.tasks[0]?.task_id.slice(0, 8) ?? "")).toEqual([]);
+      expect(await search("05:30")).toEqual([]);
+
+      const filter = async (s: "paid" | "pending" | "review" | "expired") =>
+        ids(await service.workerTasks(token, { status: s }));
+      expect(await filter("review")).toEqual(
+        ["Question 1", "Question 3", "Question 6", "Question 8"].concat([
+          "Question 11",
+          "Question 13",
+          "Question 16",
+          "Question 18",
+          "Question 21",
+          "Question 23",
+        ]),
+      );
+      expect(await filter("expired")).toHaveLength(10);
+      expect(await filter("paid")).toEqual([]);
+      expect(await filter("pending")).toEqual([]);
+      const [verified] = await sql<{ id: string }[]>`select id from tasks where claimed_by = ${w.worker_id}
+        and question = 'Question 5'`;
+      await sql`insert into ledger (type, amount_cents, task_id, worker_id) values ('release', 105, ${verified?.id ?? ""}, ${w.worker_id})`;
+      expect(await filter("pending")).toEqual(["Question 5"]);
+      expect(ids(await service.workerTasks(token, { status: "pending", q: "pier" }))).toEqual(["Question 5"]);
     });
 
     it("refuses a missing, garbage, tampered, wrong-kind or expired code and an unknown worker", async () => {
@@ -1145,26 +1207,19 @@ describe.skipIf(!url)("engine on Postgres", () => {
     };
     const row = {
       question: expect.any(String),
-      task_type: expect.any(String),
       place_label: expect.any(String),
       claimed_at: expect.any(String),
     };
 
     const first = await work(3);
     const connect = connectToken(w.phone);
-    expect(await service.workerEarnings(await helpEarnings(w.phone))).toEqual({
+    expect(await service.workerTasks(await helpEarnings(w.phone), {})).toEqual({
       paid_usd: 0,
       pending_usd: 3,
       tasks: [
-        {
-          ...row,
-          task_id: first,
-          status: "verified",
-          bounty_usd: 3,
-          payout: "waiting_for_payout_setup",
-          paid_at: null,
-        },
+        { ...row, task_id: first, status: "verified", bounty_usd: 3, payout: "waiting_for_payout_setup" },
       ],
+      next_cursor: null,
     });
 
     await service.workerConnectUrl(connect);
@@ -1182,23 +1237,16 @@ describe.skipIf(!url)("engine on Postgres", () => {
       error.mockRestore();
     });
 
-    const view = WorkerEarnings.parse(
-      await service.workerEarnings(earningsToken(paid?.payload.earnings_url)),
-    );
+    expect(paid?.payload.me_url).toMatch(/^https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/);
+    const view = WorkerTasks.parse(await service.workerTasks(meToken(paid?.payload.me_url), {}));
     expect(view).toEqual({
       paid_usd: 3,
       pending_usd: 4.25,
       tasks: [
-        { ...row, task_id: second, status: "verified", bounty_usd: 4.25, payout: "pending", paid_at: null },
-        {
-          ...row,
-          task_id: first,
-          status: "paid",
-          bounty_usd: 3,
-          payout: "paid",
-          paid_at: expect.any(String),
-        },
+        { ...row, task_id: second, status: "verified", bounty_usd: 4.25, payout: "pending" },
+        { ...row, task_id: first, status: "paid", bounty_usd: 3, payout: "paid" },
       ],
+      next_cursor: null,
     });
   });
 
@@ -1219,15 +1267,21 @@ describe.skipIf(!url)("engine on Postgres", () => {
     };
     const t1 = await work(w1, 3);
     const t2 = await work(w2, 5);
-    const view = async (phone: string) => service.workerEarnings(await helpEarnings(phone));
+    const view = async (phone: string) => service.workerTasks(await helpEarnings(phone), {});
     expect(await view(w1.phone)).toMatchObject({ pending_usd: 3, tasks: [{ task_id: t1 }] });
     expect((await view(w1.phone)).tasks).toHaveLength(1);
     expect(await view(w2.phone)).toMatchObject({ pending_usd: 5, tasks: [{ task_id: t2 }] });
     expect((await view(w2.phone)).tasks).toHaveLength(1);
-    expect(await view(idle.phone)).toEqual({ paid_usd: 0, pending_usd: 0, tasks: [] });
+    expect(await view(idle.phone)).toEqual({ paid_usd: 0, pending_usd: 0, tasks: [], next_cursor: null });
+    // A cursor from another worker's list only moves the window; it never shows that worker's tasks.
+    const other = (await view(w2.phone)).tasks[0];
+    const fromW2 = await service.workerTasks(await helpEarnings(w1.phone), {
+      cursor: `9999-01-01T00:00:00Z|${other?.task_id}`,
+    });
+    expect(fromW2.tasks.map((t) => t.task_id)).toEqual([t1]);
   });
 
-  it("opens the earnings page only with an e: token for an existing worker, signed here and under 7 days old", async () => {
+  it("lists tasks only with an e: token for an existing worker, signed here and under 7 days old", async () => {
     const w = await worker(somewhere());
     const secret = "test-link-secret-0123456789";
     const wrong = [
@@ -1238,18 +1292,18 @@ describe.skipIf(!url)("engine on Postgres", () => {
       "garbage",
     ];
     for (const token of wrong) {
-      await expect(service.workerEarnings(token)).rejects.toMatchObject({
-        code: "offer_invalid",
-        message: "This earnings link is invalid or has expired.",
+      await expect(service.workerTasks(token, {})).rejects.toMatchObject({
+        code: "unauthorized",
+        message: "This link is invalid or has expired.",
       });
     }
     const token = await helpEarnings(w.phone);
     const issued = providers.clock.now();
     try {
       providers.clock.advance(7 * 24 * 60 * 60 * 1000 - 1000);
-      await expect(service.workerEarnings(token)).resolves.toMatchObject({ tasks: [] });
+      await expect(service.workerTasks(token, {})).resolves.toMatchObject({ tasks: [] });
       providers.clock.advance(2000);
-      await expect(service.workerEarnings(token)).rejects.toMatchObject({ code: "offer_invalid" });
+      await expect(service.workerTasks(token, {})).rejects.toMatchObject({ code: "unauthorized" });
     } finally {
       providers.clock.set(issued);
     }
@@ -1946,7 +2000,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
           code: "invalid_input",
           fix: "Take a photo with the capture page camera and submit again.",
         });
-        const earnings = await service.workerEarnings(await helpEarnings(w.phone));
+        const earnings = await service.workerTasks(await helpEarnings(w.phone), {});
         expect(earnings.tasks.find((t) => t.task_id === task_id)).toMatchObject({
           status: "claimed",
           payout: null,

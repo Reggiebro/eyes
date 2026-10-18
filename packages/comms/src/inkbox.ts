@@ -75,8 +75,8 @@ export function alreadyClaimedText(msg: Parameters<Messaging["sendAlreadyClaimed
 export function paidText(msg: Parameters<Messaging["sendPaid"]>[1]): string {
   const place = placeText(msg.place_label);
   return msg.live_payouts
-    ? `Eyes: you've been paid ${dollars(msg.amount_cents)} for the task at ${place}. Thank you! Your earnings: ${msg.earnings_url}`
-    : `Eyes: your answer for the task at ${place} was accepted. No money was sent because payouts are simulated on this test server. Your earnings: ${msg.earnings_url}`;
+    ? `Eyes: you've been paid ${dollars(msg.amount_cents)} for the task at ${place}. Thank you! Your tasks: ${msg.me_url}`
+    : `Eyes: your answer for the task at ${place} was accepted. No money was sent because payouts are simulated on this test server. Your tasks: ${msg.me_url}`;
 }
 
 const INTENTS: Record<string, ReplyIntent> = {

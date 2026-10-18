@@ -27,6 +27,7 @@ import {
   TOOLS,
   verifyToken,
   type WorkerLocationInput,
+  WorkerTasksQuery,
 } from "@eyes/core";
 import type { Rpc } from "@eyes/db";
 import { PAGE_HEADERS, stripeRoutes } from "@eyes/payments";
@@ -876,6 +877,16 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     c.header("Cache-Control", "no-store");
     return c.json(
       await service.workerSetup(/^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? ""),
+    );
+  });
+  // The /me task list (T6.42, ADR-029): one page per call, same bearer code as /w/me; tz is the browser's zone.
+  server.get("/w/me/tasks", async (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json(
+      await service.workerTasks(
+        /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "",
+        WorkerTasksQuery.parse(c.req.query()),
+      ),
     );
   });
   server.post("/w/me/install", async (c) => {

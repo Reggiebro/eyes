@@ -40,7 +40,7 @@ vi.mock("@inkbox/sdk", async (importOriginal) => ({
 const KEY = "test-signing-key";
 const NOW = new Date("2026-10-17T19:00:00.000Z");
 const TO = "+14155550123";
-const EARNINGS_URL = "https://api.eyes.test/w/earnings/x";
+const ME_URL = "https://app.eyes.test/me#c=e.t";
 
 const textReceived = (text: string) => ({
   event_type: "text.received",
@@ -361,7 +361,7 @@ describe("createInkboxMessaging", () => {
       task_id: "t1",
       place_label: "Ferry Building",
       amount_cents: 300,
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
       live_payouts: true,
     };
     expect(await m.sendOffer(TO, offer())).toEqual({ id: "im_1" });
@@ -387,7 +387,7 @@ describe("createInkboxMessaging", () => {
       task_id: "t1",
       place_label: "Ferry Building",
       amount_cents: 300,
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
     };
     await m.sendPaid(TO, { ...paid, live_payouts: false });
     await m.sendPaid(TO, { ...paid, live_payouts: true });
@@ -555,11 +555,11 @@ describe("simulated payouts", () => {
         task_id: "t",
         place_label: "Ferry Building, San Francisco",
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: false,
       }),
     ).toBe(
-      `Eyes: your answer for the task at Ferry Building was accepted. No money was sent because payouts are simulated on this test server. Your earnings: ${EARNINGS_URL}`,
+      `Eyes: your answer for the task at Ferry Building was accepted. No money was sent because payouts are simulated on this test server. Your tasks: ${ME_URL}`,
     );
   });
 });
@@ -608,7 +608,7 @@ describe("place label in every template", () => {
         task_id: "t",
         place_label,
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: true,
       }),
       offerText(offer({ place_label, live_payouts: false })),
@@ -616,7 +616,7 @@ describe("place label in every template", () => {
         task_id: "t",
         place_label,
         amount_cents: 300,
-        earnings_url: EARNINGS_URL,
+        me_url: ME_URL,
         live_payouts: false,
       }),
     ];
@@ -644,15 +644,15 @@ describe("post-reply templates", () => {
     const paid = {
       task_id: "t",
       place_label: "Ferry Building",
-      earnings_url: EARNINGS_URL,
+      me_url: ME_URL,
       live_payouts: true,
     };
     expect(paidText({ ...paid, amount_cents: 350 })).toContain("$3.50 ");
     expect(paidText({ ...paid, amount_cents: 300 })).toContain("$3 ");
   });
 
-  it("paid text ends with the earnings link and stays within the 1600-character text limit", () => {
-    const earnings_url = `https://eyes-production-0123456789.example.app/w/earnings/${signToken(
+  it("paid text ends with the tasks link and stays within the 1600-character text limit", () => {
+    const me_url = `https://eyes-production-0123456789.example.app/me#c=${signToken(
       "a-link-secret-of-32-characters-0",
       `e:${crypto.randomUUID()}`,
       new Date("2026-10-24T19:00:00.000Z"),
@@ -661,10 +661,10 @@ describe("post-reply templates", () => {
       task_id: "t",
       place_label: "W".repeat(40),
       amount_cents: 4999,
-      earnings_url,
+      me_url,
       live_payouts: true,
     });
-    expect(text.endsWith(` Your earnings: ${earnings_url}`)).toBe(true);
+    expect(text.endsWith(` Your tasks: ${me_url}`)).toBe(true);
     expect(text.length).toBeLessThanOrEqual(1600);
   });
 });

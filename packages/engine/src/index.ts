@@ -24,13 +24,12 @@ import {
   signToken,
   type Task,
   type TaskStatus,
-  type TaskType,
   TOOLS,
   usdToCents,
   verifyToken,
   type Worker,
-  type WorkerEarnings,
   WorkerLocationInput,
+  type WorkerTasks,
 } from "@eyes/core";
 import { createRpc, type RpcArgs } from "@eyes/db";
 import { z } from "zod";
@@ -63,17 +62,27 @@ type EarningsRow = {
   paid_cents: number;
   pending_cents: number;
   payouts_set_up: boolean;
-  tasks: {
-    task_id: string;
-    question: string;
-    task_type: TaskType;
-    place_label: string;
-    status: TaskStatus;
-    bounty_cents: number;
-    claimed_at: string;
-    released: boolean;
-    paid_at: string | null;
-  }[];
+  tasks: { task_id: string; status: TaskStatus }[];
+};
+type TaskRow = {
+  task_id: string;
+  question: string;
+  place_label: string;
+  status: TaskStatus;
+  bounty_cents: number;
+  claimed_at: string;
+  released: boolean;
+  paid_at: string | null;
+};
+const TASKS_PAGE = 20;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// An IANA zone the browser sent, or null (UTC) when the runtime does not know it.
+const zoneOf = (tz: string | undefined) => {
+  try {
+    return tz ? new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone : null;
+  } catch {
+    return null;
+  }
 };
 
 const ANSWERED: TaskStatus[] = ["verified", "paid", "needs_review"];
@@ -90,7 +99,7 @@ const DEVICE_LINK_EXPIRED = {
   message: "This install link is invalid or has expired.",
   fix: "Text HELP to the Eyes number for a fresh link.",
 };
-// The setup page's code (ADR-028) is the earnings token, which START and HELP renew.
+// The setup page's code (ADR-028) is the worker's "e:" token, which START and HELP renew.
 const SETUP_LINK_INVALID = {
   message: "This link is invalid or has expired.",
   fix: "Text HELP to the Eyes number for a fresh link.",
@@ -162,12 +171,6 @@ const SIMULATED_PAY = "This is a test server and payouts are simulated, so no re
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const iso = (s: string) => new Date(s).toISOString();
 const errorName = (err: unknown) => (err instanceof Error ? err.name : typeof err);
-// The payout label rule (ADR-020), shared by the earnings and setup pages so they never disagree.
-const payoutOf = (
-  t: EarningsRow["tasks"][number],
-  payoutsSetUp: boolean,
-): WorkerEarnings["tasks"][number]["payout"] =>
-  t.paid_at ? "paid" : !t.released ? null : payoutsSetUp ? "pending" : "waiting_for_payout_setup";
 
 function logFailedOffers(taskId: string, sent: PromiseSettledResult<unknown>[]) {
   for (const s of sent) {
@@ -233,9 +236,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
     `${config.public_api_url}/topup/${signToken(config.link_secret, `t:${agentId}`)}`;
   const connectUrl = (workerId: string) =>
     `${config.public_api_url}/w/connect/${signToken(config.link_secret, `c:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
-  const earningsUrl = (workerId: string) =>
-    `${config.public_api_url}/w/earnings/${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
-  // The setup page (ADR-028) takes the same "e:" token, in the fragment so no server logs it.
+  // The setup page (ADR-028) takes the worker's "e:" token, in the fragment so no server logs it.
   const meUrl = (workerId: string) =>
     `${config.worker_web_url}/me#c=${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
   const captureUrl = (task: Task, workerId: string) =>
@@ -512,7 +513,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         task_id: task.id,
         place_label: task.place_label,
         amount_cents: task.bounty_cents,
-        earnings_url: earningsUrl(worker.id),
+        me_url: meUrl(worker.id),
         live_payouts: config.live_payouts,
       }),
     );
@@ -1167,34 +1168,45 @@ export function createEyesService(deps: EngineDeps): EyesService {
       await reply[intent]();
     },
 
-    async workerEarnings(token) {
+    async workerTasks(token, { q, status, cursor, tz }) {
       const workerId = tokenPayload(token, "e");
       const e = workerId && (await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }));
-      if (!e) {
-        throw new EyesError(
-          "offer_invalid",
-          {},
-          {
-            message: "This earnings link is invalid or has expired.",
-            fix: "Text HELP to the Eyes number for a fresh link.",
-          },
-        );
-      }
+      if (!workerId || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      // The cursor is the last row's raw claimed_at (microseconds kept) and id: "<at>|<id>".
+      const [at, id] = (cursor ?? "").split("|");
+      const before = at && id && UUID.test(id) && !Number.isNaN(Date.parse(at)) ? { at, id } : null;
+      const rows = await rpc<TaskRow>("eyes_worker_tasks_page", {
+        p_worker_id: workerId,
+        p_limit: TASKS_PAGE + 1,
+        p_q: q || null,
+        p_filter: status ?? null,
+        p_tz: zoneOf(tz),
+        p_before_at: before?.at ?? null,
+        p_before_id: before?.id ?? null,
+      });
+      const shown = rows.slice(0, TASKS_PAGE);
+      const last = shown.at(-1);
       return {
         paid_usd: centsToUsd(e.paid_cents),
         pending_usd: centsToUsd(e.pending_cents),
-        tasks: e.tasks.map((t) => ({
+        tasks: shown.map((t) => ({
           task_id: t.task_id,
           question: t.question,
-          task_type: t.task_type,
           place_label: t.place_label,
           status: t.status,
           bounty_usd: centsToUsd(t.bounty_cents),
-          payout: payoutOf(t, e.payouts_set_up),
+          // The payout label rule (ADR-020).
+          payout: t.paid_at
+            ? "paid"
+            : !t.released
+              ? null
+              : e.payouts_set_up
+                ? "pending"
+                : "waiting_for_payout_setup",
           claimed_at: iso(t.claimed_at),
-          paid_at: t.paid_at && iso(t.paid_at),
         })),
-      };
+        next_cursor: rows.length > TASKS_PAGE && last ? `${last.claimed_at}|${last.task_id}` : null,
+      } satisfies WorkerTasks;
     },
 
     async workerSetup(token) {
@@ -1223,15 +1235,6 @@ export function createEyesService(deps: EngineDeps): EyesService {
           setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
         },
         here_url: hereUrl(w.id),
-        earnings_url: earningsUrl(w.id),
-        tasks: e.tasks.slice(0, 5).map((t) => ({
-          question: t.question,
-          place_label: t.place_label,
-          status: t.status,
-          bounty_usd: centsToUsd(t.bounty_cents),
-          payout: payoutOf(t, e.payouts_set_up),
-          claimed_at: iso(t.claimed_at),
-        })),
       };
     },
 
