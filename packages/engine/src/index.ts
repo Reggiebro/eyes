@@ -118,6 +118,23 @@ const PENDING_EMAIL_MS = 24 * HOUR_MS; // a join-form email waits this long for 
 const LOGIN_LINK_MS = 15 * 60_000;
 // j…@example.com: enough for the worker to recognise, never the full address in a text.
 const maskEmail = (email: string) => `${email[0]}…${email.slice(email.indexOf("@"))}`;
+// A text that is just one email address: "my email is …", mailto: and wrapping punctuation are fine.
+function textedEmail(text: string): boolean {
+  const words = text.trim().split(/\s+/);
+  const [word, ...more] = words.filter((w) => w.includes("@"));
+  const rest = words
+    .filter((w) => !w.includes("@"))
+    .join(" ")
+    .toLowerCase();
+  if (!word || more.length || !/^(?:my )?(?:e-?mail(?: address)?(?: is)?:?)?$/.test(rest)) return false;
+  return WorkerEmail.safeParse(word.replace(/^[<("']*(?:mailto:)?|[>)"'.,;:!?]+$/gi, "")).success;
+}
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// Only a phone that has texted START may add an email (the /me link itself comes by text).
+const START_FIRST = {
+  message: "Text START to the Eyes number first.",
+  fix: "Text START from your phone, then add the email again.",
+};
 const APP_SENDING_MS = 24 * HOUR_MS; // the app sent a fix this recently: no "Get the app" step
 const PING_MAX = 5;
 const PING_WAIT_MS = 30_000;
@@ -291,6 +308,8 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     config.testflight_url ? `${config.worker_web_url}/app#c=${code}` : installUrl(code);
   // ponytail: in memory (one server instance); a restart allows one extra code on the next START.
   const appLinkSentAt = new Map<string, number>();
+  // ponytail: in memory like appLinkSentAt; email links texted per worker in the last hour (5 allowed).
+  const emailTextsAt = new Map<string, number[]>();
   // The hub text (START, HELP): links for everything, so YES and STOP are the only words to remember.
   // Only open steps are listed, numbered when there are two or more; none left: "You're all set".
   async function hubReply(worker: Worker & { location_source: string | null }): Promise<string> {
@@ -316,6 +335,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
       `Your setup: ${meUrl(worker.id)}`,
+      ...(worker.email ? [] : ["Text EMAIL to also get tasks by email."]),
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ].join("\n");
   }
@@ -374,6 +394,42 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       else console.error(`worker email for ${workerId} failed: ${describeSendError(err)}`);
       return false;
     }
+  }
+
+  // A 24-hour one-time mailto to work@ (the worker emails first, so Primitive may answer). Only the
+  // code's SHA-256 is stored; the email that carries it connects the sender (workerConnectEmail).
+  async function connectMailto(workerId: string): Promise<string> {
+    const code = randomBytes(32).toString("base64url");
+    await one("eyes_issue_connect_code", {
+      p_worker_id: workerId,
+      p_code_hash: sha256(code),
+      p_expires_at: new Date(now().getTime() + PENDING_EMAIL_MS).toISOString(),
+    });
+    return `mailto:${workerInbox}?subject=Eyes%20${code}&body=Send%20this%20email%20to%20connect`;
+  }
+
+  // EMAIL (or an email address) texted from the phone gets the mailto behind a short link; EMAIL OFF
+  // removes the email.
+  async function emailByText(worker: Worker, phone: string, off: boolean): Promise<void> {
+    const say = async (text: string) => void (await messaging.sendText(phone, text));
+    if (off) {
+      await rpc("eyes_set_worker_email", { p_worker_id: worker.id, p_email: null });
+      return say("Email removed. Eyes won't email you tasks. Text EMAIL anytime to add one again.");
+    }
+    if (!worker.opted_in) return say("Text START first, then send your email.");
+    const t = now().getTime();
+    const recent = (emailTextsAt.get(worker.id) ?? []).filter((at) => t - at < HOUR_MS);
+    if (recent.length >= 5) return say("Too many email links this hour. Text EMAIL again in an hour.");
+    emailTextsAt.set(worker.id, [...recent, t]);
+    // ponytail: same 8 base62 symbols as apps/mcp short-links; that wrapper leaves /s/ links alone.
+    const id = Array.from(randomBytes(8), (b) => BASE62[b % 62]).join("");
+    await one("eyes_add_short_link", {
+      p_id: id,
+      p_target: await connectMailto(worker.id),
+      p_worker_id: worker.id,
+      p_expires_at: new Date(t + PENDING_EMAIL_MS).toISOString(),
+    });
+    await say(`To get tasks by email, tap this and press Send: ${config.public_api_url}/s/${id}`);
   }
 
   async function workerSetup(token: string): Promise<WorkerSetup> {
@@ -1170,6 +1226,11 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         if (intent === "start") await messaging.sendText(phone, "This number can't take Eyes tasks.");
         return;
       }
+      // Texts only: EMAIL, an email address or EMAIL OFF (parseReplyIntent has no word for these).
+      if ("phone" in input && intent === "unknown") {
+        const off = /^\s*e-?mail\s+off\W*$/i.test(text);
+        if (off || /^\s*e-?mail\W*$/i.test(text) || textedEmail(text)) return emailByText(worker, phone, off);
+      }
       if (!worker.opted_in && intent !== "start") return;
       // The phone is the account (one account per number), so only a text from it turns tasks on.
       if (!worker.opted_in && "email" in input) {
@@ -1362,22 +1423,39 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         : undefined;
       if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
       const next = email === null ? null : parse(WorkerEmail, email);
-      // Only a phone that has texted START may add an email (the /me link itself comes by text).
-      if (next !== null && !w.opted_in)
-        throw new EyesError(
-          "invalid_input",
-          {},
-          {
-            message: "Text START to the Eyes number first.",
-            fix: "Text START from your phone, then add the email again.",
-          },
-        );
+      if (next !== null && !w.opted_in) throw new EyesError("invalid_input", {}, START_FIRST);
       await rpc("eyes_set_worker_email", { p_worker_id: w.id, p_email: next }).catch((err: unknown) => {
         throw (err as { code?: string }).code === "23505" ? new EyesError("email_taken") : err;
       });
       // Same address again re-sends the link, unless it is already verified.
       if (next !== null && !(next === w.email && w.email_verified_at)) await sendEmailLink(w.id, next, true);
       return workerSetup(token);
+    },
+
+    async workerEmailStart(token) {
+      const workerId = tokenPayload(token, "e");
+      const w = workerId
+        ? await maybe<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      if (!w.opted_in) throw new EyesError("invalid_input", {}, START_FIRST);
+      return { mailto: await connectMailto(w.id) };
+    },
+
+    async workerConnectEmail(email, code) {
+      const w = await maybe<Worker>("eyes_connect_worker_email", {
+        p_code_hash: sha256(code),
+        p_email: email,
+        p_now: nowIso(),
+      }).catch((err: unknown) => {
+        if (err instanceof Object && "code" in err && err.code === "23505") return "taken" as const;
+        throw err;
+      });
+      if (w === "taken")
+        return "This email is already on another Eyes account, so it wasn't connected. Send the email from a different address, or text EMAIL OFF from that account's phone first.";
+      return w
+        ? "Connected. Eyes will also send you tasks here. Reply STOP to stop."
+        : "This link has expired or was already used, so nothing changed. Text EMAIL to the Eyes number for a fresh one.";
     },
 
     async workerEmailLogin(email) {

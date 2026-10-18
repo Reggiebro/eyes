@@ -516,6 +516,27 @@ describe("worker email routes (T6.48)", () => {
     expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
   });
 
+  it("POST /w/me/email/start returns the mailto for the bearer code, uncached, sharing /w/me/email's 5 an hour", async () => {
+    const { fetch } = setup({
+      workerEmailStart: async (token) => {
+        if (token !== "good") throw new EyesError("unauthorized");
+        return { mailto: "mailto:work@eyes.test?subject=Eyes%20c" };
+      },
+      workerSetEmail: async () => ({}) as never,
+    });
+    const auth = { authorization: "Bearer good" };
+    const res = await post(fetch, "/w/me/email/start", {}, auth);
+    expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+      200,
+      { mailto: "mailto:work@eyes.test?subject=Eyes%20c" },
+      "no-store",
+    ]);
+    expect((await post(fetch, "/w/me/email/start", {})).status).toBe(401);
+    for (let i = 0; i < 4; i++)
+      expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    expect((await post(fetch, "/w/me/email/start", {}, auth)).status).toBe(429);
+  });
+
   it("POST /w/login/email always answers 200 without waiting for the send, 5 an hour per address and per caller", async () => {
     const asked: string[] = [];
     let finish = () => {};

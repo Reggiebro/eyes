@@ -355,6 +355,79 @@ describe.skipIf(!url)("engine on Postgres", () => {
     });
   });
 
+  it("email by text (T6.51): EMAIL or an address gets a mailto short link and no email; the coded email connects the sender, verified, once; taken, wrong and stale codes change nothing; 5 links an hour; EMAIL OFF removes", async () => {
+    const eToken = (workerId: string) => signToken("test-link-secret-0123456789", `e:${workerId}`);
+    const lastText = (phone: string) => String(outbox.findLast((m) => m.to === phone)?.payload);
+    const text = (phone: string, body: string) =>
+      service.handleWorkerReply({ phone, intent: "unknown", text: body });
+    const off = await worker(somewhere(), false);
+    await text(off.phone, "a@workers.test");
+    expect(lastText(off.phone)).toBe("Text START first, then send your email.");
+    await expect(service.workerEmailStart(eToken(off.worker_id))).rejects.toMatchObject({
+      code: "invalid_input",
+      message: "Text START to the Eyes number first.",
+    });
+    await expect(service.workerEmailStart("bad")).rejects.toMatchObject({ code: "unauthorized" });
+
+    const w = await worker(somewhere());
+    const mailtoFor = async (body: string) => {
+      await text(w.phone, body);
+      const id = /^To get tasks by email, tap this and press Send: \S+\/s\/([0-9A-Za-z]{8})$/.exec(
+        lastText(w.phone),
+      )?.[1];
+      const [row] = await sql`select target from short_links where id = ${id ?? ""}`;
+      return String(row?.target);
+    };
+    const codeOf = (mailto: string) => /subject=Eyes%20([\w-]{43})&/.exec(mailto)?.[1] ?? "";
+    const emails = providers.email.outbox.length;
+    for (const body of ["EMAIL", " My email is: <mailto:Ana@Workers.test>. ", "e-mail"]) {
+      expect(await mailtoFor(body)).toMatch(
+        /^mailto:work@\S+\?subject=Eyes%20[\w-]{43}&body=Send%20this%20email%20to%20connect$/,
+      );
+    }
+    expect(providers.email.outbox).toHaveLength(emails);
+    await text(w.phone, "a@workers.test b@workers.test");
+    expect(lastText(w.phone)).toMatch(/^Didn't catch that\./);
+
+    const email = `c${randomInt(1e9)}@workers.test`;
+    const code = codeOf(await mailtoFor("email"));
+    expect(await service.workerConnectEmail(email, "x".repeat(43))).toMatch(/^This link has expired/);
+    const other = await worker(somewhere());
+    await sql`update workers set email = ${email} where id = ${other.worker_id}`;
+    expect(await service.workerConnectEmail(email, code)).toMatch(
+      /^This email is already on another Eyes account/,
+    );
+    await sql`update workers set email = null where id = ${other.worker_id}`;
+    expect(await service.workerConnectEmail(email.toUpperCase(), code)).toBe(
+      "Connected. Eyes will also send you tasks here. Reply STOP to stop.",
+    );
+    expect(await service.workerConnectEmail(email, code)).toMatch(/^This link has expired/);
+    expect(
+      await sql`select email, email_verified_at is not null as verified from workers where id = ${w.worker_id}`,
+    ).toEqual([{ email, verified: true }]);
+    await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
+    expect(lastText(w.phone)).not.toContain("Text EMAIL");
+
+    await mailtoFor("EMAIL");
+    await text(w.phone, "EMAIL");
+    expect(lastText(w.phone)).toBe("Too many email links this hour. Text EMAIL again in an hour.");
+
+    const { mailto } = await service.workerEmailStart(eToken(w.worker_id));
+    const start = providers.clock.now();
+    try {
+      providers.clock.advance(24 * 3_600_000 + 1);
+      expect(await service.workerConnectEmail(email, codeOf(mailto))).toMatch(/^This link has expired/);
+    } finally {
+      providers.clock.set(start);
+    }
+
+    await text(w.phone, "Email off");
+    expect(lastText(w.phone)).toBe(
+      "Email removed. Eyes won't email you tasks. Text EMAIL anytime to add one again.",
+    );
+    expect(await sql`select email from workers where id = ${w.worker_id}`).toEqual([{ email: null }]);
+  });
+
   it("never lets a repeat join rewrite an existing worker or tell the caller it exists, even after STOP, and sends the payout link only by text after START", async () => {
     const at = somewhere();
     const phone = newPhone();
@@ -403,6 +476,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       ),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "Text EMAIL to also get tasks by email.",
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ]);
     const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
@@ -415,6 +489,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^2\. Set up payouts: /),
       expect.stringMatching(/^Your setup: /),
       lines[4],
+      lines[5],
     ]);
   });
 
@@ -428,6 +503,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "Text EMAIL to also get tasks by email.",
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ]);
     expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
@@ -536,6 +612,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       const head = "Eyes texts you paid photo tasks near you.";
       const tail = [
         expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/),
+        "Text EMAIL to also get tasks by email.",
         "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
       ];
       const hour = 3_600_000;

@@ -286,20 +286,23 @@ async function follow(deps: RouteDeps, agent: Agent, task: ToolOutput<"ask_eyes"
   );
 }
 
-async function handleEmail(deps: RouteDeps, agent: Agent, email: ReceivedEmail) {
+// Answer fields for a reply in the sender's thread (Primitive allows replies to people who wrote first).
+function inThread(email: ReceivedEmail) {
   const messageId = email.thread.messageId ?? undefined;
+  return {
+    to: email.sender.address,
+    subject: email.replySubject
+      .replace(/[\r\n]/g, " ")
+      .slice(0, SUBJECT_MAX_CHARS)
+      .replace(/\p{Cs}$/u, ""),
+    in_reply_to: messageId,
+    references: [...email.thread.references, ...(messageId ? [messageId] : [])].slice(-MAX_REFERENCES),
+  };
+}
+
+async function handleEmail(deps: RouteDeps, agent: Agent, email: ReceivedEmail) {
   const send = (text: string, attachments?: EmailAttachment[]) =>
-    deps.providers.email.send({
-      to: email.sender.address,
-      subject: email.replySubject
-        .replace(/[\r\n]/g, " ")
-        .slice(0, SUBJECT_MAX_CHARS)
-        .replace(/\p{Cs}$/u, ""),
-      text,
-      in_reply_to: messageId,
-      references: [...email.thread.references, ...(messageId ? [messageId] : [])].slice(-MAX_REFERENCES),
-      attachments,
-    });
+    deps.providers.email.send({ ...inThread(email), text, attachments });
   const reply: Reply = (text, attachments) =>
     send(text, attachments)
       .catch((err: unknown) => (attachments ? send(text) : Promise.reject(err)))
@@ -312,7 +315,7 @@ async function handleEmail(deps: RouteDeps, agent: Agent, email: ReceivedEmail) 
   }
   const input = AskEyesInput.safeParse({
     ...parsed,
-    idempotency_key: (messageId ?? email.id).slice(0, 128),
+    idempotency_key: (email.thread.messageId ?? email.id).slice(0, 128),
   });
   if (!input.success) {
     const issues = input.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -412,9 +415,14 @@ export function primitiveRoutes(deps: RouteDeps, env: Env): Hono {
       if (!firstDelivery([event.data.id, `work:${email.thread.messageId ?? email.id}`]))
         return c.text("duplicate");
       if (!withinBudget(`work:${sender}`)) return c.text("rate_limited");
+      // The mailto from a text or /me (T6.51): "Eyes <code>" in the subject connects this sender.
+      const code = /\bEyes\s+([\w-]{43})(?![\w-])/i.exec(email.subject ?? "")?.[1];
       const text = workerReplyText(email.subject, email.text, email.raw.email.parsed.body_html);
       try {
-        await deps.service.handleWorkerReply({ email: sender, intent: parseReplyIntent(text), text });
+        if (code) {
+          const answer = await deps.service.workerConnectEmail(sender, code);
+          await deps.providers.email.send({ ...inThread(email), text: answer, reply_to: work });
+        } else await deps.service.handleWorkerReply({ email: sender, intent: parseReplyIntent(text), text });
       } catch (err) {
         console.error(`primitive: worker reply ${email.id} failed: ${errorName(err)}`);
       }

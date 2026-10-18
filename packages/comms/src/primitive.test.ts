@@ -161,7 +161,7 @@ function signed(body: string, opts: { secret?: string; at?: Date } = {}): Record
 function setup(
   service: Partial<
     Record<
-      "agentById" | "askEyes" | "awaitAnswer" | "handleWorkerReply",
+      "agentById" | "askEyes" | "awaitAnswer" | "handleWorkerReply" | "workerConnectEmail",
       (...args: never[]) => Promise<unknown>
     >
   > = {},
@@ -183,6 +183,7 @@ function setup(
       async (_agent: Agent, _input: unknown): Promise<ToolOutput<"await_answer">> => answered,
     ),
     handleWorkerReply: vi.fn(async (_input: unknown) => {}),
+    workerConnectEmail: vi.fn(async (_email: string, _code: string) => "Connected."),
     ...service,
   };
   const app = primitiveRoutes({ service: svc as unknown as EyesService, providers, config }, env);
@@ -1114,6 +1115,36 @@ describe("worker email replies (T6.48)", () => {
     });
     expect(svc.agentById).not.toHaveBeenCalled();
     expect(outbox).toHaveLength(0);
+  });
+
+  it("connects an email to work@ whose subject carries an Eyes code (T6.51) and answers in its thread from work@", async () => {
+    const { post, svc, outbox } = setup({}, env);
+    const code = `${"a-".repeat(21)}b`;
+    const res = await post(
+      JSON.stringify(
+        emailEvent({
+          rcpt: [WORK],
+          from: "Ana <Ana@Example.com>",
+          mailFrom: "Ana@Example.com",
+          subject: `Eyes ${code}`,
+          messageId: "<c1@example.com>",
+          text: "Send this email to connect",
+          auth: { dmarcFromDomain: "example.com" },
+        }),
+      ),
+    );
+    expect(await res.text()).toBe("ok");
+    expect(svc.workerConnectEmail).toHaveBeenCalledWith("ana@example.com", code);
+    expect(svc.handleWorkerReply).not.toHaveBeenCalled();
+    expect(outbox).toEqual([
+      expect.objectContaining({
+        to: expect.stringMatching(/^ana@example\.com$/i),
+        subject: expect.stringContaining(`Eyes ${code}`),
+        in_reply_to: "<c1@example.com>",
+        reply_to: WORK,
+        text: "Connected.",
+      }),
+    ]);
   });
 
   it("drops a redelivery, logs a failed reply without the address, and caps a sender at 20 an hour", async () => {

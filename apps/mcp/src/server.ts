@@ -930,6 +930,14 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     throttle(c, c.req.path, `code ${createHash("sha256").update(token).digest("hex")}`);
     return c.json(await service.workerSetEmail(token, email));
   });
+  // The worker emails first (T6.51): a one-time mailto to work@ whose email connects the sender,
+  // verified. 5 an hour per code, shared with /w/me/email.
+  server.post("/w/me/email/start", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const token = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+    throttle(c, "/w/me/email", `code ${createHash("sha256").update(token).digest("hex")}`);
+    return c.json(await service.workerEmailStart(token));
+  });
   // Always 200, and the send is not awaited, so neither the answer nor its timing tells whether the
   // address is on an account. 5 an hour per address and per caller.
   server.post("/w/login/email", async (c) => {
