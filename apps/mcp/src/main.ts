@@ -19,6 +19,7 @@ import { z } from "zod";
 import { createNominatimGeo } from "./geo.ts";
 import { toNodeListener } from "./http.ts";
 import { instrumentAssess, instrumentProviders, instrumentService } from "./instrument.ts";
+import { createOpsSettings } from "./ops-settings.ts";
 import { createSandboxService } from "./sandbox.ts";
 import { createServer, liveProviders } from "./server.ts";
 import { withShortLinks } from "./short-links.ts";
@@ -111,6 +112,7 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   console.log(`db: ${db.kind}`);
 
   const rpc = createRpc(db);
+  const settings = createOpsSettings(rpc);
   if (live.messaging)
     providers.messaging = withShortLinks(providers.messaging, rpc, config, providers.clock.now);
   // A worker's verified email gets the same messages as their phone (T6.48).
@@ -128,7 +130,7 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   const deps = {
     db,
     providers: logged,
-    assessTask: instrumentAssess(createAssessTask(env), events.log),
+    assessTask: instrumentAssess(createAssessTask(env, settings.blockMin), events.log),
     verifySubmission,
     config,
   };
@@ -141,7 +143,7 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
     service.retryPayouts().catch((err) => console.error("retryPayouts failed", err));
   }, EXPIRE_EVERY_MS);
 
-  const server = createServer({ service, providers: logged, config, env, rpc, events, clickhouse });
+  const server = createServer({ service, providers: logged, config, env, rpc, events, clickhouse, settings });
   const host = env.HOST || "0.0.0.0";
   const http = createHttpServer(toNodeListener(server.fetch, env.EDGE_SECRET || undefined));
   http.listen(port, host, () => {

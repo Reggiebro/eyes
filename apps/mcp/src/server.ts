@@ -56,6 +56,7 @@ import { oauthRoutes } from "./oauth.ts";
 import { type Operator, opsAuth } from "./ops-auth.ts";
 import { opsHost, opsOriginFor } from "./ops-host.ts";
 import { opsLists } from "./ops-lists.ts";
+import { createOpsSettings, type OpsSettingsStore, opsSettingsRoutes } from "./ops-settings.ts";
 import { keylessAgents, SANDBOX, SANDBOX_NOTICE } from "./sandbox.ts";
 import {
   WIDGET_CALLABLE,
@@ -416,6 +417,7 @@ export function createServer(
     rpc?: Rpc;
     events?: EventLog;
     clickhouse?: Pick<ClickHouseSink, "query" | "dropped">;
+    settings?: OpsSettingsStore;
   },
 ) {
   const { service, config, env } = deps;
@@ -1145,6 +1147,10 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       );
     });
     const ops = opsAuth({ rpc, providers: deps.providers, config, env, log, site: opsSite.site });
+    server.app.route(
+      "/",
+      opsSettingsRoutes(deps.settings ?? createOpsSettings(rpc), ops.operator, ops.sameOrigin),
+    );
     const clef = Boolean(env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN);
     const claude = Boolean(env.ANTHROPIC_API_KEY);
     const health = {
