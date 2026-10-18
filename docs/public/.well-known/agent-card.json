@@ -36,21 +36,14 @@
       }
     }
   ],
-  "defaultInputModes": [
-    "application/json"
-  ],
-  "defaultOutputModes": [
-    "application/json"
-  ],
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
   "skills": [
     {
       "id": "quote_task",
       "name": "Quote a task",
       "description": "Free and read-only. Check whether Eyes can answer at a place before you spend anything: workers_nearby, est_minutes_to_answer, suggested_bounty_usd, allowed with reason_if_not, and resolved_location (where Eyes thinks you mean). suggested_bounty_usd already fits this API key's max_bounty_usd, the daily cap left and your balance. allowed is false only when you cannot post this task right now (safety rules refuse the place or task_type, the task_type is not allowed for this key, or even the minimum bounty plus fee does not fit your limits or balance); reason_if_not says what to do. quote_task never sees your question, so ask_eyes checks the question itself and can still refuse it with unsafe_task. Next: if allowed is true and workers_nearby > 0, call ask_eyes with the same location and task_type.",
-      "tags": [
-        "coverage",
-        "pricing"
-      ],
+      "tags": ["coverage", "pricing"],
       "examples": [
         "quote_task({\"location\":\"Ferry Building, San Francisco\",\"task_type\":\"line_length\"})"
       ]
@@ -59,11 +52,7 @@
       "id": "ask_eyes",
       "name": "Ask a human to check",
       "description": "Pay a nearby human to look at a public place right now and answer your question, usually with a live photo. bounty_usd (default 3) plus a 0.50 USD fee is escrowed from your balance now, paid to the worker only after a verified answer, and refunded in full if nobody answers before deadline_minutes or you cancel before a worker claims it. idempotency_key is required: any unique string for each task you intend to create. Reuse it when you retry that task: the same key and parameters return the original task instead of charging again. Only public, commercial or civic places. Next: call await_answer with the returned task_id immediately.",
-      "tags": [
-        "physical-world",
-        "human-verification",
-        "real-time"
-      ],
+      "tags": ["physical-world", "human-verification", "real-time"],
       "examples": [
         "ask_eyes({\"question\":\"How many people are waiting in line right now?\",\"location\":\"Blue Bottle Coffee, Mint Plaza, San Francisco\",\"task_type\":\"line_length\",\"bounty_usd\":3,\"idempotency_key\":\"6f1c2a9e-line-check\"})"
       ]
@@ -72,10 +61,7 @@
       "id": "report_classifier",
       "name": "Report an incorrect classifier block",
       "description": "Create an internal Support ticket with the original refused Ask and client-reported unsafe_task context. Reuse one report idempotency_key per card; ask_idempotency_key is the original Ask key. No dispatch, messages or charge. A human may approve this exact request for the same agent for 24 hours. Next: explicitly check get_classifier_report.",
-      "tags": [
-        "support",
-        "review"
-      ],
+      "tags": ["support", "review"],
       "examples": [
         "report_classifier({\"question\":\"Is the cafe open now?\",\"location\":\"Ferry Building, San Francisco\",\"task_type\":\"is_open\",\"bounty_usd\":3,\"ask_idempotency_key\":\"original-ask\",\"idempotency_key\":\"report-card\",\"classifier_error\":{\"error\":\"unsafe_task\",\"reason\":\"Reported classifier refusal\"}})"
       ]
@@ -84,79 +70,49 @@
       "id": "get_classifier_report",
       "name": "Check classifier review",
       "description": "Read your ticket status. On approved, explicitly retry the unchanged original Ask with classifier_report_id equal to ticket_id and the original Ask idempotency_key. Rejected or expired does not permit retry. Consumed returns the existing task_id. Normal deterministic safety rules, spending limits and balance always apply.",
-      "tags": [
-        "support",
-        "status"
-      ],
-      "examples": [
-        "get_classifier_report({\"ticket_id\":\"123\"})"
-      ]
+      "tags": ["support", "status"],
+      "examples": ["get_classifier_report({\"ticket_id\":\"123\"})"]
     },
     {
       "id": "await_answer",
       "name": "Wait for the answer",
       "description": "Long-poll for the answer to a task. Each call waits up to timeout_seconds (default 50, max 55) and returns as soon as the task is answered. Call it right after ask_eyes and keep calling it with the same task_id until answered is true or status is expired, refunded or disputed; you cannot receive events in the background, so this loop is how you get the answer. answered: false only means not yet; tasks usually take 5 to 20 minutes.",
-      "tags": [
-        "physical-world",
-        "polling"
-      ],
-      "examples": [
-        "await_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"
-      ]
+      "tags": ["physical-world", "polling"],
+      "examples": ["await_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
     },
     {
       "id": "get_task",
       "name": "Get task status",
       "description": "Instant, read-only status and details of one task, including the answer once there is one. To wait for an answer call await_answer instead of polling get_task.",
-      "tags": [
-        "status"
-      ],
-      "examples": [
-        "get_task({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"
-      ]
+      "tags": ["status"],
+      "examples": ["get_task({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
     },
     {
       "id": "list_tasks",
       "name": "List your tasks",
       "description": "Instant, read-only list of the tasks this API key created, newest first: task_id, status, question, place_label, bounty_usd, created_at, deadline_at and answered. Call it when you lost a task_id (context reset, crash) and before asking a question again, so you resume an open task instead of paying twice. status filters to one status; limit is 1 to 50 (default 20). Next: await_answer any task still dispatched, claimed or submitted; get_task any task where answered is true.",
-      "tags": [
-        "status",
-        "recovery"
-      ],
-      "examples": [
-        "list_tasks({\"status\":\"dispatched\",\"limit\":5})"
-      ]
+      "tags": ["status", "recovery"],
+      "examples": ["list_tasks({\"status\":\"dispatched\",\"limit\":5})"]
     },
     {
       "id": "cancel_task",
       "name": "Cancel a task",
       "description": "Cancel a task that no worker has claimed yet (status dispatched) and refund the full escrow, bounty plus fee. After a worker claims it this fails with task_not_cancellable; keep calling await_answer instead.",
-      "tags": [
-        "refund"
-      ],
-      "examples": [
-        "cancel_task({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"
-      ]
+      "tags": ["refund"],
+      "examples": ["cancel_task({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
     },
     {
       "id": "accept_answer",
       "name": "Accept an answer",
       "description": "Record your user's positive feedback on an owned answered task with status verified or paid. Returns status accepted and the first accepted_at timestamp. Repeated calls are idempotent; get_task and await_answer retain accepted_at. This is not machine verification, never changes payment, and does not remove the right to dispute. Next: accept only after your user says the answer looks good.",
-      "tags": [
-        "feedback"
-      ],
-      "examples": [
-        "accept_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"
-      ]
+      "tags": ["feedback"],
+      "examples": ["accept_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
     },
     {
       "id": "dispute_answer",
       "name": "Dispute an answer",
       "description": "Flag an answered task (status verified, paid or needs_review) as wrong. The worker payout is held and the task goes to human review. Give a specific reason. To get a fresh answer now, call ask_eyes again with a new idempotency_key.",
-      "tags": [
-        "refund",
-        "review"
-      ],
+      "tags": ["refund", "review"],
       "examples": [
         "dispute_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\",\"reason\":\"The photo shows a different cafe, not Blue Bottle.\"})"
       ]
@@ -165,24 +121,15 @@
       "id": "get_balance",
       "name": "Get balance",
       "description": "Your prepaid balance and the amount escrowed in open tasks, in USD, plus top_up_url: a link your human opens to add funds with Stripe Checkout. If balance_usd is below bounty_usd + 0.50, give your human top_up_url, and after they pay call get_balance again before asking.",
-      "tags": [
-        "billing"
-      ],
-      "examples": [
-        "get_balance({})"
-      ]
+      "tags": ["billing"],
+      "examples": ["get_balance({})"]
     },
     {
       "id": "get_spend_policy",
       "name": "Get spend policy",
       "description": "The limits your human set on this API key: max_bounty_usd per task, daily_cap_usd, spent_today_usd and remaining_today_usd (UTC day), and allowed_task_types. Stay within them when you call ask_eyes; only your human can change them.",
-      "tags": [
-        "billing",
-        "limits"
-      ],
-      "examples": [
-        "get_spend_policy({})"
-      ]
+      "tags": ["billing", "limits"],
+      "examples": ["get_spend_policy({})"]
     }
   ]
 }
