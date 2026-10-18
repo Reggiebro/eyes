@@ -114,16 +114,16 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 | Cloudflare Containers + Durable Objects | Previous API hosting path; not the current production origin | [apps/edge/api/worker.js](apps/edge/api/worker.js) | legacy |
 | Cloudflare KV + Cron | `eyes-monitor` checks `/healthz` every minute, keeps state in KV, texts an alert after two failures | [apps/edge/monitor](apps/edge/monitor) | live |
 | Cloudflare DNS | `eyes.pictures` zone and the three custom domains | wrangler configs above | live |
-| Cloudflare Workers AI (`clef-omni`) | First-pass task safety classifier and photo moderation (safe / faces) | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
+| Cloudflare Workers AI (`clef-omni`) | First-pass task safety classifier; photo moderation rejects only confirmed graphic gore or explicit sexual content | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | Cloudflare Browser Integrity rule | Zone security setting on the domains | Cloudflare dashboard only, not in the repo | live (not verifiable from the repo) |
 | InsForge | Postgres with RPC functions and RLS for the ledger, claims and expiry; migrations through the migrations endpoint | [packages/db](packages/db), [scripts/insforge-migrate.ts](scripts/insforge-migrate.ts) | live |
-| InsForge Storage | Public `photos` bucket for captures; face-rejected photos are deleted ([ADR-014](intent/decisions/ADR-014-delete-face-photos.md)) | [packages/db](packages/db) | live |
+| InsForge Storage | Public `photos` bucket for captures; faces alone do not reject or delete photos ([photo policy](docs/features/photo-checks.md)) | [packages/db](packages/db) | live |
 | InsForge Sites | Earlier host of the worker web (`*.insforge.site`); replaced by `app.eyes.pictures` | [docs/DEPLOY.md](docs/DEPLOY.md) §3 | earlier |
 | Stripe | Checkout top-ups, Connect Express onboarding, $3 transfers on verified answers, transfer reversals on confirmed fraud, signed webhooks | [packages/payments](packages/payments) | test mode |
 | Inkbox | Shared iMessage line: inbound webhook, offer and paid texts, START/STOP/HELP/HERE replies, texts with location codes and the app link; uptime alerts; first-contact owner/ops email fallback when Primitive refuses delivery | [packages/comms/src/inkbox.ts](packages/comms/src/inkbox.ts) | live |
 | Inkbox (limitation) | An iMessage "Share My Location" arrives as a lone U+FFFD, so Eyes replies with a HERE link instead ([ADR-024](intent/decisions/ADR-024-worker-location.md)) | [packages/comms](packages/comms) | live |
 | Primitive | Each agent's private email inbox ([ADR-007](intent/decisions/ADR-007-agent-email-identity.md)), inbound webhooks, normal email replies and worker mail; first-contact owner/ops delivery falls back to Inkbox | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | live |
-| Anthropic Claude | Fallback safety classifier and photo vision when clef is unsure or fails; used alone if Cloudflare is not configured | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
+| Anthropic Claude | Fallback for task-safety uncertainty or provider failures; photo fallback on provider failure only; used alone without Cloudflare | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | OpenStreetMap Nominatim | Geocodes place names in `quote_task` and `ask_eyes` | [apps/mcp/src/geo.ts](apps/mcp/src/geo.ts) | live |
 | OpenStreetMap tiles + Leaflet (unpkg) | Maps on the ops dashboard and live map | [apps/web/dashboard](apps/web/dashboard) | live |
 | Apple Maps / Google Maps links | Reads coordinates from map links a worker texts in; the capture page links to Google Maps directions | [packages/core/src/util.ts](packages/core/src/util.ts), [apps/web/worker/src/capture.ts](apps/web/worker/src/capture.ts) | live |
