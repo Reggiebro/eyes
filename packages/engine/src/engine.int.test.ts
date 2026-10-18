@@ -1950,10 +1950,25 @@ describe.skipIf(!url)("engine on Postgres", () => {
         );
         const denied = await service.signupAgent({ name: "scoped-agent", owner_email: "o@notexample.com" });
         expect(denied.next_step).toContain("could not email your user at o@notexample.com");
+        send.mockRejectedValueOnce(
+          Object.assign(new Error("cannot send to o@gmail.com: All granted recipient-scope gates denied"), {
+            name: "PrimitiveApiError",
+            status: 403,
+            gates: [
+              { name: "send_to_confirmed_domains", subject: "o@gmail.com" },
+              { name: "send_to_known_addresses", subject: "o@gmail.com" },
+            ],
+          }),
+        );
+        const gated = await service.signupAgent({ name: "gated-agent", owner_email: "o@gmail.com" });
+        expect(gated.next_step).toContain("could not email your user at o@gmail.com");
         expect(error).not.toHaveBeenCalled();
-        expect(warn?.mock.calls.map((call) => String(call[0]))).toEqual([
-          `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
+        const warned = warn?.mock.calls.map((call) => String(call[0]));
+        expect(warned).toEqual([
+          `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient (403); it sends replies only until any-domain sending is enabled`,
+          `owner email for agent ${gated.agent_id} not sent: the email provider refused the recipient (403, gates denied: send_to_confirmed_domains, send_to_known_addresses); it sends replies only until any-domain sending is enabled`,
         ]);
+        expect(warned?.join()).not.toContain("@");
       } finally {
         send.mockRestore();
         for (const log of logs) log.mockRestore();

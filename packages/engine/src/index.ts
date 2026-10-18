@@ -332,8 +332,11 @@ export function createEyesService(deps: EngineDeps): EyesService {
       return true;
     } catch (err) {
       if (err instanceof Error && "status" in err && err.status === 403 && /recipient/i.test(err.message)) {
+        // Gate names only: a gate's subject can carry the recipient address.
+        const gates =
+          "gates" in err && Array.isArray(err.gates) ? err.gates.map((g) => g?.name).filter(Boolean) : [];
         console.warn(
-          `owner email for agent ${agentId} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
+          `owner email for agent ${agentId} not sent: the email provider refused the recipient (403${gates.length ? `, gates denied: ${gates.join(", ")}` : ""}); it sends replies only until any-domain sending is enabled`,
         );
       } else {
         console.error(`owner email for agent ${agentId} failed: ${describeSendError(err)}`);

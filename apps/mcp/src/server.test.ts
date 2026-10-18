@@ -1324,6 +1324,13 @@ describe("routes", () => {
     expect(bare).toContain("money ledger (Postgres)");
     expect(bare).not.toContain("Deployed commit");
     expect(bare).not.toContain("not recorded");
+    const email = { EYES_PROVIDERS: "live", PRIMITIVE_API_KEY: "prim_test" };
+    const gated = await (await setup({}, email).fetch("http://eyes.test/status")).text();
+    expect(gated).toContain("Email: live (replies only until Primitive enables any-domain sending)");
+    const open = await (
+      await setup({}, { ...email, PRIMITIVE_SEND_ANY_DOMAIN: "1" }).fetch("http://eyes.test/status")
+    ).text();
+    expect(open).toContain("Email: live</b>");
   });
 
   it("says on /status and the home page what is simulated and whether the safety classifier is on", async () => {

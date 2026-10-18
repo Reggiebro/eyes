@@ -235,12 +235,14 @@ const statusRow = (
 ) =>
   html`<li><span class="dot ${tone}" aria-hidden="true"></span><b>${title}</b>${detail ? html`<br><span class="muted">${detail}</span>` : ""}</li>`;
 
+const EMAIL_REPLIES_ONLY = "live (replies only until Primitive enables any-domain sending)";
 const statusPage = (
   live: Live,
   classifier: boolean,
   db: string,
   commit: string | undefined,
   sandbox: boolean,
+  anyDomainEmail: boolean,
 ) =>
   layout(
     "Eyes status",
@@ -250,7 +252,8 @@ ${simulatedNotice(live, sandbox)}
 <ul class="rows">
 ${Object.entries(PROVIDER_LINES).map(([name, [label, meaning]]) => {
   const on = live[name as keyof typeof live];
-  return statusRow(on ? "live" : "simulated", `${label}: ${on ? "live" : "simulated"}`, meaning);
+  const state = !on ? "simulated" : name === "email" && !anyDomainEmail ? EMAIL_REPLIES_ONLY : "live";
+  return statusRow(on ? "live" : "simulated", `${label}: ${state}`, meaning);
 })}
 ${statusRow(
   classifier ? "live" : "neutral",
@@ -1016,7 +1019,15 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     Object.entries(live).map(([name, on]) => [name, on ? "live" : "fake"]),
   );
   server.get("/healthz", (c) => c.json({ ok: true, providers, db }));
-  const status = statusPage(live, classifier, db, env.EYES_COMMIT, sandbox);
+  // Primitive gates outbound mail per org; until it grants send_to_any_domain, owner emails to normal domains are refused.
+  const status = statusPage(
+    live,
+    classifier,
+    db,
+    env.EYES_COMMIT,
+    sandbox,
+    env.PRIMITIVE_SEND_ANY_DOMAIN === "1",
+  );
   server.get("/status", (c) => c.html(status, 200, PAGE_HEADERS));
   // The Eyes viewfinder (apps/web/worker/public/favicon.svg); browsers asking for .ico get the SVG.
   server.get("/favicon.svg", (c) =>
