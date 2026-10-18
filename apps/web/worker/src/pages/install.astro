@@ -114,7 +114,11 @@ import Layout from "../layouts/Layout.astro";
       <div class="step">
         <h2 class="ui-h3">Open Eyes</h2>
         <div class="step__body">
-          <a id="open" class="ui-button ui-button--primary ui-button--block" hidden><Icon name="locate" /> Open Eyes</a>
+          <button id="open" type="button" class="ui-button ui-button--primary ui-button--block" aria-describedby="open-status" disabled hidden>
+            <span id="open-fill" aria-hidden="true"></span>
+            <Icon name="locate" /><span id="open-label">Open Eyes</span>
+          </button>
+          <p id="open-status" class="ui-field__hint" role="status" aria-live="polite"></p>
           <p id="open-fallback" class="ui-field__hint">Tap the link in the Eyes text to open the app.</p>
           <ol class="screens">
             <li>
@@ -204,6 +208,33 @@ import Layout from "../layouts/Layout.astro";
     display: grid;
     gap: var(--eyes-space-3);
   }
+  #open {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  #open:disabled {
+    opacity: 1;
+    background: var(--eyes-surface-tertiary);
+    color: var(--eyes-text);
+  }
+  #open[aria-busy="true"]::before {
+    content: none;
+  }
+  #open-fill {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--eyes-accent);
+    opacity: 0.3;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 100ms linear;
+    pointer-events: none;
+  }
+  #open:not(:disabled) #open-fill {
+    opacity: 0;
+  }
   .screens {
     display: grid;
     gap: var(--eyes-space-3);
@@ -262,15 +293,35 @@ import Layout from "../layouts/Layout.astro";
     .install > li > .step {
       transition: none;
     }
+    #open-fill {
+      transition: none;
+    }
   }
 </style>
 
 <script>
   import { $, call, showError } from "../api.ts";
-  import { checkInstall, type InstallDeps, type InstallStep, markDone, startInstall } from "../install.ts";
+  import { checkInstall, type InstallDeps, type InstallStep, installOpenGate, loadSaved, markDone, OPEN_WAIT_MS, readCode, startInstall } from "../install.ts";
 
   const ORDER = ["register", "install", "open"];
   const NOTICES = ["not-iphone", "missing", "expired", "error", "connected", "done"];
+  const openButton = $<HTMLButtonElement>("open");
+  let openUrl = "";
+  const gate = installOpenGate({
+    code: readCode(location.hash) ?? loadSaved(localStorage, Date.now())?.code ?? null,
+    store: localStorage,
+    doc: document,
+    win: window,
+    render: (left, enabled) => {
+      openButton.disabled = !enabled;
+      openButton.setAttribute("aria-busy", String(!enabled));
+      $("open-fill").style.transform = `scaleX(${1 - Math.min(left / OPEN_WAIT_MS, 1)})`;
+      $("open-label").textContent = left > 0 ? `Open Eyes in ${Math.ceil(left / 1_000)}s` : "Open Eyes";
+      $("open-status").textContent = left > 0
+        ? "Waiting briefly for app registration. This is not installation progress."
+        : enabled ? "Ready to open Eyes." : "Waiting for this iPhone to be ready.";
+    },
+  });
 
   function show(step: InstallStep) {
     $("checking").hidden = true;
@@ -295,11 +346,17 @@ import Layout from "../layouts/Layout.astro";
     send: call,
     show,
     setHref: (id, href) => {
-      const a = $<HTMLAnchorElement>(id);
-      a.href = href;
-      a.hidden = false;
-      if (id === "open") $("open-fallback").hidden = true;
+      if (id === "open") {
+        openUrl = href;
+        openButton.hidden = false;
+        $("open-fallback").hidden = true;
+      } else {
+        const a = $<HTMLAnchorElement>(id);
+        a.href = href;
+        a.hidden = false;
+      }
     },
+    setReady: (ready) => gate.setReady(ready),
     report: (err) => showError($("error"), err),
     store: localStorage,
     now: Date.now(),
@@ -314,11 +371,14 @@ import Layout from "../layouts/Layout.astro";
 
   $("itms").addEventListener("click", () => {
     markDone(localStorage, Date.now(), 2);
+    gate.begin();
     show("open");
   });
+  openButton.addEventListener("click", () => gate.open(() => { location.href = openUrl; }));
   document.querySelectorAll<HTMLButtonElement>("[data-skip]").forEach((b) =>
     b.addEventListener("click", () => {
       markDone(localStorage, Date.now(), Number(b.dataset.skip));
+      if (b.dataset.skip === "2") gate.begin();
       checkInstall({ ...deps, now: Date.now() });
     }),
   );

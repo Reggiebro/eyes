@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Problem } from "./api.ts";
 import {
   checkInstall,
@@ -7,9 +7,11 @@ import {
   deviceStep,
   forgetCode,
   type InstallDeps,
+  installOpenGate,
   itmsUrl,
   loadSaved,
   markDone,
+  OPEN_WAIT_MS,
   POLL_MAX_MS,
   POLL_MS,
   readCode,
@@ -308,5 +310,113 @@ describe("I already did this", () => {
       expect(await checkInstall(d)).toBe(step);
     }
     expect(loadSaved(store, NOW)?.done).toBe(3);
+  });
+});
+
+describe("post-install open gate", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function setup(saved = { code: CODE, savedAt: NOW, done: 2 }) {
+    const store = savedStore(saved);
+    const doc = Object.assign(new EventTarget(), { hidden: false });
+    const win = new EventTarget();
+    const render = vi.fn();
+    const navigate = vi.fn();
+    const gate = installOpenGate({ code: CODE, store, doc, win, render });
+    return { store, doc, win, render, navigate, gate };
+  }
+
+  it("blocks all attempts before the deadline; opens synchronously only with server readiness", () => {
+    const { gate, navigate, render, store } = setup();
+    gate.setReady(true);
+    gate.begin();
+    expect(render).toHaveBeenLastCalledWith(OPEN_WAIT_MS, false);
+    gate.open(navigate);
+    vi.advanceTimersByTime(OPEN_WAIT_MS - 1);
+    gate.open(navigate);
+    expect(navigate).not.toHaveBeenCalled();
+    gate.setReady(false);
+    vi.advanceTimersByTime(1);
+    gate.open(navigate);
+    expect(render).toHaveBeenLastCalledWith(0, false);
+    expect(navigate).not.toHaveBeenCalled();
+    gate.setReady(true);
+    expect(render).toHaveBeenLastCalledWith(0, true);
+    gate.open(navigate);
+    expect(navigate).toHaveBeenCalledOnce(); // no async turn: still in the user's click
+    expect(loadSaved(store, Date.now())?.installPending).toBe(false);
+  });
+
+  it("restarts the full wait on return even when installation took longer than the first timer", () => {
+    const { gate, doc, win, navigate, render, store } = setup();
+    gate.setReady(true);
+    gate.begin();
+    win.dispatchEvent(new Event("blur"));
+    doc.hidden = true;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("pagehide"));
+    vi.advanceTimersByTime(60_000);
+    gate.open(navigate);
+    expect(navigate).not.toHaveBeenCalled();
+    doc.hidden = false;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    expect(render).toHaveBeenLastCalledWith(OPEN_WAIT_MS, false);
+    vi.advanceTimersByTime(1_000);
+    win.dispatchEvent(new Event("focus")); // duplicate return must not extend the deadline
+    win.dispatchEvent(new Event("pageshow"));
+    expect(render).toHaveBeenLastCalledWith(2_000, false);
+    vi.advanceTimersByTime(1_999);
+    gate.open(navigate);
+    expect(navigate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    gate.open(navigate);
+    expect(navigate).toHaveBeenCalledOnce();
+    win.dispatchEvent(new Event("blur"));
+    win.dispatchEvent(new Event("focus"));
+    expect(loadSaved(store, Date.now())?.installAway).toBe(false);
+  });
+
+  it("restores the return wait after navigation without renewing the code's 24-hour lifetime", () => {
+    const first = setup();
+    first.gate.begin();
+    first.win.dispatchEvent(new Event("pagehide"));
+    vi.advanceTimersByTime(60_000);
+    const render = vi.fn();
+    const gate = installOpenGate({ ...first, code: CODE, render });
+    gate.setReady(true);
+    expect(render).toHaveBeenLastCalledWith(OPEN_WAIT_MS, false);
+    expect(loadSaved(first.store, Date.now())?.savedAt).toBe(NOW);
+  });
+
+  it("does not delay ordinary opens, and cannot open without a matching unexpired code", () => {
+    const { gate, navigate, store, render } = setup();
+    gate.setReady(true);
+    expect(render).toHaveBeenLastCalledWith(0, true);
+    gate.open(navigate);
+    expect(navigate).toHaveBeenCalledOnce();
+    store.setItem(SAVED_KEY, JSON.stringify({ code: "b".repeat(43), savedAt: NOW }));
+    gate.open(navigate);
+    vi.advanceTimersByTime(24 * HOUR);
+    gate.open(navigate);
+    expect(navigate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the gate closed when server readiness is absent or fails", async () => {
+    const { gate, store, navigate } = setup();
+    gate.begin();
+    vi.advanceTimersByTime(OPEN_WAIT_MS);
+    const d = fakeDeps({ store, setReady: gate.setReady });
+    await checkInstall(d);
+    gate.open(navigate);
+    await checkInstall({ ...d, send: vi.fn().mockRejectedValue(new Error("offline")) });
+    gate.open(navigate);
+    expect(navigate).not.toHaveBeenCalled();
+    await checkInstall({ ...d, send: vi.fn(async () => status({ ready: true })) });
+    gate.open(navigate);
+    expect(navigate).toHaveBeenCalledOnce();
   });
 });

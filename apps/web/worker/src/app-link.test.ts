@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type AppPageDeps, connectDeepLink, openApp, startApp } from "./app-link.ts";
+import { SAVED_KEY } from "./install.ts";
 
 const CODE = "a".repeat(20);
 const DEEP = `eyes://connect#c=${CODE}`;
@@ -105,6 +106,57 @@ describe("startApp", () => {
     expect(startApp(d)).toBeNull();
     expect(d.replaceUrl).not.toHaveBeenCalled();
     expect(d.reveal).toHaveBeenCalledWith("missing");
+  });
+
+  it("routes a pending post-install return to the guarded page instead of auto-opening", () => {
+    const store = {
+      getItem: (key: string) =>
+        key === SAVED_KEY ? JSON.stringify({ code: CODE, savedAt: Date.now(), installPending: true }) : null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    const d = fakeDeps({ store });
+    expect(startApp(d)).toBe(DEEP);
+    expect(d.navigate).toHaveBeenCalledExactlyOnceWith(INSTALL);
+    expect(d.onLoad).not.toHaveBeenCalled();
+    expect(d.onTap).not.toHaveBeenCalled();
+    openApp(DEEP, d);
+    vi.advanceTimersByTime(10_000);
+    expect(d.navigate).not.toHaveBeenCalledWith(DEEP);
+  });
+
+  it("guards an auto-open already scheduled when another tab starts installation", () => {
+    let pending = false;
+    const d = fakeDeps({
+      store: {
+        getItem: () => JSON.stringify({ code: CODE, savedAt: Date.now(), installPending: pending }),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    });
+    startApp(d);
+    vi.mocked(d.onLoad).mock.calls[0]?.[0]();
+    pending = true;
+    vi.mocked(d.later).mock.calls[0]?.[0]();
+    expect(d.navigate).toHaveBeenCalledExactlyOnceWith(INSTALL);
+  });
+
+  it.each([false, true])("leaves ordinary or different-code opens unchanged (pending=%s)", (pending) => {
+    const d = fakeDeps({
+      store: {
+        getItem: () =>
+          JSON.stringify({
+            code: pending ? "b".repeat(20) : CODE,
+            savedAt: Date.now(),
+            installPending: pending,
+          }),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+    });
+    startApp(d);
+    vi.mocked(d.onTap).mock.calls[0]?.[0]();
+    expect(d.navigate).toHaveBeenCalledWith(DEEP);
   });
 });
 
