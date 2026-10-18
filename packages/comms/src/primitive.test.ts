@@ -12,7 +12,13 @@ import {
 } from "@eyes/core";
 import { PrimitiveApiError } from "@primitivedotdev/sdk";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { createPrimitiveEmail, parseTaskEmail, primitiveRoutes } from "./index.ts";
+import {
+  createPrimitiveEmail,
+  parseTaskEmail,
+  primitiveRoutes,
+  withWorkerEmail,
+  workerReplyText,
+} from "./index.ts";
 
 const sdk = vi.hoisted(() => ({ created: vi.fn(), send: vi.fn() }));
 
@@ -154,7 +160,10 @@ function signed(body: string, opts: { secret?: string; at?: Date } = {}): Record
 
 function setup(
   service: Partial<
-    Record<"agentById" | "askEyes" | "awaitAnswer", (...args: never[]) => Promise<unknown>>
+    Record<
+      "agentById" | "askEyes" | "awaitAnswer" | "handleWorkerReply",
+      (...args: never[]) => Promise<unknown>
+    >
   > = {},
   env: Record<string, string> = { PRIMITIVE_WEBHOOK_SECRET: SECRET },
   email_domain: string | null = DOMAIN,
@@ -173,6 +182,7 @@ function setup(
     awaitAnswer: vi.fn(
       async (_agent: Agent, _input: unknown): Promise<ToolOutput<"await_answer">> => answered,
     ),
+    handleWorkerReply: vi.fn(async (_input: unknown) => {}),
     ...service,
   };
   const app = primitiveRoutes({ service: svc as unknown as EyesService, providers, config }, env);
@@ -1052,5 +1062,181 @@ describe("createPrimitiveEmail", () => {
         attachments: [expect.objectContaining({ filename: "p.jpg", content_type: "image/jpeg" })],
       }),
     );
+  });
+});
+
+describe("createPrimitiveEmail reply_to", () => {
+  const env = { PRIMITIVE_API_KEY: "prim_test", PRIMITIVE_DOMAIN: DOMAIN };
+  beforeEach(() => {
+    sdk.send.mockReset().mockResolvedValue({ id: "se_1", status: "queued", requestId: "req_1" });
+  });
+
+  it("sends from the reply_to address on our domain, and from eyes@ for any other", async () => {
+    await createPrimitiveEmail(env).send({
+      to: "ana@example.com",
+      subject: "s",
+      text: "t",
+      reply_to: `work@${DOMAIN}`,
+    });
+    await createPrimitiveEmail(env).send({
+      to: "ana@example.com",
+      subject: "s",
+      text: "t",
+      reply_to: "x@evil.test",
+    });
+    expect(sdk.send).toHaveBeenNthCalledWith(1, expect.objectContaining({ from: `work@${DOMAIN}` }));
+    expect(sdk.send).toHaveBeenNthCalledWith(2, expect.objectContaining({ from: `eyes@${DOMAIN}` }));
+  });
+});
+
+describe("worker email replies (T6.48)", () => {
+  const WORK = `work@${DOMAIN}`;
+  const env = { PRIMITIVE_WEBHOOK_SECRET: SECRET, PRIMITIVE_DOMAIN: DOMAIN };
+
+  it("routes a DMARC-passing reply to work@ to handleWorkerReply with the lowercased sender", async () => {
+    const { post, svc, outbox } = setup({}, env);
+    const res = await post(
+      JSON.stringify(
+        emailEvent({
+          rcpt: [WORK.toUpperCase()],
+          from: "Ana <Ana@Example.com>",
+          mailFrom: "Ana@Example.com",
+          text: "Yes\n\nOn Sat, Eyes <work@x> wrote:\n> Reply YES",
+          auth: { dmarcFromDomain: "example.com" },
+        }),
+      ),
+    );
+    expect(await res.text()).toBe("ok");
+    expect(svc.handleWorkerReply).toHaveBeenCalledWith({
+      email: "ana@example.com",
+      intent: "yes",
+      text: "Yes",
+    });
+    expect(svc.agentById).not.toHaveBeenCalled();
+    expect(outbox).toHaveLength(0);
+  });
+
+  it("drops a redelivery, logs a failed reply without the address, and caps a sender at 20 an hour", async () => {
+    const { post, svc } = setup(
+      { handleWorkerReply: async () => Promise.reject(new TypeError("db down")) },
+      env,
+    );
+    const nth = (i: number) =>
+      JSON.stringify(
+        emailEvent({
+          id: `evt_${i.toString(16).padStart(64, "0")}`,
+          messageId: `<w${i}@agent.test>`,
+          rcpt: [WORK],
+          text: "stop",
+        }),
+      );
+    expect(await (await post(nth(0))).text()).toBe("ok");
+    expect(await (await post(nth(0))).text()).toBe("duplicate");
+    expect(error).toHaveBeenCalledWith("primitive: worker reply em_1 failed: TypeError");
+    expect(error.mock.calls.join(" ")).not.toContain("@");
+    for (let i = 1; i < 20; i++) await post(nth(i));
+    expect(await (await post(nth(20))).text()).toBe("rate_limited");
+    expect(svc.agentById).not.toHaveBeenCalled();
+  });
+
+  it("ignores work@ mail from an unauthenticated sender, and treats work@ as an agent address without PRIMITIVE_DOMAIN", async () => {
+    const spoofed = setup({}, env);
+    const fake = emailEvent({ rcpt: [WORK], auth: { dmarc: "fail", spf: "fail", dmarcPolicy: "reject" } });
+    expect(await (await spoofed.post(JSON.stringify(fake))).text()).toBe("ignored");
+    expect(spoofed.svc.handleWorkerReply).not.toHaveBeenCalled();
+    const noDomain = setup();
+    expect(await (await noDomain.post(JSON.stringify(emailEvent({ rcpt: [WORK] })))).text()).toBe("ignored");
+    expect(noDomain.svc.handleWorkerReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("workerReplyText", () => {
+  it.each([
+    ["the first line", "Re: Eyes", "\n  YES please \nsecond line", null, "YES please"],
+    ["the subject when the body is only a quote", "Re: RE: stop", "> Reply YES to claim", null, "stop"],
+    [
+      "the subject above a two-line On ... wrote: header",
+      "Re: no",
+      "On Sat, Oct 17, 2026, Eyes\n<work@x> wrote:\n> hi",
+      null,
+      "no",
+    ],
+    ["a line starting with On that is not a quote header", "", "On my way", null, "On my way"],
+    ["the subject above a signature", "Re: help", "-- \nAna", null, "help"],
+    ["the subject above a forwarded From: block", "Fwd: yes", "From: Eyes", null, "yes"],
+    ["the html body when there is no text", null, null, "<p>Yes</p><blockquote>x</blockquote>", "Yes"],
+    ["an empty string for nothing", null, null, null, ""],
+  ])("takes %s", (_, subject, text, html, expected) => {
+    expect(workerReplyText(subject, text, html)).toBe(expected);
+  });
+});
+
+describe("withWorkerEmail", () => {
+  const OFFER = {
+    task_id: "t1",
+    task_type: "line_length" as const,
+    question: "q",
+    place_label: "Blue Bottle Coffee",
+    bounty_cents: 300,
+    distance_m: 400,
+    deadline_at: "2026-10-17T19:30:00.000Z",
+    live_payouts: true,
+  };
+  const phone = () => ({
+    sendOffer: vi.fn(async () => ({ id: "sms" })),
+    sendCaptureLink: vi.fn(async () => ({ id: "sms" })),
+    sendAlreadyClaimed: vi.fn(async () => ({ id: "sms" })),
+    sendPaid: vi.fn(async () => ({ id: "sms" })),
+    sendText: vi.fn(async () => ({ id: "sms" })),
+  });
+
+  it("emails an address with Reply-To work@ and the text bodies, and texts a phone", async () => {
+    const messaging = phone();
+    const providers = fakeProviders();
+    const routed = withWorkerEmail(messaging, providers.email, DOMAIN);
+    const to = "ana@example.com";
+    const capture = {
+      task_id: "t1",
+      place_label: "Pier 39",
+      capture_url: "https://w.eyes.test/c",
+      deadline_at: OFFER.deadline_at,
+    };
+    const paid = {
+      task_id: "t1",
+      place_label: "Pier 39",
+      amount_cents: 300,
+      me_url: "https://w.eyes.test/me",
+      live_payouts: true,
+    };
+    await routed.sendOffer(to, OFFER);
+    await routed.sendCaptureLink(to, capture);
+    await routed.sendAlreadyClaimed(to, { place_label: "Pier 39" });
+    await routed.sendPaid(to, paid);
+    await routed.sendPaid(to, { ...paid, live_payouts: false });
+    expect(await routed.sendText(to, "Hi")).toEqual({ id: expect.any(String) });
+    expect(providers.email.outbox.map((m) => [m.to, m.subject, m.reply_to])).toEqual([
+      [to, "Eyes: a task near you", `work@${DOMAIN}`],
+      [to, "Eyes: the task is yours", `work@${DOMAIN}`],
+      [to, "Eyes: the task was already claimed", `work@${DOMAIN}`],
+      [to, "Eyes: you've been paid", `work@${DOMAIN}`],
+      [to, "Eyes: your answer was accepted", `work@${DOMAIN}`],
+      [to, "Eyes", `work@${DOMAIN}`],
+    ]);
+    expect(providers.email.outbox[0]?.text).toContain("Reply YES to claim");
+    expect(providers.email.outbox[5]?.text).toBe("Hi");
+    const sms = "+14155550121";
+    await routed.sendOffer(sms, OFFER);
+    await routed.sendCaptureLink(sms, capture);
+    await routed.sendAlreadyClaimed(sms, { place_label: "Pier 39" });
+    await routed.sendPaid(sms, paid);
+    await routed.sendText(sms, "Hi");
+    for (const fn of Object.values(messaging)) expect(fn).toHaveBeenCalledOnce();
+    expect(providers.email.outbox).toHaveLength(6);
+  });
+
+  it("leaves out Reply-To when there is no email domain", async () => {
+    const providers = fakeProviders();
+    await withWorkerEmail(phone(), providers.email, undefined).sendText("ana@example.com", "Hi");
+    expect(providers.email.outbox[0]?.reply_to).toBeUndefined();
   });
 });

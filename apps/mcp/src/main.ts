@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createInkboxEmail, createInkboxMessaging, createPrimitiveEmail } from "@eyes/comms";
+import { createInkboxEmail, createInkboxMessaging, createPrimitiveEmail, withWorkerEmail } from "@eyes/comms";
 import { AppConfig, type DbConfig, fakeProviders, type Providers } from "@eyes/core";
 import { createInsforgeStorage, createRpc } from "@eyes/db";
 import { createEyesService } from "@eyes/engine";
@@ -113,6 +113,8 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   const rpc = createRpc(db);
   if (live.messaging)
     providers.messaging = withShortLinks(providers.messaging, rpc, config, providers.clock.now);
+  // A worker's verified email gets the same messages as their phone (T6.48).
+  providers.messaging = withWorkerEmail(providers.messaging, providers.email, config.email_domain);
   const chConfig = clickHouseConfig(env);
   const clickhouse = chConfig ? createClickHouseSink(chConfig) : undefined;
   if (clickhouse) mirrorTriggerEvents(rpc, clickhouse.push);

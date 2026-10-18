@@ -6,6 +6,7 @@ import {
   type Email,
   type EmailAttachment,
   EyesError,
+  type Messaging,
   type RouteDeps,
   TASK_TYPES,
   TaskType,
@@ -24,7 +25,14 @@ import {
   verifyWebhookSignature,
 } from "@primitivedotdev/sdk";
 import { Hono } from "hono";
-import type { Env } from "./inkbox.ts";
+import {
+  alreadyClaimedText,
+  captureLinkText,
+  type Env,
+  offerText,
+  paidText,
+  parseReplyIntent,
+} from "./inkbox.ts";
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const QUESTION_MAX_CHARS = 500;
@@ -98,7 +106,8 @@ export function createPrimitiveEmail(env: Env, firstContact?: Email): Email {
       const attachments = await Promise.all((msg.attachments ?? []).map(download));
       const sent = await client
         .send({
-          from: `eyes@${domain}`,
+          // Worker email asks for replies at work@<domain>; Primitive has no Reply-To, so it sends from there.
+          from: msg.reply_to?.endsWith(`@${domain}`) ? msg.reply_to : `eyes@${domain}`,
           to: msg.to,
           subject: msg.subject,
           bodyText: msg.text,
@@ -167,6 +176,60 @@ export function parseTaskEmail(
       fields.bounty === undefined ? undefined : Number(fields.bounty.replace(/^\$|(?:usd|dollars?)$/gi, "")),
     deadline_minutes:
       fields.deadline === undefined ? undefined : Number(fields.deadline.replace(/(?:minutes?|mins?)$/i, "")),
+  };
+}
+
+/**
+ * A worker's emailed reply (T6.48): the first line above the quoted part, else the subject without "Re:".
+ */
+export function workerReplyText(
+  subject: string | null,
+  text: string | null,
+  html: string | null = null,
+): string {
+  const lines = (text?.slice(0, BODY_MAX_CHARS) ?? (html ? htmlToText(html) : "")).split(/\r?\n/);
+  for (const [i, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const header = /^on\s/i.test(trimmed) && lines.slice(i, i + 3).some((l) => /wrote:\s*$/i.test(l));
+    if (header || trimmed.startsWith(">") || QUOTE_START.test(trimmed) || /^from:/i.test(trimmed)) break;
+    return trimmed;
+  }
+  return (subject ?? "").replace(/^\s*(?:(?:re|fwd?|aw)\s*:\s*)+/i, "").trim();
+}
+
+/**
+ * Sends to an email address (a worker's verified email, T6.48) go out through `email` with Reply-To
+ * work@<domain>, so replies come back to primitiveRoutes; phone numbers keep `messaging`.
+ */
+export function withWorkerEmail(
+  messaging: Messaging,
+  email: Email,
+  domain: string | null | undefined,
+): Messaging {
+  const reply_to = domain ? `work@${domain}` : undefined;
+  const mail = (to: string, subject: string, text: string) =>
+    email.send({ to, subject, text, reply_to }).then(({ id }) => ({ id }));
+  return {
+    sendOffer: (to, offer) =>
+      to.includes("@") ? mail(to, "Eyes: a task near you", offerText(offer)) : messaging.sendOffer(to, offer),
+    sendCaptureLink: (to, msg) =>
+      to.includes("@")
+        ? mail(to, "Eyes: the task is yours", captureLinkText(msg))
+        : messaging.sendCaptureLink(to, msg),
+    sendAlreadyClaimed: (to, msg) =>
+      to.includes("@")
+        ? mail(to, "Eyes: the task was already claimed", alreadyClaimedText(msg))
+        : messaging.sendAlreadyClaimed(to, msg),
+    sendPaid: (to, msg) =>
+      to.includes("@")
+        ? mail(
+            to,
+            msg.live_payouts ? "Eyes: you've been paid" : "Eyes: your answer was accepted",
+            paidText(msg),
+          )
+        : messaging.sendPaid(to, msg),
+    sendText: (to, body) => (to.includes("@") ? mail(to, "Eyes", body) : messaging.sendText(to, body)),
   };
 }
 
@@ -343,6 +406,19 @@ export function primitiveRoutes(deps: RouteDeps, env: Env): Hono {
     if (!trustedSender(event.data, senderDomain, sender) || ownDomains.includes(senderDomain)) {
       console.warn(`primitive: ignored ${email.id}: sender not authenticated or our own`);
       return c.text("ignored");
+    }
+    const work = env.PRIMITIVE_DOMAIN && `work@${env.PRIMITIVE_DOMAIN.toLowerCase()}`;
+    if (work && email.receivedByAll.some((address) => address.toLowerCase() === work)) {
+      if (!firstDelivery([event.data.id, `work:${email.thread.messageId ?? email.id}`]))
+        return c.text("duplicate");
+      if (!withinBudget(`work:${sender}`)) return c.text("rate_limited");
+      const text = workerReplyText(email.subject, email.text, email.raw.email.parsed.body_html);
+      try {
+        await deps.service.handleWorkerReply({ email: sender, intent: parseReplyIntent(text), text });
+      } catch (err) {
+        console.error(`primitive: worker reply ${email.id} failed: ${errorName(err)}`);
+      }
+      return c.text("ok");
     }
     const agentId = email.receivedByAll
       .map((address) => agentIdFromEmailAddress(deps.config.link_secret, address))

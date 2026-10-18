@@ -65,6 +65,7 @@ type AppEnv = { Variables: { agent: Agent; operator: Operator } };
 const PROGRESS_INTERVAL_MS = 5000;
 const HOUR_MS = 60 * 60 * 1000;
 const PUBLIC_CALLS_PER_HOUR = 5;
+const LOGIN_CODES_PER_HOUR = 10;
 const THROTTLE_MAX_KEYS = 10_000;
 // ask_eyes over MCP: the REST result, or "not_sent" when no worker is nearby. One object (MCP tool
 // outputSchema roots must be type object), so the dispatched-only fields are optional.
@@ -780,22 +781,28 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
   );
 
   const hits = new Map<string, number[]>();
-  const throttle = (c: Context, path = c.req.path) => {
+  // `who` defaults to the caller's address; the worker email routes also key by code or address.
+  const throttle = (
+    c: Context,
+    path = c.req.path,
+    who = clientKey(c.req.header("x-forwarded-for")),
+    max = PUBLIC_CALLS_PER_HOUR,
+  ) => {
     const now = deps.providers.clock.now().getTime();
     for (const [key, times] of hits) {
       if ((times.at(-1) ?? 0) > now - HOUR_MS && hits.size < THROTTLE_MAX_KEYS) break;
       hits.delete(key);
     }
-    const key = `${path} ${clientKey(c.req.header("x-forwarded-for"))}`;
+    const key = `${path} ${who}`;
     const recent = (hits.get(key) ?? []).filter((at) => at > now - HOUR_MS);
-    if (recent.length >= PUBLIC_CALLS_PER_HOUR) {
+    if (recent.length >= max) {
       const until = (recent[0] ?? now) + HOUR_MS;
       const retry_after_s = Math.ceil((until - now) / 1000);
       throw new EyesError(
         "rate_limited",
         { retry_after_s },
         {
-          fix: `${c.req.path} allows ${PUBLIC_CALLS_PER_HOUR} calls per hour from one address. Wait ${retry_after_s} seconds (until ${new Date(until).toISOString()}) and try again.`,
+          fix: `${c.req.path} allows ${max} calls per hour from one address or for one account. Wait ${retry_after_s} seconds (until ${new Date(until).toISOString()}) and try again.`,
         },
       );
     }
@@ -913,6 +920,39 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "",
       ),
     );
+  });
+  // Worker email (T6.48): the /me code adds, changes or (null) removes the address, and a repeat POST
+  // re-sends the confirmation; the engine mails the link. 5 changes an hour per code.
+  server.post("/w/me/email", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const token = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+    const { email } = parse(z.object({ email: z.string().trim().max(254).nullable() }), await readJson(c));
+    throttle(c, c.req.path, `code ${createHash("sha256").update(token).digest("hex")}`);
+    return c.json(await service.workerSetEmail(token, email));
+  });
+  // Always 200, and the send is not awaited, so neither the answer nor its timing tells whether the
+  // address is on an account. 5 an hour per address and per caller.
+  server.post("/w/login/email", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const { email } = parse(
+      z.object({ email: z.string().trim().toLowerCase().min(3).max(254) }),
+      await readJson(c),
+    );
+    throttle(c);
+    throttle(c, c.req.path, `email ${email}`);
+    void service
+      .workerEmailLogin(email)
+      .catch((err: unknown) =>
+        console.error(`worker email login failed: ${err instanceof Error ? err.name : typeof err}`),
+      );
+    return c.json({ ok: true });
+  });
+  // The one-time code from the emailed link becomes the /me "e:" token. 10 tries an hour per caller.
+  server.post("/w/login/code", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const { code } = parse(z.object({ code: z.string().min(1).max(512) }), await readJson(c));
+    throttle(c, c.req.path, undefined, LOGIN_CODES_PER_HOUR);
+    return c.json(await service.workerLoginCode(code));
   });
   server.get("/w/device/profile/:ticket", (c) => {
     const ticket = c.req.param("ticket");

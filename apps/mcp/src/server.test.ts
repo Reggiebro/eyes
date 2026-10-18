@@ -458,6 +458,154 @@ describe("worker setup page (ADR-028)", () => {
   });
 });
 
+describe("worker email routes (T6.48)", () => {
+  const post = (
+    fetch: (url: string, init?: RequestInit) => Promise<Response>,
+    path: string,
+    body: unknown,
+    headers = {},
+  ) =>
+    fetch(`http://eyes.test${path}`, {
+      method: "POST",
+      headers: { origin: "http://worker.eyes.test", "x-forwarded-for": "203.0.113.9", ...headers },
+      body: JSON.stringify(body),
+    });
+
+  it("POST /w/me/email passes the bearer code and trimmed address (or null), uncached, 5 an hour per code", async () => {
+    const calls: unknown[][] = [];
+    const { fetch, clock } = setup({
+      workerSetEmail: async (token, email) => {
+        calls.push([token, email]);
+        if (token !== "good") throw new EyesError("unauthorized");
+        return {
+          email_masked: email ? "a***@example.com" : null,
+          email_status: email ? "pending" : "none",
+        } as never;
+      },
+    });
+    const auth = { authorization: "Bearer good" };
+    const res = await post(fetch, "/w/me/email", { email: " ana@example.com " }, auth);
+    expect([res.status, await res.json()]).toEqual([
+      200,
+      { email_masked: "a***@example.com", email_status: "pending" },
+    ]);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+    expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    const refused = await post(fetch, "/w/me/email", { email: null });
+    expect([refused.status, refused.headers.get("cache-control")]).toEqual([401, "no-store"]);
+    expect((await post(fetch, "/w/me/email", {}, auth)).status).toBe(400);
+    expect(calls).toEqual([
+      ["good", "ana@example.com"],
+      ["good", null],
+      ["", null],
+    ]);
+    for (let i = 0; i < 3; i++)
+      expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+    const limited = await post(
+      fetch,
+      "/w/me/email",
+      { email: null },
+      { ...auth, "x-forwarded-for": "198.51.100.1" },
+    );
+    expect([limited.status, (await limited.json()).error]).toEqual([429, "rate_limited"]);
+    expect(
+      (await post(fetch, "/w/me/email", { email: null }, { authorization: "Bearer other" })).status,
+    ).toBe(401);
+    clock.advance(3600 * 1000);
+    expect((await post(fetch, "/w/me/email", { email: null }, auth)).status).toBe(200);
+  });
+
+  it("POST /w/login/email always answers 200 without waiting for the send, 5 an hour per address and per caller", async () => {
+    const asked: string[] = [];
+    let finish = () => {};
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { fetch } = setup({
+        workerEmailLogin: (email) => {
+          asked.push(email);
+          if (email === "boom@example.com") return Promise.reject(new TypeError("down"));
+          if (email === "odd@example.com") return Promise.reject("down");
+          return new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      });
+      const res = await post(fetch, "/w/login/email", { email: " Ana@Example.com " });
+      expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+        200,
+        { ok: true },
+        "no-store",
+      ]);
+      expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+      finish();
+      const probe = await post(fetch, "/w/login/email", {});
+      expect([probe.status, (await probe.json()).error]).toEqual([400, "invalid_input"]);
+      expect((await post(fetch, "/w/login/email", { email: "boom@example.com" })).status).toBe(200);
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledWith("worker email login failed: TypeError"));
+      await post(
+        fetch,
+        "/w/login/email",
+        { email: "odd@example.com" },
+        { "x-forwarded-for": "198.51.100.77" },
+      );
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledWith("worker email login failed: string"));
+      for (let i = 0; i < 4; i++)
+        await post(
+          fetch,
+          "/w/login/email",
+          { email: "ana@example.com" },
+          { "x-forwarded-for": `198.51.100.${i}` },
+        );
+      const perAddress = await post(
+        fetch,
+        "/w/login/email",
+        { email: "ANA@example.com" },
+        { "x-forwarded-for": "198.51.100.50" },
+      );
+      expect(perAddress.status).toBe(429);
+      for (let i = 0; i < 3; i++) await post(fetch, "/w/login/email", { email: `x${i}@example.com` });
+      expect((await post(fetch, "/w/login/email", { email: "new@example.com" })).status).toBe(429);
+      expect(asked).toEqual([
+        "ana@example.com",
+        "boom@example.com",
+        "odd@example.com",
+        ...Array(4).fill("ana@example.com"),
+        "x0@example.com",
+        "x1@example.com",
+        "x2@example.com",
+      ]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("POST /w/login/code trades a code for the /me token, 401 for a bad one, 10 tries an hour per caller", async () => {
+    const { fetch } = setup({
+      workerLoginCode: async (code) => {
+        if (code !== "good-code") throw new EyesError("unauthorized");
+        return { token: "e:token" };
+      },
+    });
+    const res = await post(fetch, "/w/login/code", { code: "good-code" });
+    expect([res.status, await res.json(), res.headers.get("cache-control")]).toEqual([
+      200,
+      { token: "e:token" },
+      "no-store",
+    ]);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://worker.eyes.test");
+    expect((await post(fetch, "/w/login/code", {})).status).toBe(400);
+    for (let i = 0; i < 9; i++)
+      expect((await post(fetch, "/w/login/code", { code: `bad${i}` })).status).toBe(401);
+    const limited = await post(fetch, "/w/login/code", { code: "good-code" });
+    expect([limited.status, (await limited.json()).retry_after_s]).toEqual([429, 3600]);
+    expect(
+      (await post(fetch, "/w/login/code", { code: "good-code" }, { "x-forwarded-for": "198.51.100.1" }))
+        .status,
+    ).toBe(200);
+  });
+});
+
 describe("worker location", () => {
   it.each(["/w/location", "/v1/worker/location"])(
     "%s passes the bearer token and body to the service and answers 204, with no agent key",
