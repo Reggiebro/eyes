@@ -229,8 +229,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup
-      - run: pnpm intent:check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-intent.ts
         env:
           INTENT_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
 
@@ -252,3 +254,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: pnpm build
+
+  docs-automerge:
+    # Auto-merge docs-only PRs once secrets-scan and intent pass. Same-repo, non-draft PRs only: forks and drafts cannot merge.
+    needs: [scope, secrets-scan, intent]
+    if: success() && needs.scope.outputs.docs_only == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge "$PR_URL" --auto --merge
