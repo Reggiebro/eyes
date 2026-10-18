@@ -171,8 +171,20 @@ describe.skipIf(!url)("eyes_dashboard_feed on Postgres", () => {
       paid_out_today_cents: 300,
     });
 
-    for (const w of paid.workers)
-      expect(Object.keys(w).sort()).toEqual(["available", "id", "lat", "lng", "opted_in", "test"]);
+    for (const w of paid.workers) {
+      expect(Object.keys(w).sort()).toEqual([
+        "available",
+        "banned",
+        "dispute_hold_at",
+        "dispute_reviewed_at",
+        "id",
+        "lat",
+        "lng",
+        "opted_in",
+        "test",
+      ]);
+      expect(w).toMatchObject({ banned: false, dispute_hold_at: null, dispute_reviewed_at: null });
+    }
     const json = JSON.stringify(paid);
     for (const secret of [
       ...phones,

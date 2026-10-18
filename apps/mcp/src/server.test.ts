@@ -63,6 +63,12 @@ const QUOTE = {
 
 const PAID_TASK: ToolOutput<"get_task"> = {
   task_id: TASK_ID,
+  retry_context: {
+    question: "How long is the line?",
+    location: QUOTE.resolved_location,
+    task_type: "line_length",
+    bounty_usd: 3,
+  },
   status: "paid",
   question: "How long is the line?",
   task_type: "line_length",
@@ -1986,6 +1992,7 @@ describe("ChatGPT and Claude widget", () => {
     const client = await connect(setup().fetch);
     const { tools } = await client.listTools();
     const callable = [
+      "quote_task",
       "ask_eyes",
       "get_task",
       "await_answer",
@@ -2520,7 +2527,7 @@ describe("ops data routes", () => {
         },
         body: JSON.stringify(body),
       });
-    return { get, post, calls, events };
+    return { get, post, calls, events, fetch, cookie };
   }
 
   it("serves time series from ClickHouse when it answers, with its drop count", async () => {
@@ -2761,6 +2768,67 @@ describe("ops data routes", () => {
     const bad = await get("/ops/workers/nope");
     expect([bad.status, ((await bad.json()) as { error: string }).error]).toEqual([404, "worker_not_found"]);
     expect(calls.length).toBe(before);
+  });
+
+  it("authenticates dispute history and validates same-origin worker hold reviews", async () => {
+    const review = {
+      worker_id: TASK_ID,
+      dispute_hold_at: "2026-10-18T12:00:00Z",
+      dispute_reviewed_at: null,
+      disputed_tasks: 3,
+      history: [],
+      last_review: null,
+    };
+    let rows: unknown[] = [review];
+    const { get, post, fetch, cookie, calls } = opsServer(() => rows);
+    const path = `/ops/workers/${TASK_ID}/dispute-review`;
+    expect((await fetch(`http://localhost${path}`)).status).toBe(401);
+    const history = await get(path);
+    expect(history.headers.get("cache-control")).toBe("no-store");
+    expect(await history.json()).toEqual(review);
+    expect(calls.at(-1)).toMatchObject({ fn: "eyes_worker_dispute_review", args: { p_worker_id: TASK_ID } });
+    const before = calls.length;
+    for (const origin of [undefined, "https://other.test"]) {
+      expect(
+        (
+          await fetch(`http://localhost${path}`, {
+            method: "POST",
+            headers: {
+              cookie: await cookie(),
+              ...(origin && { origin }),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ note: "Reviewed evidence" }),
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect(calls.length).toBe(before);
+    expect(
+      (
+        await fetch(`http://localhost${path}`, {
+          method: "POST",
+          headers: { origin: "http://api.eyes.test", "content-type": "application/json" },
+          body: JSON.stringify({ note: "Reviewed evidence" }),
+        })
+      ).status,
+    ).toBe(401);
+    for (const note of [undefined, "", "     ", "tiny", "x".repeat(1001)]) {
+      expect((await post(path, { note })).status).toBe(400);
+    }
+    const lifted = await post(path, { note: "  Reviewed evidence  " });
+    expect(lifted.status).toBe(200);
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_review_worker_disputes",
+      args: { p_worker_id: TASK_ID, p_note: "Reviewed evidence", p_actor: "break-glass (break-glass)" },
+    });
+    rows = [{ error: "worker_not_held" }];
+    expect((await post(path, { note: "Reviewed evidence" })).status).toBe(409);
+    rows = [];
+    expect((await get(path)).status).toBe(404);
+    expect((await post(path, { note: "Reviewed evidence" })).status).toBe(404);
+    expect((await get("/ops/workers/nope/dispute-review")).status).toBe(404);
+    expect((await post("/ops/workers/nope/dispute-review", { note: "Reviewed evidence" })).status).toBe(404);
   });
 });
 

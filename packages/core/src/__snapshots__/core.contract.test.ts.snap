@@ -420,6 +420,56 @@ exports[`tool schemas > match the committed snapshot 1`] = `
         "next_step": {
           "type": "string",
         },
+        "retry_context": {
+          "additionalProperties": false,
+          "properties": {
+            "bounty_usd": {
+              "type": "number",
+            },
+            "location": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string",
+                },
+                "lat": {
+                  "type": "number",
+                },
+                "lng": {
+                  "type": "number",
+                },
+              },
+              "required": [
+                "lat",
+                "lng",
+                "label",
+              ],
+              "type": "object",
+            },
+            "question": {
+              "type": "string",
+            },
+            "task_type": {
+              "enum": [
+                "is_open",
+                "line_length",
+                "in_stock",
+                "photo_of_place",
+                "price_check",
+                "crowd_level",
+                "other_public",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "question",
+            "location",
+            "task_type",
+            "bounty_usd",
+          ],
+          "type": "object",
+        },
         "status": {
           "const": "disputed",
           "type": "string",
@@ -433,6 +483,7 @@ exports[`tool schemas > match the committed snapshot 1`] = `
       "required": [
         "task_id",
         "status",
+        "retry_context",
         "next_step",
       ],
       "type": "object",
@@ -763,6 +814,56 @@ exports[`tool schemas > match the committed snapshot 1`] = `
         "question": {
           "type": "string",
         },
+        "retry_context": {
+          "additionalProperties": false,
+          "properties": {
+            "bounty_usd": {
+              "type": "number",
+            },
+            "location": {
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string",
+                },
+                "lat": {
+                  "type": "number",
+                },
+                "lng": {
+                  "type": "number",
+                },
+              },
+              "required": [
+                "lat",
+                "lng",
+                "label",
+              ],
+              "type": "object",
+            },
+            "question": {
+              "type": "string",
+            },
+            "task_type": {
+              "enum": [
+                "is_open",
+                "line_length",
+                "in_stock",
+                "photo_of_place",
+                "price_check",
+                "crowd_level",
+                "other_public",
+              ],
+              "type": "string",
+            },
+          },
+          "required": [
+            "question",
+            "location",
+            "task_type",
+            "bounty_usd",
+          ],
+          "type": "object",
+        },
         "status": {
           "enum": [
             "dispatched",
@@ -797,6 +898,7 @@ exports[`tool schemas > match the committed snapshot 1`] = `
       },
       "required": [
         "task_id",
+        "retry_context",
         "status",
         "question",
         "task_type",
