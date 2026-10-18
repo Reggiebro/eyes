@@ -17,20 +17,20 @@ Cloudflare's `eyes-api` Worker is a thin forwarder for both `api.eyes.pictures` 
 
 ### Dedicated MCP domain staging
 
-The requested target is `https://mcp.eyes.pictures/mcp` on the same Manufact server. The connector is **prepared, not active**. `https://api.eyes.pictures` remains the REST, upload and webhook base; `internal.eyes.pictures` remains the ops host. The domain owner provisioned `mcp.eyes.pictures` on the existing Cloudflare `eyes-api` Worker with the same Manufact `ORIGIN`. Cloudflare provides the edge and static sites, not the MCP/API application host.
+`https://mcp.eyes.pictures/mcp` is **ready for connector migration; existing connectors have not been switched**. It uses the same Manufact server. `https://api.eyes.pictures` remains the REST, upload and webhook base, and its `/mcp` connector remains supported; `internal.eyes.pictures` remains the ops host. The domain owner provisioned `mcp.eyes.pictures` on the existing Cloudflare `eyes-api` Worker with the same Manufact `ORIGIN`. Cloudflare provides the edge and static sites, not the MCP/API application host.
 
-The staged server setting is optional `EYES_PUBLIC_MCP_URL=https://mcp.eyes.pictures/mcp`; keep `EYES_PUBLIC_API_URL=https://api.eyes.pictures`. It separates MCP/OAuth/card metadata from REST URLs. The normalized, trusted edge host selects the matching metadata: existing API-host connectors retain their API issuer and card origins. Provisioning and deployment belong to the domain owner, not this documentation change.
+The verified deployment sets optional `EYES_PUBLIC_MCP_URL=https://mcp.eyes.pictures/mcp`; keep `EYES_PUBLIC_API_URL=https://api.eyes.pictures`. It separates MCP/OAuth/card metadata from REST URLs. The normalized, trusted edge host selects the matching metadata: existing API-host connectors retain their API issuer and card origins. Provisioning and deployment belong to the domain owner, not this documentation change.
 
-Provisioning evidence (2026-10-18 10:48 UTC): DNS/TLS ready, `/healthz` 200, both protected-resource metadata paths and issuer discovery 200. The resource is `https://mcp.eyes.pictures/mcp`, but `authorization_servers` and `issuer` still name `https://api.eyes.pictures`. This does **not** pass the activation gates. Existing API health, metadata and API/ops domain bindings were unchanged. Domain-owner evidence: `/Users/xiao/tmp/mcp-domain-provision-evidence.json`.
+Domain-owner verification (2026-10-18 11:07 UTC): **29/29 checks passed** on deployed source `d6c40a58565f49a912405870f31af148eb8b12e3`. Evidence: `/Users/xiao/tmp/mcp-domain-public-dns-runtime-evidence.json`; DNS context: `/Users/xiao/tmp/mcp-domain-dns-evidence.json`. The earlier 10:48 provisioning-only result is superseded.
 
-Before activation, the domain owner must verify:
+Verified readiness:
 
-1. New-host MCP initialization and authenticated tool calls reach the intended Manufact deployment.
-2. OAuth discovery advertises resource `https://mcp.eyes.pictures/mcp`, issuer `https://mcp.eyes.pictures`, and authorize/token/registration URLs on that same host; the 401 challenge points to its metadata.
-3. ChatGPT and Claude card origins match the exact connector URL, with card resources loading successfully. Expected metadata and origins are in [CONNECT.md](CONNECT.md#dedicated-mcp-domain-prepared-not-active).
-4. Existing REST, uploads, webhooks and ops routes remain unchanged; existing connectors and the optional third-party gateway are not migrated without an owner decision.
+1. Both hosts passed TLS/health, OAuth registration and PKCE token exchange; both expose all 12 tools and a free quote leaves the balance unchanged.
+2. New-host discovery advertises resource `https://mcp.eyes.pictures/mcp`, issuer `https://mcp.eyes.pictures`, and authorize/token/registration URLs on that host; the 401 challenge points to its metadata.
+3. Widget metadata from `resources/list` and `resources/read` matches the new connector's ChatGPT origin and Claude hash. Existing API-host OAuth and card metadata remain unchanged. This verifies server resources, not an actual ChatGPT or Claude client migration.
+4. API unauthenticated REST/upload/webhook rejection checks passed. No existing connector or optional gateway configuration was changed.
 
-The post-deploy checks below describe the existing `api.eyes.pictures` baseline, not proof that the new MCP host is ready. Keep current client instructions until the owner provides activation evidence.
+DNS caveat: the verifier used live public DNS lookups through `1.1.1.1` with the original Host/SNI and TLS validation, without hardcoded IPs or a TLS bypass. The local macOS system resolver still returned `ENOTFOUND`, and Google `8.8.8.8` returned `NXDOMAIN` in the DNS evidence snapshot. This does not establish universal DNS propagation. The old-host post-deploy checks below remain a compatibility baseline.
 
 ### Permanent operator deployment
 
