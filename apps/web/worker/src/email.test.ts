@@ -54,7 +54,8 @@ describe("emailRow", () => {
   });
 
   it.each([true, false])("gives text-first onboarding with opted_in=%j", (opted_in) => {
-    const instruction = "Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email.";
+    const instruction =
+      "Reply EMAIL in your existing Eyes iMessage conversation. We’ll reply with a link to send your first email.";
     expect(emailRow(setup({ opted_in, email_status: "none", email_masked: null }))).toEqual({
       status: "none",
       title: "Get tasks by email too",
