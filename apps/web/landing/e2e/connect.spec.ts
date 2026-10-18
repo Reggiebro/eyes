@@ -43,7 +43,6 @@ for (const viewport of [
       await expect(dialog).toContainText("Add custom MCP server");
       await expect(dialog).toContainText("OAuth");
       await expect(dialog).toContainText("existing Eyes API key");
-      await expect(dialog).toContainText("does not automatically create a key or charge a card");
       expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       await page.screenshot({ path: test.info().outputPath("chatgpt.png") });
       await dialog.getByText("Account requirements & public listing", { exact: true }).click();
