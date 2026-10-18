@@ -68,8 +68,8 @@ body.ui{background:transparent}
 .w .ui-notice{margin:0}
 .w .ui-viewfinder img{display:block}
 .w .big{font-size:2rem;font-weight:600;letter-spacing:-.02em;line-height:1.1}
-.w .ui-card__actions{flex-wrap:wrap}
-.w .ui-card__actions .ui-input{flex:1 1 12rem;min-width:0}
+.w .ui-card__actions:has([data-field="reason"]){grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr))}
+.w .ui-card__actions [data-field="reason"]{grid-column:1/-1;grid-row:1;min-width:0}
 .w .row{display:flex;flex-wrap:wrap;gap:.25rem 1rem;align-items:baseline}
 `;
 
@@ -157,9 +157,11 @@ function check(ok, text, detail) {
 }
 function answerBlock(a, status) {
   const v = a.verification, photo = /^https:\/\//.test(a.photo_url ?? "");
-  const verdict = a.answer_bool === null ? "" : '<span class="ui-badge">' + (a.answer_bool ? "Yes" : "No") + "</span> ";
+  const bool = typeof a.answer_bool === "boolean" ? (a.answer_bool ? "Yes" : "No") : "";
+  const verdict = bool ? '<span class="ui-badge">' + bool + "</span> " : "";
+  const text = bool && String(a.answer_text ?? "").trim().replace(/[.!]+$/, "").toLowerCase() === bool.toLowerCase() ? "" : a.answer_text;
   return (photo ? '<figure class="ui-viewfinder ui-viewfinder--compact"><img src="' + esc(a.photo_url) + '" alt="Photo the worker took on site" loading="lazy"></figure>' : "") +
-    '<p class="ui-card__answer">' + verdict + esc(a.answer_text) + "</p>" +
+    '<p class="ui-card__answer">' + verdict + esc(text) + "</p>" +
     '<ul class="ui-checks">' +
     check(v.gps_ok, "On site", Math.round(a.worker_distance_m) + " m away") +
     check(v.fresh_ok, "Fresh photo", "taken " + time(a.captured_at)) +
