@@ -116,10 +116,12 @@ curl -s -X POST https://api.eyes.pictures/v1/tasks \
 
 ## ChatGPT: Eyes connected
 
-Recorded segment: `~/tmp/eyes-video/chatgpt-connected.mp4` (39.4 seconds, H.264, 1440×900, 30 fps). Use this standalone connection-and-quote segment before the paid dispatch demonstration; it is not a recording of a completed field check.
+Recorded segment: `~/tmp/eyes-video/chatgpt-connected.mp4` (34 seconds, H.264, 1440×900, 30 fps). Use this standalone connection-and-quote segment before the paid dispatch demonstration; it is not a recording of a completed field check.
 
 1. ChatGPT's Eyes settings show a connected account using OAuth at `https://api.eyes.pictures/mcp`. The public URL forwards through Cloudflare to the Manufact-hosted server.
 2. The actual `quote_task` card shows the San Francisco Ferry Building, `is_open`, zero nearby workers, and a $3.00 bounty plus $0.50 fee. Open status is not verified.
 3. The actual `get_balance` card shows $20.00 available and $0.00 escrowed. No `ask_eyes` call, worker text, or paid dispatch was made.
 
 Stills: `~/tmp/eyes-video/connector.png`, `~/tmp/eyes-video/quote.png`, and `~/tmp/eyes-video/balance.png`. The video uses the real ChatGPT tab captured through CDP, with loading time removed and no fabricated cards or overlays. No combined demo render was produced.
+
+Final acceptance: the initial 39.4-second recording showed ChatGPT's **CSP off** badge and is superseded. ChatGPT's **Security and login > Enforce CSP for custom apps** setting was found off, enabled through its own switch, and confirmed enabled after navigation. The same chat was reloaded; both real cards rendered with sandbox CSP present and no **CSP off** badge. The 34-second video and the three stills above are the replacement capture, not evidence from the earlier unenforced state. The enabled-setting crop is `~/tmp/eyes-video/csp-enabled.png`; sandbox policy and rendered-card evidence are in `~/tmp/eyes-video/work/csp-verification.json` and `csp-inner-verification.json`.
