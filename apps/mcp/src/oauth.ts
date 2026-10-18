@@ -281,7 +281,7 @@ ${hidden}<input type="hidden" name="action" value="create">
         layout(
           "Your Eyes key",
           html`<h1>Your new Eyes key</h1>
-<p class="muted">Save it somewhere safe: it is shown only once. ${ok.client.n} uses it to pay for checks.</p>
+<p class="muted">Save this key if you want direct API access. Otherwise, click Continue to ${ok.client.n}—your app receives it automatically. It is shown only once.</p>
 <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
 <p id="new-key" class="key" style="flex:1;min-width:0;margin:0;white-space:pre-wrap;user-select:all;-webkit-user-select:all">${agent.api_key}</p>
 <button id="copy-key" type="button" class="button--quiet" aria-describedby="copy-status" style="margin:0">Copy</button>
