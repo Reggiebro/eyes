@@ -92,6 +92,42 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     </li>
   </template>
 
+  <!-- Email: the optional second channel. One row, three inline modes: buttons, the address form, or the remove confirm. -->
+  <template id="email-row">
+    <li class="ui-check me-row me-email">
+      <span class="ui-check__mark"><Icon name="mail" /></span>
+      <span class="me-row__text">
+        <strong></strong>
+        <span class="ui-check__detail"></span>
+      </span>
+      <div class="me-email__actions" data-mode="idle">
+        <button type="button" class="ui-button" data-act="add"><Icon name="mail" />Add email</button>
+        <button type="button" class="ui-button" data-act="resend">Resend link</button>
+        <button type="button" class="ui-button" data-act="change">Change</button>
+        <button type="button" class="ui-button ui-button--ghost" data-act="remove">Remove</button>
+      </div>
+      <form class="me-email__form" data-mode="form" novalidate hidden>
+        <label class="ui-field">
+          <span class="ui-field__label">Email</span>
+          <input class="ui-input" name="email" type="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" />
+          <span class="ui-field__hint">We'll email you a link to confirm it.</span>
+        </label>
+        <div class="me-email__actions">
+          <button type="submit" class="ui-button ui-button--primary">Send link</button>
+          <button type="button" class="ui-button ui-button--ghost" data-act="cancel">Cancel</button>
+        </div>
+      </form>
+      <div class="me-email__confirm" data-mode="confirm" role="group" aria-label="Remove email" hidden>
+        <span class="ui-text-sm">Stop sending tasks to this email? Texts keep coming.</span>
+        <div class="me-email__actions">
+          <button type="button" class="ui-button ui-button--primary" data-act="confirm-remove">Remove email</button>
+          <button type="button" class="ui-button ui-button--ghost" data-act="cancel">Keep it</button>
+        </div>
+      </div>
+      <p class="ui-notice ui-notice--danger me-email__error" role="alert" hidden></p>
+    </li>
+  </template>
+
   <template id="task">
     <li class="me-task">
       <span class="me-task__question"></span>
@@ -119,10 +155,41 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     gap: 0.125rem;
   }
 
-  .me-row > .ui-button {
+  .me-row > .ui-button,
+  .me-email > :is(.me-email__actions, .me-email__form, .me-email__confirm, .me-email__error) {
     grid-column: 2;
     justify-self: start;
   }
+
+  .me-email > :is(.me-email__form, .me-email__confirm, .me-email__error) {
+    justify-self: stretch;
+  }
+
+  .me-email__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--eyes-space-2);
+  }
+
+  .me-email__form,
+  .me-email__confirm {
+    display: grid;
+    gap: var(--eyes-space-3);
+  }
+
+  /* Switching modes swaps the controls in place: the new ones fade and rise 4px from where the old ones were,
+     ease-out under 200ms, so the row reads as one control changing rather than a block popping in. */
+  .me-email > [data-mode] {
+    transition:
+      opacity var(--eyes-duration-enter) var(--eyes-ease-out),
+      translate var(--eyes-duration-enter) var(--eyes-ease-out);
+
+    @starting-style {
+      opacity: 0;
+      translate: 0 calc(var(--eyes-enter-y) * 0.66);
+    }
+  }
+
 
   /* ○ to do: an empty ring, so done (✓) and to do read apart at a glance. */
   .me-row--todo .ui-check__mark {
@@ -345,7 +412,8 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
 </style>
 
 <script>
-  import { $, call, showError } from "../api.ts";
+  import { $, call, Problem, showError } from "../api.ts";
+  import { type EmailAction, type EmailRow, emailRow, saveEmail, validEmail } from "../email.ts";
   import {
     FILTERS,
     type Filter,
@@ -408,6 +476,68 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     part(li, "strong").textContent = row.title;
     part(li, ".ui-check__detail").textContent = row.detail;
     if (row.action) li.append(actionFor(row, row.action));
+    return li;
+  }
+
+  // The address typed this session: Resend re-sends to it, since the API only ever returns it masked.
+  let typed = "";
+
+  function emailEl(row: EmailRow, i: number): HTMLElement {
+    const li = ($<HTMLTemplateElement>("email-row").content.firstElementChild as HTMLElement).cloneNode(true) as HTMLElement;
+    li.classList.add(row.status === "verified" ? "ui-check--pass" : "me-row--todo", "me-enter");
+    li.style.setProperty("--i", String(i));
+    if (row.status !== "verified") part(li, ".ui-check__mark").replaceChildren();
+    part(li, "strong").textContent = row.title;
+    part(li, ".ui-check__detail").textContent = row.detail;
+    for (const b of li.querySelectorAll<HTMLButtonElement>(".me-email__actions[data-mode] > button")) {
+      b.hidden = !row.actions.includes(b.dataset.act as EmailAction);
+    }
+    part(li, ".me-email__actions[data-mode]").hidden = row.actions.length === 0;
+    const form = part(li, "form") as HTMLFormElement;
+    const input = part(li, "input") as HTMLInputElement;
+    const error = part(li, ".me-email__error");
+    const mode = (m: "idle" | "form" | "confirm", hint = "We'll email you a link to confirm it.") => {
+      for (const el of li.querySelectorAll<HTMLElement>(":scope > [data-mode]")) el.hidden = el.dataset.mode !== m;
+      error.hidden = true;
+      input.removeAttribute("aria-invalid");
+      part(form, ".ui-field__hint").textContent = hint;
+      if (m === "form") input.focus();
+      else if (m === "confirm") part(li, "[data-act=confirm-remove]").focus();
+    };
+    const save = async (email: string | null, button: HTMLElement) => {
+      button.setAttribute("aria-busy", "true");
+      try {
+        const next = emailRow(await saveEmail(code as string, email, call));
+        if (email) typed = email;
+        const fresh = next && emailEl(next, 0);
+        li.replaceWith(...(fresh ? [fresh] : []));
+        (fresh?.querySelector<HTMLElement>(".me-email__actions button:not([hidden])") ?? $("title")).focus();
+      } catch (err) {
+        button.removeAttribute("aria-busy");
+        if (err instanceof Problem && err.status === 401) return show({ step: "expired" });
+        showError(error, err);
+      }
+    };
+    li.addEventListener("click", (e) => {
+      const button = (e.target as Element).closest<HTMLElement>("button[data-act]");
+      const act = button?.dataset.act;
+      if (!button || button.hasAttribute("aria-busy")) return;
+      if (act === "add" || act === "change") mode("form");
+      else if (act === "resend") typed ? void save(typed, button) : mode("form", "Enter it again to resend the link.");
+      else if (act === "remove") mode("confirm");
+      else if (act === "confirm-remove") void save(null, button);
+      else if (act === "cancel") mode("idle");
+    });
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const email = input.value.trim();
+      if (!validEmail(email)) {
+        input.setAttribute("aria-invalid", "true");
+        input.focus();
+        return showError(error, new Problem("That email does not look right.", "Check it, then tap Send link."));
+      }
+      void save(email, part(form, "[type=submit]"));
+    });
     return li;
   }
 
@@ -494,7 +624,10 @@ const helpText = !helpSms ? " Text HELP to the Eyes number for a new link." : ""
     if (view.step === "error") showError($("error-text"), view.error);
     if (view.step !== "loaded") return;
     $("title").textContent = view.title;
-    $("checks").replaceChildren(...view.rows.map(rowEl));
+    $("checks").replaceChildren(
+      ...view.rows.map(rowEl),
+      ...(view.email && code ? [emailEl(view.email, view.rows.length)] : []),
+    );
     if (code && !tasks) {
       tasks = taskList(code, {
         send: call,

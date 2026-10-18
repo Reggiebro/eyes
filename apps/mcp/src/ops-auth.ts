@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { type AppConfig, type Providers, signToken, verifyToken } from "@eyes/core";
 import type { Rpc } from "@eyes/db";
+import { recipientGateDenial } from "@eyes/engine";
 import { PAGE_CSS, PAGE_HEADER } from "@eyes/ui/page";
 import type { OpsEvent } from "@eyes/web-dashboard";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
@@ -12,7 +13,19 @@ import type { OpsSite } from "./ops-host.ts";
 export type { OpsEvent };
 export type Operator = { id: string; label: string };
 export type OpsEnv = { Variables: { operator: Operator } };
-type Entry = { id: string; kind: "phone" | "email"; value: string; added_by: string; added_at: string };
+type Entry = {
+  id: string;
+  kind: "phone" | "email";
+  value: string;
+  added_by: string;
+  added_at: string;
+  /** The last invite (migration 031): sent, copy (the email provider refused them), failed. */
+  invite_status?: "sent" | "copy" | "failed" | null;
+  invite_at?: string | null;
+  invite_day?: string | null;
+  invites_today: number;
+};
+const INVITES_PER_DAY = 3;
 type Code = { identifier: string; code_hash: string; expires_at: string; attempts: number };
 type Body = Record<string, unknown>;
 
@@ -280,11 +293,62 @@ export function opsAuth(deps: {
     c.json({ error: "invalid_input", message }, 400, HEADERS);
 
   // The list lives in the dashboard's Access tab; the old page address goes there.
+  // Invites: a sign-in link (never a code; they sign in as usual), by text or email, 3 a day per entry.
+  const loginUrl = (c: Context) => `${site(c).origin}${base(c)}/login`;
+  const invitesLeft = (e: Entry) =>
+    e.invite_day === new Date(now()).toISOString().slice(0, 10)
+      ? Math.max(0, INVITES_PER_DAY - e.invites_today)
+      : INVITES_PER_DAY;
+  async function invite(c: Context<OpsEnv>, entry: Entry) {
+    const at = new Date(now()).toISOString();
+    const [taken] = await rpc<Entry>("eyes_ops_invite_take", { p_id: entry.id, p_now: at });
+    if (!taken) return null;
+    const text = `You've been added to Eyes ops. Sign in: ${loginUrl(c)}`;
+    let status: "sent" | "copy" | "failed" = "sent";
+    try {
+      if (entry.kind === "phone") await providers.messaging.sendText(entry.value, text);
+      else await providers.email.send({ to: entry.value, subject: "You've been added to Eyes ops", text });
+    } catch (err) {
+      // Primitive only emails people who emailed us first: the operator sends the link themselves.
+      const gated =
+        recipientGateDenial(err) !== null || (err instanceof Error && /gate_denied/.test(err.message));
+      status = entry.kind === "email" && gated ? "copy" : "failed";
+    }
+    await rpc("eyes_ops_invite_record", { p_id: entry.id, p_status: status, p_now: at });
+    auth(
+      `ops invite ${status}`,
+      { entry: mask(entry.value), kind: entry.kind, status, by: c.get("operator").label },
+      status === "failed" ? "warn" : "info",
+    );
+    return { ...taken, invite_status: status, invite_at: at };
+  }
+  const entryView = (c: Context<OpsEnv>, e: Entry) => ({
+    ...view(e),
+    self: e.id === c.get("operator").id,
+    invites_left: invitesLeft(e),
+  });
+
   routes.get("/ops/allowlist", operator, async (c) => {
     if (wantsHtml(c)) return c.redirect(`${base(c) || "/"}#access`, 301);
-    const op = c.get("operator");
     const entries = await allowlist();
-    return c.json({ entries: entries.map((e) => ({ ...view(e), self: e.id === op.id })) }, 200, HEADERS);
+    return c.json({ entries: entries.map((e) => entryView(c, e)), login_url: loginUrl(c) }, 200, HEADERS);
+  });
+
+  routes.post("/ops/allowlist/invite", operator, sameOrigin, async (c) => {
+    const { body } = await readBody(c);
+    const entry = (await allowlist()).find((e) => e.id === body.id);
+    if (!entry) return allowlistError(c, "No allowlist entry with this id. Reload the page.");
+    const sent = await invite(c, entry);
+    if (!sent)
+      return c.json(
+        {
+          error: "rate_limited",
+          message: `Already ${INVITES_PER_DAY} invites today for this entry. Try tomorrow.`,
+        },
+        429,
+        HEADERS,
+      );
+    return c.json({ entry: entryView(c, sent) }, 200, HEADERS);
   });
 
   routes.post("/ops/allowlist", operator, sameOrigin, async (c) => {
@@ -303,7 +367,9 @@ export function opsAuth(deps: {
       p_added_by: by,
     });
     auth("allowlist add", { entry: mask(who.value), by });
-    return c.json({ entry: entry && view(entry) }, 200, HEADERS);
+    if (!entry) return c.json({ entry: null }, 200, HEADERS);
+    const sent = await invite(c, entry);
+    return c.json({ entry: entryView(c, sent ?? entry) }, 200, HEADERS);
   });
 
   routes.post("/ops/allowlist/remove", operator, sameOrigin, async (c) => {

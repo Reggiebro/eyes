@@ -20,7 +20,17 @@ export const LEDGER_LABEL: Record<string, string> = {
   payout: "Payout",
   fee: "Fee",
 };
-export const TABS = ["overview", "review", "support", "tasks", "workers", "money", "logs", "access"];
+export const TABS = [
+  "overview",
+  "review",
+  "support",
+  "tasks",
+  "workers",
+  "money",
+  "errors",
+  "logs",
+  "access",
+];
 
 export const usd = (cents: number | null | undefined) => `$${((cents || 0) / 100).toFixed(2)}`;
 export const time = (iso: string | null | undefined) =>

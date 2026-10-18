@@ -7,7 +7,7 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
 <Layout title="Eyes privacy policy" description="What Eyes keeps about workers and agents, for how long, and who sees it.">
   <main class="legal">
     <h1 class="m-0 text-4xl font-semibold tracking-[-0.03em] md:text-5xl">Privacy policy</h1>
-    <p class="mt-3">Last updated: October 17, 2026</p>
+    <p class="mt-3">Last updated: October 18, 2026</p>
 
     <h2>Who this covers</h2>
     <p>
@@ -18,7 +18,8 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
 
     <h2>What we keep about workers</h2>
     <ul>
-      <li>When you join: your name, mobile number and the location you shared.</li>
+      <li>When you join: your name, mobile number and the location you shared. Your email is optional.</li>
+      <li>If you add an email: the address, and the time you confirmed it. An email you never confirm is dropped after 24 hours.</li>
       <li>
         Your latest spot: each task photo, each tap on an Eyes "Update my spot" link, each Apple or Google Maps link
         or "lat, lng" pair you text us, and the Eyes location automations or app (if you set them up) replace it. We keep
@@ -39,9 +40,10 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
         your photo keeps working.
       </li>
       <li>
-        Texting STOP stops task texts, deletes your latest spot and turns off your location codes. It does not delete
-        your name, number or past tasks.
+        Texting STOP stops task texts, deletes your latest spot and your email, and turns off your location codes. It does not
+        delete your name, number or past tasks.
       </li>
+      <li>Your email stays until you reply STOP (by text or email) or we remove you. An email you never confirm is dropped after 24 hours.</li>
     </ul>
 
     <h2>How we use worker data</h2>
@@ -54,6 +56,7 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
         The AI agent that asked gets your photo, your answer, the time and how far you were from the place. It never gets
         your name or number.
       </li>
+      <li>We use your email for task offers, capture links, paid notices and the sign-in link to /me. The AI agent never gets your email.</li>
       <li>Stripe collects your payout details directly. Eyes does not store your bank details.</li>
     </ul>
 
@@ -69,8 +72,8 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
     <p>These companies process data so Eyes can run:</p>
     <ul>
       <li>InsForge: the database and photo storage.</li>
-      <li>Inkbox: iMessage texts to workers.</li>
-      <li>Primitive: email for agents.</li>
+      <li>Inkbox: iMessage texts to workers, and email when Primitive can't send it.</li>
+      <li>Primitive: email for agents and workers.</li>
       <li>Stripe: payments and worker payouts.</li>
       <li>Cloudflare: hosting for eyes.pictures, and Workers AI for the safety and photo checks.</li>
       <li>Anthropic: a second opinion AI check on tasks and photos, when it is turned on.</li>
@@ -85,7 +88,9 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
 
     <h2>Your choices</h2>
     <ul>
-      <li>Reply STOP to any Eyes text to stop task texts. Reply START to turn them back on.</li>
+      <li>Reply STOP to any Eyes text or email to stop task texts and delete your email. Reply START to a text to turn them back on.</li>
+      <li>Your mobile number is tied to your account. You can't change it yourself; text HELP to ask.</li>
+      <li>Your email is optional, one per account.</li>
       <li>Never photograph faces or people. Photos with faces are rejected.</li>
       <li>To ask about your data, open an issue or, as a worker, reply HELP to an Eyes text.</li>
     </ul>
@@ -96,7 +101,7 @@ const ISSUES = "https://github.com/ayaangazali/eyes/issues";
     <h2>Contact</h2>
     <p>
       Open an issue at <a class="ui-link" href={ISSUES}>github.com/ayaangazali/eyes/issues</a>. Workers can also reply
-      HELP to any Eyes text.
+      HELP to any Eyes text or email.
     </p>
   </main>
 </Layout>

@@ -2,7 +2,9 @@
 // Eyes design system inlined and a small vanilla script. It speaks the MCP Apps postMessage bridge
 // (ui/initialize, ui/notifications/tool-result), which both hosts implement, and falls back to
 // window.openai.toolOutput. It renders by result shape: quote, task (ask_eyes, get_task,
-// await_answer) or balance. No React, no bundler: the markup reuses the classes in packages/ui.
+// await_answer) or balance. Card buttons call tools through call(): window.openai.callTool in
+// ChatGPT, the MCP Apps tools/call request elsewhere, and render the result into the same card.
+// No React, no bundler: the markup reuses the classes in packages/ui.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -10,6 +12,16 @@ export const WIDGET_URI = "ui://eyes/card.html";
 export const WIDGET_MIME = "text/html;profile=mcp-app";
 
 /** Photos load from InsForge storage; signed URLs redirect to the CDN. */
+/** Tools the card's buttons call; tools/list marks them callable from the widget in both hosts. */
+export const WIDGET_CALLABLE = [
+  "ask_eyes",
+  "get_task",
+  "await_answer",
+  "cancel_task",
+  "dispute_answer",
+  "get_balance",
+];
+
 export const WIDGET_CSP = {
   connectDomains: [],
   resourceDomains: ["https://pagp38bu.us-west.insforge.app", "https://cdn.insforge.dev"],
@@ -54,12 +66,14 @@ body.ui{background:transparent}
 .w .ui-notice{margin:0}
 .w .ui-viewfinder img{display:block}
 .w .big{font-size:2rem;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.w .ui-card__actions{flex-wrap:wrap}
+.w .ui-card__actions .ui-input{flex:1 1 12rem;min-width:0}
 .w .row{display:flex;flex-wrap:wrap;gap:.25rem 1rem;align-items:baseline}
 `;
 
-const SCRIPT = String.raw`
+export const WIDGET_SCRIPT = String.raw`
 const root = document.getElementById("root");
-let input = {}, last = null, seq = 0;
+let input = {}, last = null, seq = 0, askKey = null;
 const pending = new Map();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const icon = (n) => '<svg class="ui-icon" aria-hidden="true"><use href="#i-' + n + '"></use></svg>';
@@ -70,8 +84,8 @@ const TYPES = { is_open: "Open now?", line_length: "Line length", in_stock: "In 
 
 function post(msg) { window.parent.postMessage({ jsonrpc: "2.0", ...msg }, "*"); }
 function request(method, params) {
-  const id = ++seq, { promise, resolve } = Promise.withResolvers();
-  pending.set(id, resolve);
+  const id = ++seq, { promise, resolve, reject } = Promise.withResolvers();
+  pending.set(id, { resolve, reject });
   post({ id, method, params });
   return promise;
 }
@@ -79,9 +93,11 @@ function openLink(url) {
   if (window.openai?.openExternal) window.openai.openExternal({ href: url });
   else request("ui/open-link", { url });
 }
-function say(text) {
-  if (window.openai?.sendFollowUpMessage) window.openai.sendFollowUpMessage({ prompt: text });
-  else request("ui/message", { role: "user", content: [{ type: "text", text }] });
+async function call(name, args) {
+  const r = window.openai?.callTool ? await window.openai.callTool(name, args) : await request("tools/call", { name, arguments: args });
+  const text = r?.content?.find?.((c) => c.type === "text")?.text;
+  if (r?.isError) throw new Error(text || "The tool failed.");
+  return r?.structuredContent ?? JSON.parse(text ?? r?.result ?? "null");
 }
 function theme(t) { if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; }
 
@@ -135,7 +151,8 @@ function quote(q) {
   const why = q.allowed ? (nobody ? '<div class="ui-notice">' + icon("info") + "<span>Nobody is nearby right now. Try a busier place or ask later.</span></div>" : "")
     : '<div class="ui-notice ui-notice--danger">' + icon("alert") + "<span>" + esc(q.reason_if_not) + "</span></div>";
   const act = q.allowed && q.workers_nearby > 0
-    ? '<footer class="ui-card__actions"><button class="ui-button ui-button--primary" data-act="ask">Ask for ' + usd(q.suggested_bounty_usd) + "</button></footer>" : "";
+    ? '<footer class="ui-card__actions"><input class="ui-input" data-field="question" aria-label="Your question" placeholder="Your question" value="' + esc(input.question) + '">' +
+      '<button class="ui-button ui-button--primary" data-act="ask">Ask for ' + usd(q.suggested_bounty_usd) + "</button></footer>" : "";
   return '<article class="ui-card">' + head + (type ? '<p class="ui-text-sm ui-text-secondary" style="margin:0">' + type + "</p>" : "") + meta + why + act + "</article>";
 }
 
@@ -155,7 +172,16 @@ function task(t) {
     : status === "disputed" ? '<div class="ui-notice ui-notice--warning">' + icon("alert") + "<span>You disputed this answer. A person reviews it.</span></div>" : "";
   return '<article class="ui-card"><header class="ui-card__header"><h3 class="ui-card__title">' + esc(title) + "</h3>" + badge(status) + "</header>" +
     (place ? '<p class="ui-place">' + icon("pin") + '<span class="ui-place__name">' + esc(place) + "</span></p>" : "") +
-    (a ? answerBlock(a, status) : (open ? steps(status) : "") + meta + end) + "</article>";
+    (a ? answerBlock(a, status) : (open ? steps(status) : "") + meta + end) + taskActions(a, status, open) + "</article>";
+}
+function taskActions(a, status, open) {
+  const disputable = a && ["verified", "paid", "needs_review"].includes(status);
+  return '<footer class="ui-card__actions">' +
+    (open ? '<button class="ui-button ui-button--primary" data-act="wait">Wait for answer</button>' : "") +
+    '<button class="ui-button" data-act="refresh">Refresh</button>' +
+    (status === "dispatched" ? '<button class="ui-button" data-act="cancel">Cancel</button>' : "") +
+    (disputable ? '<input class="ui-input" data-field="reason" aria-label="What is wrong" placeholder="What is wrong with the answer?">' +
+      '<button class="ui-button" data-act="dispute">Dispute</button>' : "") + "</footer>";
 }
 
 function balance(b) {
@@ -163,7 +189,8 @@ function balance(b) {
     '<div class="row"><span class="big ui-num">' + usd(b.balance_usd) + "</span>" +
     (b.escrowed_usd > 0 ? '<span class="ui-text-sm ui-text-secondary">' + usd(b.escrowed_usd) + " held in open tasks</span>" : "") + "</div>" +
     (b.balance_usd < 1.5 ? '<div class="ui-notice ui-notice--warning">' + icon("alert") + "<span>Too low for a task. The smallest costs $1.50 with the fee.</span></div>" : "") +
-    (b.top_up_url ? '<footer class="ui-card__actions"><button class="ui-button' + (b.balance_usd < 1.5 ? " ui-button--primary" : "") + '" data-act="topup">Top up</button></footer>' : "") + "</article>";
+    '<footer class="ui-card__actions"><button class="ui-button" data-act="balance">Refresh</button>' +
+    (b.top_up_url ? '<button class="ui-button' + (b.balance_usd < 1.5 ? " ui-button--primary" : "") + '" data-act="topup">Top up</button>' : "") + "</footer></article>";
 }
 
 function notSent(n) {
@@ -181,11 +208,35 @@ function render(out) {
   last = out;
   root.innerHTML = "workers_nearby" in out ? quote(out) : "balance_usd" in out ? balance(out)
     : out.status === "not_sent" ? notSent(out) : "task_id" in out ? task(out) : "";
-  for (const b of root.querySelectorAll("[data-act]")) b.onclick = () => {
-    if (b.dataset.act === "topup") openLink(last.top_up_url);
-    if (b.dataset.act === "ask") say("Ask Eyes about " + last.resolved_location.label + " (" + (input.task_type ?? "other_public") + ") for " + usd(last.suggested_bounty_usd) + ".");
-  };
+  for (const b of root.querySelectorAll("[data-act]")) b.onclick = () => act(b);
   size();
+}
+const field = (name) => root.querySelector('[data-field="' + name + '"]')?.value.trim() ?? "";
+const ACTS = {
+  ask: (q) => {
+    askKey ??= crypto.randomUUID();
+    return ["ask_eyes", { question: field("question"), location: input.location ?? q.resolved_location.label, task_type: input.task_type ?? "other_public", bounty_usd: q.suggested_bounty_usd, idempotency_key: askKey }];
+  },
+  refresh: (t) => ["get_task", { task_id: t.task_id }, true],
+  wait: (t) => ["await_answer", { task_id: t.task_id }, true],
+  cancel: (t) => ["cancel_task", { task_id: t.task_id }, true],
+  dispute: (t) => ["dispute_answer", { task_id: t.task_id, reason: field("reason") }, true],
+  balance: () => ["get_balance", {}],
+};
+async function act(b) {
+  if (b.dataset.act === "topup") return openLink(last.top_up_url);
+  const [name, args, merge] = ACTS[b.dataset.act](last);
+  const card = root.firstElementChild;
+  card.querySelector("[data-error]")?.remove();
+  b.disabled = true;
+  try {
+    const out = await call(name, args);
+    render(merge ? { ...last, ...out } : out);
+  } catch (err) {
+    b.disabled = false;
+    card.insertAdjacentHTML("beforeend", '<div class="ui-notice ui-notice--danger" data-error role="alert">' + icon("alert") + "<span>" + esc(err.message) + "</span></div>");
+    size();
+  }
 }
 function size() {
   post({ method: "ui/notifications/size-changed", params: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight } });
@@ -194,7 +245,11 @@ function size() {
 window.addEventListener("message", (e) => {
   const m = e.data;
   if (!m || m.jsonrpc !== "2.0") return;
-  if (m.id != null && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id); return; }
+  if (m.id != null && pending.has(m.id)) {
+    const p = pending.get(m.id);
+    pending.delete(m.id);
+    return m.error ? p.reject(new Error(m.error.message ?? "The host refused the request.")) : p.resolve(m.result);
+  }
   if (m.method === "ui/notifications/tool-input") { input = m.params?.arguments ?? {}; if (last) render(last); }
   if (m.method === "ui/notifications/tool-result") render(m.params?.structuredContent);
   if (m.method === "ui/notifications/host-context-changed") theme(m.params?.theme);
@@ -222,4 +277,4 @@ export const WIDGET_HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${file("tokens.css")}${file("components.css")}${CSS}</style></head>
 <body class="ui">${file("icons.svg")}<main class="w" id="root" aria-live="polite"></main>
-<script type="module">${SCRIPT}</script></body></html>`;
+<script type="module">${WIDGET_SCRIPT}</script></body></html>`;

@@ -1,4 +1,5 @@
 import { type AssessTask, EyesError, type EyesService, type Providers } from "@eyes/core";
+import { recipientGateDenial } from "@eyes/engine";
 import type { OpsEvent } from "@eyes/web-dashboard";
 
 type Log = (e: OpsEvent) => void;
@@ -15,7 +16,9 @@ export function instrumentProviders(p: Providers, log: Log): Providers {
       log({ kind, task_id, summary: `${what} sent` });
       return out;
     } catch (err) {
-      log({ kind, level: "error", task_id, summary: `${what} failed: ${errorName(err)}` });
+      // A recipient-gate refusal is an expected limit; the engine notes it once per agent at info level.
+      if (!recipientGateDenial(err))
+        log({ kind, level: "error", task_id, summary: `${what} failed: ${errorName(err)}` });
       throw err;
     }
   }

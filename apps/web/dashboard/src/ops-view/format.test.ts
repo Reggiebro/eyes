@@ -176,7 +176,7 @@ describe("task timeline and headline", () => {
   const base = {
     created_at: "2026-10-17T12:00:00Z",
     bounty_cents: 300,
-    fee_cents: 60,
+    fee_cents: 50,
     place_label: "Mint Plaza, SF",
   };
   const labels = (t: Parameters<typeof taskSteps>[0]) =>
@@ -207,14 +207,14 @@ describe("task timeline and headline", () => {
       "Asked+",
       "0 notified+",
       "Cancelled+",
-      "$3.60 refunded+",
+      "$3.50 refunded+",
     ]);
     expect(labels({ ...base, status: "expired", claimed_at: "x", money_at: { refund: "z" } })).toEqual([
       "Asked+",
       "0 notified+",
       "Claimed+",
       "Expired+",
-      "$3.60 refunded+",
+      "$3.50 refunded+",
     ]);
     expect(labels({ ...base, status: "disputed", money_at: null }).at(-1)).toBe("Disputed+");
     expect(taskSteps({ created_at: "x", status: "paid" }).at(-1)?.label).toBe("$0.00 paid");
@@ -231,8 +231,8 @@ describe("task timeline and headline", () => {
     expect(line("verified")).toBe("Verified at Mint Plaza, paying the worker");
     expect(line("paid")).toBe("Answered at Mint Plaza, worker paid $3.00");
     expect(line("needs_review")).toBe("Answer in from Mint Plaza, it needs a human look");
-    expect(line("expired")).toBe("Nobody reached Mint Plaza in time, $3.60 refunded");
-    expect(line("refunded")).toBe("Cancelled before anyone claimed it, $3.60 refunded");
+    expect(line("expired")).toBe("Nobody reached Mint Plaza in time, $3.50 refunded");
+    expect(line("refunded")).toBe("Cancelled before anyone claimed it, $3.50 refunded");
     expect(line("disputed")).toBe("The agent disputed the answer from Mint Plaza");
     expect(line("odd_state")).toBe("odd state at Mint Plaza");
     expect(taskHeadline({ created_at: "x", status: "expired" })).toBe(

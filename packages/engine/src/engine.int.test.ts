@@ -51,6 +51,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     payload: Record<string, unknown>;
   }[];
   let safety = ALLOW;
+  const notices: { kind: string; summary: string }[] = [];
   const deps: EngineDeps = {
     db: { kind: "postgres", url: url ?? "" },
     providers,
@@ -69,7 +70,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       live_payouts: true,
     }),
   };
-  const service = createEyesService(deps);
+  const service = createEyesService(deps, (e) => notices.push(e));
 
   beforeAll(() => migrate(url ?? ""));
   afterAll(() => sql.end());
@@ -230,6 +231,203 @@ describe.skipIf(!url)("engine on Postgres", () => {
     });
   });
 
+  it("email is an extra channel on a phone account: unverified gets no offers, an authenticated email verifies it but only a text turns tasks on, offers reach both channels, YES by email answers by email, STOP drops login codes", async () => {
+    const at = somewhere();
+    const email = `w${randomInt(1e9)}@workers.test`;
+    const phone = newPhone();
+    const joined = await service.joinWorker({
+      name: "Mail Worker",
+      phone,
+      email: email.toUpperCase(),
+      ...north(at, 100),
+    });
+    expect(joined.opt_in_instructions).toContain(
+      `saying START from ${email} to work@brave-otter.primitive.email`,
+    );
+    const [row] =
+      await sql`select id, email, email_verified_at, opted_in from workers where phone = ${phone}`;
+    expect(row).toMatchObject({ email, email_verified_at: null, opted_in: false });
+
+    const other = newPhone();
+    await service.joinWorker({ name: "Squatter", phone, email: "x@workers.test", ...at });
+    await service.joinWorker({ name: "Second", phone: other, email, ...at });
+    expect(await sql`select email from workers where phone in (${phone}, ${other}) order by email`).toEqual([
+      { email },
+      { email: null },
+    ]);
+
+    await service.handleWorkerReply({ email, intent: "start", text: "START" });
+    expect(outbox.at(-1)).toMatchObject({
+      to: email,
+      payload: expect.stringContaining("from your phone first"),
+    });
+    const [unconfirmed] = await sql`select opted_in, email_verified_at from workers where phone = ${phone}`;
+    expect(unconfirmed).toMatchObject({ opted_in: false, email_verified_at: null });
+    expect(providers.email.outbox.filter((m) => m.to === email)).toEqual([]);
+
+    await service.handleWorkerReply({
+      email: `u${randomInt(1e9)}@workers.test`,
+      intent: "start",
+      text: "START",
+    });
+    expect(String(outbox.at(-1)?.payload)).toContain(
+      "join with your phone number at https://w.eyes.test first",
+    );
+
+    await service.handleWorkerReply({ phone, intent: "start", text: "START" });
+    expect(String(outbox.at(-1)?.payload)).toContain(`confirmation link to w…@workers.test. Not yours?`);
+    const link = providers.email.outbox.findLast((m) => m.to === email);
+    expect(link).toMatchObject({
+      reply_to: "work@brave-otter.primitive.email",
+      text: expect.stringContaining("https://w.eyes.test/login#c="),
+    });
+    await service.handleWorkerReply({ email, intent: "help", text: "HELP" });
+    const [confirmed] = await sql`select email_verified_at from workers where phone = ${phone}`;
+    expect(confirmed?.email_verified_at).not.toBeNull();
+
+    const later = await worker(north(at, 200));
+    const laterEmail = `b${randomInt(1e9)}@workers.test`;
+    await sql`select eyes_set_worker_email(${later.worker_id}, ${laterEmail})`;
+    const asked = await ask(await agent(), at);
+    const sent = outbox
+      .filter((m) => m.kind === "offer" && m.payload.task_id === asked.task_id)
+      .map((m) => m.to);
+    expect(sent.sort()).toEqual([phone, email, later.phone].sort());
+    expect(asked.workers_notified).toBe(2);
+
+    await service.handleWorkerReply({ email, intent: "yes", text: "yes" });
+    expect(outbox.at(-1)).toMatchObject({ to: email, kind: "capture_link" });
+
+    await sql`select eyes_issue_worker_code(${email.toUpperCase()}, ${`h${email}`}, now() + interval '15 minutes')`;
+    await service.handleWorkerReply({ email, intent: "stop", text: "STOP" });
+    expect(await sql`select 1 from worker_login_codes where email = ${email}`).toHaveLength(0);
+    const [stopped] = await sql`select opted_in, lat from workers where phone = ${phone}`;
+    expect(stopped).toMatchObject({ opted_in: false, lat: null });
+    expect(await sql`select email, email_verified_at from eyes_set_worker_email(${row?.id}, null)`).toEqual([
+      { email: null, email_verified_at: null },
+    ]);
+  });
+
+  it("email on /me: adding needs a phone that texted START; the emailed link signs in once and verifies; sign-in links go only to verified emails; a taken email is 409; null removes it", async () => {
+    const eToken = (workerId: string) => signToken("test-link-secret-0123456789", `e:${workerId}`);
+    // The one-time code in the last link emailed to this address.
+    const linkCode = (to: string) =>
+      /\/login#c=(\S+)/.exec(providers.email.outbox.findLast((m) => m.to === to)?.text ?? "")?.[1] ?? "";
+    const off = await worker(somewhere(), false);
+    await expect(service.workerSetEmail(eToken(off.worker_id), "a@workers.test")).rejects.toMatchObject({
+      code: "invalid_input",
+      message: "Text START to the Eyes number first.",
+    });
+    await expect(service.workerSetEmail("bad", null)).rejects.toMatchObject({ code: "unauthorized" });
+
+    const w = await worker(somewhere());
+    const email = `m${randomInt(1e9)}@workers.test`;
+    expect(await service.workerSetEmail(eToken(w.worker_id), email.toUpperCase())).toMatchObject({
+      email_masked: "m…@workers.test",
+      email_status: "pending",
+    });
+    const confirm = linkCode(email);
+    const sent = providers.email.outbox.length;
+    await service.workerEmailLogin(email);
+    await service.workerEmailLogin(`n${randomInt(1e9)}@workers.test`);
+    expect(providers.email.outbox).toHaveLength(sent);
+    await expect(service.workerEmailLogin("not an email")).rejects.toMatchObject({ code: "invalid_input" });
+
+    const { token } = await service.workerLoginCode(confirm);
+    expect(await service.workerSetup(token)).toMatchObject({ email_status: "verified" });
+    await expect(service.workerLoginCode(confirm)).rejects.toMatchObject({ code: "unauthorized" });
+    await service.workerSetEmail(eToken(w.worker_id), email);
+    expect(providers.email.outbox).toHaveLength(sent);
+
+    await service.workerEmailLogin(email.toUpperCase());
+    expect(providers.email.outbox.at(-1)).toMatchObject({ to: email, subject: "Your Eyes sign-in link" });
+    expect(await service.workerSetup((await service.workerLoginCode(linkCode(email))).token)).toMatchObject({
+      opted_in: true,
+    });
+
+    const other = await worker(somewhere());
+    await expect(service.workerSetEmail(eToken(other.worker_id), email)).rejects.toMatchObject({
+      code: "email_taken",
+    });
+    expect(await service.workerSetEmail(eToken(w.worker_id), null)).toMatchObject({
+      email_masked: null,
+      email_status: "none",
+    });
+  });
+
+  it("email by text (T6.51): EMAIL or an address gets a mailto short link and no email; the coded email connects the sender, verified, once; taken, wrong and stale codes change nothing; 5 links an hour; EMAIL OFF removes", async () => {
+    const eToken = (workerId: string) => signToken("test-link-secret-0123456789", `e:${workerId}`);
+    const lastText = (phone: string) => String(outbox.findLast((m) => m.to === phone)?.payload);
+    const text = (phone: string, body: string) =>
+      service.handleWorkerReply({ phone, intent: "unknown", text: body });
+    const off = await worker(somewhere(), false);
+    await text(off.phone, "a@workers.test");
+    expect(lastText(off.phone)).toBe("Text START first, then send your email.");
+    await expect(service.workerEmailStart(eToken(off.worker_id))).rejects.toMatchObject({
+      code: "invalid_input",
+      message: "Text START to the Eyes number first.",
+    });
+    await expect(service.workerEmailStart("bad")).rejects.toMatchObject({ code: "unauthorized" });
+
+    const w = await worker(somewhere());
+    const mailtoFor = async (body: string) => {
+      await text(w.phone, body);
+      const id = /^To get tasks by email, tap this and press Send: \S+\/s\/([0-9A-Za-z]{8})$/.exec(
+        lastText(w.phone),
+      )?.[1];
+      const [row] = await sql`select target from short_links where id = ${id ?? ""}`;
+      return String(row?.target);
+    };
+    const codeOf = (mailto: string) => /subject=Eyes%20([\w-]{43})&/.exec(mailto)?.[1] ?? "";
+    const emails = providers.email.outbox.length;
+    for (const body of ["EMAIL", " My email is: <mailto:Ana@Workers.test>. ", "e-mail"]) {
+      expect(await mailtoFor(body)).toMatch(
+        /^mailto:work@\S+\?subject=Eyes%20[\w-]{43}&body=Send%20this%20email%20to%20connect$/,
+      );
+    }
+    expect(providers.email.outbox).toHaveLength(emails);
+    await text(w.phone, "a@workers.test b@workers.test");
+    expect(lastText(w.phone)).toMatch(/^Didn't catch that\./);
+
+    const email = `c${randomInt(1e9)}@workers.test`;
+    const code = codeOf(await mailtoFor("email"));
+    expect(await service.workerConnectEmail(email, "x".repeat(43))).toMatch(/^This link has expired/);
+    const other = await worker(somewhere());
+    await sql`update workers set email = ${email} where id = ${other.worker_id}`;
+    expect(await service.workerConnectEmail(email, code)).toMatch(
+      /^This email is already on another Eyes account/,
+    );
+    await sql`update workers set email = null where id = ${other.worker_id}`;
+    expect(await service.workerConnectEmail(email.toUpperCase(), code)).toBe(
+      "Connected. Eyes will also send you tasks here. Reply STOP to stop.",
+    );
+    expect(await service.workerConnectEmail(email, code)).toMatch(/^This link has expired/);
+    expect(
+      await sql`select email, email_verified_at is not null as verified from workers where id = ${w.worker_id}`,
+    ).toEqual([{ email, verified: true }]);
+    await service.handleWorkerReply({ phone: w.phone, intent: "help", text: "HELP" });
+    expect(lastText(w.phone)).not.toContain("Text EMAIL");
+
+    await mailtoFor("EMAIL");
+    await text(w.phone, "EMAIL");
+    expect(lastText(w.phone)).toBe("Too many email links this hour. Text EMAIL again in an hour.");
+
+    const { mailto } = await service.workerEmailStart(eToken(w.worker_id));
+    const start = providers.clock.now();
+    try {
+      providers.clock.advance(24 * 3_600_000 + 1);
+      expect(await service.workerConnectEmail(email, codeOf(mailto))).toMatch(/^This link has expired/);
+    } finally {
+      providers.clock.set(start);
+    }
+
+    await text(w.phone, "Email off");
+    expect(lastText(w.phone)).toBe(
+      "Email removed. Eyes won't email you tasks. Text EMAIL anytime to add one again.",
+    );
+    expect(await sql`select email from workers where id = ${w.worker_id}`).toEqual([{ email: null }]);
+  });
+
   it("never lets a repeat join rewrite an existing worker or tell the caller it exists, even after STOP, and sends the payout link only by text after START", async () => {
     const at = somewhere();
     const phone = newPhone();
@@ -242,7 +440,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(again).toEqual(first);
     expect(again).toEqual(await service.joinWorker({ name: "Someone Else", phone: newPhone(), ...at }));
     await service.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
-    expect(await service.joinWorker({ name: "Someone Else", phone, lat: 0, lng: 0 })).toEqual(first);
+    expect(await service.joinWorker({ name: "Someone Else", phone, ...north(at, 4000) })).toEqual(first);
+    // 0,0 is never a location: the join is refused before anything is written.
+    await expect(
+      service.joinWorker({ name: "Someone Else", phone: newPhone(), lat: 0, lng: 0 }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+    });
     // STOP deleted the location (ADR-024); the repeat join did not write its own.
     expect(await sql`select name, lat from workers where phone = ${phone}`).toEqual([
       { name: "Real Worker", lat: null },
@@ -272,6 +476,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       ),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "Text EMAIL to also get tasks by email.",
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ]);
     const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
@@ -284,6 +489,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^2\. Set up payouts: /),
       expect.stringMatching(/^Your setup: /),
       lines[4],
+      lines[5],
     ]);
   });
 
@@ -297,6 +503,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
+      "Text EMAIL to also get tasks by email.",
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ]);
     expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
@@ -333,6 +540,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
           setup_url: expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/[\w-]+\.[\w-]+$/),
         },
         here_url: expect.stringMatching(/^https:\/\/w\.eyes\.test\/here\.html\?t=[\w-]+\.[\w-]+$/),
+        email_masked: null,
+        email_status: "none",
       });
 
       // Six claims from two agents (each stays within its $20 grant); the list has all of them, newest first.
@@ -403,6 +612,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       const head = "Eyes texts you paid photo tasks near you.";
       const tail = [
         expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/),
+        "Text EMAIL to also get tasks by email.",
         "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
       ];
       const hour = 3_600_000;
@@ -1802,6 +2012,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
       await expect(
         service.quoteTask(a, { location: "Nowhere Street 1, Atlantis", task_type: "line_length" }),
       ).rejects.toMatchObject({ code: "location_not_found" });
+      // 0,0 is a missing location written as numbers, never a place to send someone.
+      await expect(
+        service.quoteTask(a, { location: { lat: 0, lng: 0 }, task_type: "line_length" }),
+      ).rejects.toMatchObject({ code: "location_not_found" });
     });
 
     it("explains an unsafe quote with the classifier text or the default message, and refuses ask_eyes", async () => {
@@ -1917,12 +2131,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
       }
     });
 
-    it("skips owner email to reserved test domains at debug level and logs a provider 403 recipient denial as a warning", async () => {
+    it("skips owner email to reserved test domains at debug level and notes a provider 403 recipient denial once per agent at info level", async () => {
       const send = vi.spyOn(providers.email, "send");
       const logs = (["debug", "warn", "error"] as const).map((m) =>
         vi.spyOn(console, m).mockImplementation(() => {}),
       );
       const [debug, warn, error] = logs;
+      notices.length = 0;
       try {
         for (const to of [
           "o@example.com",
@@ -1950,10 +2165,41 @@ describe.skipIf(!url)("engine on Postgres", () => {
         );
         const denied = await service.signupAgent({ name: "scoped-agent", owner_email: "o@notexample.com" });
         expect(denied.next_step).toContain("could not email your user at o@notexample.com");
+        send.mockRejectedValueOnce(
+          Object.assign(new Error("cannot send to o@gmail.com: All granted recipient-scope gates denied"), {
+            name: "PrimitiveApiError",
+            status: 403,
+            gates: [
+              { name: "send_to_primitive_managed_domains", subject: "gmail.com" },
+              { name: "send_to_confirmed_domains", subject: "o@gmail.com" },
+              { name: "send_to_known_addresses", subject: "o@gmail.com" },
+            ],
+          }),
+        );
+        const gated = await service.signupAgent({ name: "gated-agent", owner_email: "o@gmail.com" });
+        expect(gated.next_step).toContain("could not email your user at o@gmail.com");
+        // The first payer's email to the same agent is denied again: no second notice.
+        send.mockRejectedValueOnce(Object.assign(new Error("recipient not allowed"), { status: 403 }));
+        await service.creditTopup({
+          agent_id: gated.agent_id,
+          amount_cents: 500,
+          stripe_ref: `cs_gate_${gated.agent_id}`,
+          payer_email: "p@gmail.com",
+        });
+        expect(send).toHaveBeenCalledTimes(3);
         expect(error).not.toHaveBeenCalled();
-        expect(warn?.mock.calls.map((call) => String(call[0]))).toEqual([
-          `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
+        expect(warn).not.toHaveBeenCalled();
+        expect(notices).toEqual([
+          {
+            kind: "email",
+            summary: `owner email for agent ${denied.agent_id} not sent: the email provider refused the recipient (403); it sends replies only until any-domain sending is enabled`,
+          },
+          {
+            kind: "email",
+            summary: `owner email for agent ${gated.agent_id} not sent: the email provider refused the recipient (403, gates denied: send_to_primitive_managed_domains, send_to_confirmed_domains, send_to_known_addresses); it sends replies only until any-domain sending is enabled`,
+          },
         ]);
+        expect(JSON.stringify(notices)).not.toContain("@");
       } finally {
         send.mockRestore();
         for (const log of logs) log.mockRestore();

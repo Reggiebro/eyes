@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createInkboxMessaging, createPrimitiveEmail } from "@eyes/comms";
+import { createInkboxEmail, createInkboxMessaging, createPrimitiveEmail, withWorkerEmail } from "@eyes/comms";
 import { AppConfig, type DbConfig, fakeProviders, type Providers } from "@eyes/core";
 import { createInsforgeStorage, createRpc } from "@eyes/db";
 import { createEyesService } from "@eyes/engine";
@@ -12,6 +12,7 @@ import {
   clickHouseConfig,
   createClickHouseSink,
   createEventLog,
+  createIssueSink,
   mirrorTriggerEvents,
 } from "@eyes/web-dashboard";
 import { z } from "zod";
@@ -95,7 +96,10 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   const fakes = fakeProviders();
   const providers: Providers = {
     messaging: live.messaging ? createInkboxMessaging(env) : fakes.messaging,
-    email: live.email ? createPrimitiveEmail(env) : fakes.email,
+    // Primitive sends; what its recipient gate refuses (first contact) goes out from the Inkbox mailbox.
+    email: live.email
+      ? createPrimitiveEmail(env, live.messaging ? createInkboxEmail(env) : undefined)
+      : fakes.email,
     payments: live.payments ? createStripePayments(env) : fakes.payments,
     storage: live.storage ? createInsforgeStorage(env) : fakes.storage,
     vision: live.vision ? (clef ? createClefVision(env) : createClaudeVision(env)) : fakes.vision,
@@ -109,11 +113,15 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
   const rpc = createRpc(db);
   if (live.messaging)
     providers.messaging = withShortLinks(providers.messaging, rpc, config, providers.clock.now);
+  // A worker's verified email gets the same messages as their phone (T6.48).
+  providers.messaging = withWorkerEmail(providers.messaging, providers.email, config.email_domain);
   const chConfig = clickHouseConfig(env);
   const clickhouse = chConfig ? createClickHouseSink(chConfig) : undefined;
   if (clickhouse) mirrorTriggerEvents(rpc, clickhouse.push);
   console.log(`clickhouse: ${chConfig ? `${chConfig.url} (${chConfig.database})` : "off"}`);
-  const events = createEventLog(rpc, 500, 2000, clickhouse ? [clickhouse.push] : []);
+  // Console errors and warnings also group into issues for the ops Errors tab.
+  const issues = createIssueSink(rpc);
+  const events = createEventLog(rpc, 500, 2000, [issues.push, ...(clickhouse ? [clickhouse.push] : [])]);
   captureConsole(events.log);
   const logged = instrumentProviders(providers, events.log);
 
@@ -124,7 +132,8 @@ export function start(env: Record<string, string | undefined>, exit: Exit = fail
     verifySubmission,
     config,
   };
-  const engine = sandbox ? createSandboxService(deps) : createEyesService(deps);
+  // Engine notices carry no level, so the event log records them as info: never an Errors-tab issue.
+  const engine = sandbox ? createSandboxService(deps) : createEyesService(deps, events.log);
   const service = instrumentService(engine, events.log);
 
   const sweep = setInterval(() => {

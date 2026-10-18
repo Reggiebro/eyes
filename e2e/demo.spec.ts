@@ -226,7 +226,7 @@ test.beforeAll(async () => {
   const connectUrl = String(sent(PAYEE.phone, "text").at(-1)?.payload).match(/\S+\/w\/connect\/\S+/)?.[0];
   expect((await fetch(connectUrl ?? "", { redirect: "manual" })).status).toBe(302);
 
-  signup = (await post("/v1/signup", { name: "demo-rehearsal-agent" })) as SignupOutput;
+  signup = (await post("/v1/signup", { name: "e2e-demo-rehearsal-agent" })) as SignupOutput;
   client = new Client({ name: "demo-rehearsal", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(`${API}/mcp`), {

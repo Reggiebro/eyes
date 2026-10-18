@@ -57,6 +57,8 @@ export type Agent = z.infer<typeof Agent>;
 export const Worker = z.object({
   id: Id,
   phone: Phone,
+  email: z.string().nullable().optional(),
+  email_verified_at: Timestamp.nullable().optional(),
   name: z.string(),
   stripe_account_id: z.string().nullable(),
   lat: z.number().nullable(),
@@ -411,12 +413,17 @@ export type ToolName = keyof typeof TOOLS;
 export type ToolInput<T extends ToolName> = z.output<(typeof TOOLS)[T]["input"]>;
 export type ToolOutput<T extends ToolName> = z.output<(typeof TOOLS)[T]["output"]>;
 
-export const JoinWorkerInput = z.object({
-  name: z.string().min(2).max(80),
-  phone: Phone,
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
-});
+export const WorkerEmail = z.email().max(254).toLowerCase();
+
+export const JoinWorkerInput = z
+  .object({
+    name: z.string().min(2).max(80),
+    phone: Phone,
+    email: WorkerEmail.optional(),
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
+  })
+  .refine((v) => v.lat !== 0 || v.lng !== 0, { message: "0,0 is not a real location.", path: ["lat"] });
 export const JoinWorkerOutput = z.object({
   opt_in_instructions: z.string(),
   inkbox_number: z.string().nullable(),
@@ -493,6 +500,9 @@ export const WorkerSetup = z.object({
   app: z.object({ last_at: Timestamp.nullable(), sending: z.boolean() }),
   payouts: z.object({ set_up: z.boolean(), live: z.boolean(), setup_url: z.string().nullable() }),
   here_url: z.string(),
+  /** j…@example.com; the full address is never returned. */
+  email_masked: z.string().nullable(),
+  email_status: z.enum(["none", "pending", "verified"]),
 });
 
 export const CaptureResult = z.object({
