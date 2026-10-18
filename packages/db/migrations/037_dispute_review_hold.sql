@@ -362,7 +362,7 @@ end $$;
 
 -- One final shared send-time filter covers initial offers, reoffers, iMessage and email.
 create function eyes_dispatchable_workers(p_worker_ids uuid[])
-returns table (worker_id uuid) language sql stable as $$
+returns setof uuid language sql stable as $$
   select id from workers where id = any(p_worker_ids)
     and opted_in and available and not banned and dispute_hold_at is null
 $$;

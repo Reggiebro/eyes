@@ -1961,7 +1961,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
       const { a, task_id, at } = await paidTask();
       const before = await service.getTask(a, { task_id });
       const money = await service.getBalance(a);
-      const disputed = await service.disputeAnswer(a, { task_id, reason: "The photo shows a different cafe." });
+      const disputed = await service.disputeAnswer(a, {
+        task_id,
+        reason: "The photo shows a different cafe.",
+      });
       expect(disputed.retry_context).toEqual({
         question: before.question,
         location: { ...at, label: before.place_label },
@@ -1972,14 +1975,22 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect(await service.disputeAnswer(a, { task_id, reason: "The same report again." })).toEqual(disputed);
       const count = Number((await sql`select count(*) as n from tasks where agent_id = ${a.id}`)[0]?.n);
       const quote = await service.quoteTask(a, {
-        location: disputed.retry_context.location, task_type: disputed.retry_context.task_type,
+        location: disputed.retry_context.location,
+        task_type: disputed.retry_context.task_type,
       });
       expect(quote.allowed).toBe(true);
       expect(await service.getBalance(a)).toEqual(money);
       expect(Number((await sql`select count(*) as n from tasks where agent_id = ${a.id}`)[0]?.n)).toBe(count);
-      const retry = await service.askEyes(a, { ...disputed.retry_context, idempotency_key: randomUUID() });
+      const retry = await service.askEyes(a, {
+        ...disputed.retry_context,
+        idempotency_key: randomUUID(),
+        deadline_minutes: 30,
+        require_photo: true,
+      });
       expect(retry.task_id).not.toBe(task_id);
-      expect((await service.getBalance(a)).balance_usd).toBe(money.balance_usd - before.bounty_usd - before.fee_usd);
+      expect((await service.getBalance(a)).balance_usd).toBe(
+        money.balance_usd - before.bounty_usd - before.fee_usd,
+      );
       const [t] =
         await sql`select kind, status, dispute_status, message from tickets where task_id = ${task_id}`;
       expect(t).toMatchObject({

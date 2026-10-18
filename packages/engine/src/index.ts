@@ -572,25 +572,27 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
 
   async function sendOffers(task: Task, workers: Nearby[]): Promise<number> {
     const eligible = new Set(
-      (await rpc<{ worker_id: string }>("eyes_dispatchable_workers", {
+      await rpc<string>("eyes_dispatchable_workers", {
         p_worker_ids: workers.map((w) => w.worker_id),
-      })).map((w) => w.worker_id),
+      }),
     );
     const sent = await Promise.allSettled(
-      workers.filter((w) => eligible.has(w.worker_id)).map((w) =>
-        toAll(contacts(w), (to) =>
-          messaging.sendOffer(to, {
-            task_id: task.id,
-            task_type: task.task_type,
-            question: task.question,
-            place_label: task.place_label,
-            bounty_cents: task.bounty_cents,
-            distance_m: Math.round(w.distance_m),
-            deadline_at: iso(task.deadline_at),
-            live_payouts: config.live_payouts,
-          }),
+      workers
+        .filter((w) => eligible.has(w.worker_id))
+        .map((w) =>
+          toAll(contacts(w), (to) =>
+            messaging.sendOffer(to, {
+              task_id: task.id,
+              task_type: task.task_type,
+              question: task.question,
+              place_label: task.place_label,
+              bounty_cents: task.bounty_cents,
+              distance_m: Math.round(w.distance_m),
+              deadline_at: iso(task.deadline_at),
+              live_payouts: config.live_payouts,
+            }),
+          ),
         ),
-      ),
     );
     logFailedOffers(task.id, sent);
     return sent.filter((s) => s.status === "fulfilled").length;
@@ -1194,7 +1196,11 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
 
     async disputeAnswer(agent, input) {
       const { task_id, reason } = parse(TOOLS.dispute_answer.input, input);
-      const task = await one<Task>("eyes_dispute", { p_agent_id: agent.id, p_task_id: task_id, p_reason: reason });
+      const task = await one<Task>("eyes_dispute", {
+        p_agent_id: agent.id,
+        p_task_id: task_id,
+        p_reason: reason,
+      });
       return {
         task_id,
         status: "disputed",

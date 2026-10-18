@@ -63,6 +63,12 @@ const QUOTE = {
 
 const PAID_TASK: ToolOutput<"get_task"> = {
   task_id: TASK_ID,
+  retry_context: {
+    question: "How long is the line?",
+    location: QUOTE.resolved_location,
+    task_type: "line_length",
+    bounty_usd: 3,
+  },
   status: "paid",
   question: "How long is the line?",
   task_type: "line_length",
@@ -2762,8 +2768,12 @@ describe("ops data routes", () => {
 
   it("authenticates dispute history and validates same-origin worker hold reviews", async () => {
     const review = {
-      worker_id: TASK_ID, dispute_hold_at: "2026-10-18T12:00:00Z",
-      dispute_reviewed_at: null, disputed_tasks: 3, history: [], last_review: null,
+      worker_id: TASK_ID,
+      dispute_hold_at: "2026-10-18T12:00:00Z",
+      dispute_reviewed_at: null,
+      disputed_tasks: 3,
+      history: [],
+      last_review: null,
     };
     let rows: unknown[] = [review];
     const { get, post, fetch, cookie, calls } = opsServer(() => rows);
@@ -2775,23 +2785,39 @@ describe("ops data routes", () => {
     expect(calls.at(-1)).toMatchObject({ fn: "eyes_worker_dispute_review", args: { p_worker_id: TASK_ID } });
     const before = calls.length;
     for (const origin of [undefined, "https://other.test"]) {
-      expect((await fetch(`http://localhost${path}`, {
-        method: "POST", headers: { cookie: await cookie(), ...(origin && { origin }),
-          "content-type": "application/json" }, body: JSON.stringify({ note: "Reviewed evidence" }),
-      })).status).toBe(403);
+      expect(
+        (
+          await fetch(`http://localhost${path}`, {
+            method: "POST",
+            headers: {
+              cookie: await cookie(),
+              ...(origin && { origin }),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ note: "Reviewed evidence" }),
+          })
+        ).status,
+      ).toBe(403);
     }
     expect(calls.length).toBe(before);
-    expect((await fetch(`http://localhost${path}`, {
-      method: "POST", headers: { origin: "http://api.eyes.test", "content-type": "application/json" },
-      body: JSON.stringify({ note: "Reviewed evidence" }),
-    })).status).toBe(401);
+    expect(
+      (
+        await fetch(`http://localhost${path}`, {
+          method: "POST",
+          headers: { origin: "http://api.eyes.test", "content-type": "application/json" },
+          body: JSON.stringify({ note: "Reviewed evidence" }),
+        })
+      ).status,
+    ).toBe(401);
     for (const note of [undefined, "", "     ", "tiny", "x".repeat(1001)]) {
       expect((await post(path, { note })).status).toBe(400);
     }
     const lifted = await post(path, { note: "  Reviewed evidence  " });
     expect(lifted.status).toBe(200);
-    expect(calls.at(-1)).toMatchObject({ fn: "eyes_review_worker_disputes",
-      args: { p_worker_id: TASK_ID, p_note: "Reviewed evidence", p_actor: "break-glass (break-glass)" } });
+    expect(calls.at(-1)).toMatchObject({
+      fn: "eyes_review_worker_disputes",
+      args: { p_worker_id: TASK_ID, p_note: "Reviewed evidence", p_actor: "break-glass (break-glass)" },
+    });
     rows = [{ error: "worker_not_held" }];
     expect((await post(path, { note: "Reviewed evidence" })).status).toBe(409);
     rows = [];

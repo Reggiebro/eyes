@@ -4,6 +4,12 @@
   "kind": "task",
   "task": {
     "task_id": "3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b",
+    "retry_context": {
+      "question": "How long is the line at Blue Bottle right now?",
+      "location": { "lat": 37.78246, "lng": -122.40776, "label": "Blue Bottle Coffee, Mint Plaza" },
+      "task_type": "line_length",
+      "bounty_usd": 3
+    },
     "status": "submitted",
     "question": "How long is the line at Blue Bottle right now?",
     "task_type": "line_length",
