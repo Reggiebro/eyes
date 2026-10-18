@@ -113,6 +113,53 @@ body {
   }
 }
 
+body:has(dialog[open]) {
+  overflow: hidden;
+}
+
+.connect-dialog {
+  box-sizing: border-box;
+  width: min(42rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  overflow-y: auto;
+  border: 1px solid var(--eyes-border-subtle);
+  border-radius: 16px;
+  background: var(--eyes-surface);
+  color: var(--eyes-text);
+}
+
+.connect-dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.connect-url {
+  display: flex;
+  gap: var(--eyes-space-3);
+}
+
+.connect-url input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--eyes-border-strong);
+  border-radius: 12px;
+  background: var(--eyes-surface-secondary);
+  color: var(--eyes-text);
+  font-size: 0.875rem;
+}
+
+.connect-url .ui-button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 479px) {
+  .connect-url {
+    flex-direction: column;
+  }
+}
+
 /* Terms and Privacy: one readable column of short sections. Layered so utilities still win. */
 @layer components {
   .legal {

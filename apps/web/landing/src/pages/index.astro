@@ -3,7 +3,7 @@ import Layout from "../layouts/Layout.astro";
 
 const APP = "https://app.eyes.pictures";
 const API = "https://api.eyes.pictures";
-const MCP = `${API}/mcp`;
+const MCP = "https://mcp.eyes.pictures/mcp";
 
 const steps = [
   ["Ask", "Your agent calls quote_task, then ask_eyes with a question, a place, a bounty and a deadline."],
@@ -86,7 +86,7 @@ const flight = [
           minutes.
         </p>
         <div class="pair">
-          <a class="ui-button ui-button--primary" href="#agents">Connect your agent</a>
+          <button class="ui-button ui-button--primary" type="button" data-connect aria-haspopup="dialog">Connect your agent</button>
           <a class="ui-button" href={APP}>Earn as a worker</a>
         </div>
       </div>
@@ -231,11 +231,11 @@ const flight = [
         <div class="grid gap-5 md:col-span-5 md:sticky md:top-24">
           <h2 class="section-title wipe m-0 font-semibold">Built for agents first</h2>
           <p class="m-0 text-lg text-secondary">
-            One MCP server with thirteen tools. Connect from your terminal with the Manufact CLI in three commands. Every
-            error says what to do next, and every answer arrives with the checks behind it.
+            Connect Eyes to ChatGPT or Claude in your browser. Copy the server URL, add a custom connector, and sign in with your Eyes key.
+            No terminal required.
           </p>
           <p class="m-0 text-sm text-secondary">
-            Or add <code class="font-mono">{MCP}</code> to any MCP client with an Authorization: Bearer header.
+            Use another MCP client? The advanced instructions below cover those too.
           </p>
           <p class="m-0 flex flex-wrap gap-x-4 gap-y-1 text-sm text-secondary">
             <span>Docs for agents</span>
@@ -246,6 +246,18 @@ const flight = [
           </p>
         </div>
         <div class="grid min-w-0 gap-10 md:col-span-7">
+          <div class="grid gap-4">
+            <h3 class="m-0 text-xl font-semibold">ChatGPT or Claude, in your browser</h3>
+            <p class="m-0 text-secondary">Your agent can check a place, see a live photo, and return a verified answer.</p>
+            <button class="ui-button ui-button--primary justify-self-start" type="button" data-connect aria-haspopup="dialog">Choose ChatGPT or Claude</button>
+            <p class="m-0 text-sm text-secondary">Custom connector setup. Availability depends on your app, account and workspace permissions.</p>
+          </div>
+          <details>
+            <summary class="ui-link cursor-pointer">Advanced: CLI &amp; other clients</summary>
+            <p class="text-sm text-secondary">
+              Other MCP clients can use <code class="font-mono break-all">{MCP}</code> with an Authorization: Bearer header.
+              <a class="ui-link" href="https://github.com/ayaangazali/eyes/blob/main/docs/CONNECT.md">Full client instructions</a>
+            </p>
           <ol class="m-0 grid list-none gap-10 p-0">
             <li class="grid min-w-0 gap-3">
               <span class="ui-num step__n">01</span>
@@ -258,14 +270,9 @@ const flight = [
             </li>
             <li class="grid min-w-0 gap-3">
               <span class="ui-num step__n">02</span>
-              <div class="flex items-center gap-3">
-                <h3 class="m-0 text-xl font-semibold">Connect with the Manufact CLI</h3>
-                <button class="ui-button ui-button--primary ml-auto shrink-0" type="button" id="copy">Copy</button>
-              </div>
-              <pre data-focus class="code"><code id="connect">{connect}</code></pre>
-              <p class="m-0 text-sm text-secondary" id="copied" aria-live="polite">
-                Saves the server as eyes. No global install needed.
-              </p>
+              <h3 class="m-0 text-xl font-semibold">Connect with the Manufact CLI</h3>
+              <pre data-focus class="code"><code>{connect}</code></pre>
+              <p class="m-0 text-sm text-secondary">Saves the server as eyes. No global install needed.</p>
             </li>
             <li class="grid min-w-0 gap-3">
               <span class="ui-num step__n">03</span>
@@ -278,6 +285,7 @@ const flight = [
             </li>
           </ol>
           <pre data-focus class="code"><code>{answer}</code></pre>
+          </details>
         </div>
       </div>
     </section>
@@ -365,10 +373,85 @@ const flight = [
     </section>
   </main>
 
+  <dialog id="connect-dialog" class="connect-dialog" aria-labelledby="connect-title" aria-describedby="connect-intro">
+    <div class="grid gap-5">
+      <div class="flex items-start justify-between gap-4">
+        <h2 id="connect-title" class="m-0 text-2xl font-semibold" tabindex="-1" autofocus>Connect Eyes</h2>
+        <form method="dialog"><button class="ui-button ui-button--sm" type="submit">Close</button></form>
+      </div>
+      <p id="connect-intro" class="m-0 text-secondary">Set up a custom connector in your browser. No terminal required.</p>
+      <div class="grid gap-2">
+        <label for="connect-client" class="font-semibold">Choose your app</label>
+        <select id="connect-client" class="ui-input appearance-auto">
+          <option value="chatgpt">ChatGPT</option>
+          <option value="claude">Claude</option>
+        </select>
+      </div>
+      <div class="grid gap-2">
+        <label for="connect" class="font-semibold">MCP server URL</label>
+        <div class="connect-url">
+          <input id="connect" class="font-mono" type="text" value={MCP} readonly spellcheck="false" />
+          <button id="copy" class="ui-button" type="button" aria-label="Copy server URL">Copy</button>
+        </div>
+        <p id="copied" class="m-0 text-sm text-secondary" role="status" aria-live="polite">Copy this URL, not a terminal command.</p>
+      </div>
+      <section id="chatgpt-connect" class="grid gap-5" aria-label="ChatGPT setup">
+      <a id="open-chatgpt" class="ui-button ui-button--primary justify-self-start" href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer">Open ChatGPT <span class="sr-only">(new tab)</span></a>
+      <ol class="m-0 grid list-decimal gap-3 pl-5">
+        <li>In <strong>Plugins</strong>, choose <strong>Add / + &gt; Add custom MCP server</strong>. Already added Eyes? Open it and resume <strong>Connect</strong> instead.</li>
+        <li>Name it <strong>Eyes</strong>, paste the server URL above, and choose <strong>OAuth</strong> authentication.</li>
+        <li>Check <strong>I understand and want to continue</strong>, then choose <strong>Create as a plugin</strong> and <strong>Connect</strong>.</li>
+        <li>On the Eyes OAuth page, enter your <strong>existing Eyes API key</strong> and connect. If you need a key, you can choose to create one there. Never paste a key into chat. This setup does not automatically create a key or charge a card.</li>
+        <li>In a new chat, type <strong>@</strong> and select <strong>Eyes</strong>. Try: “Use Eyes to quote checking whether the Ferry Building in San Francisco is open.” A quote is free.</li>
+      </ol>
+      <details class="text-sm text-secondary">
+        <summary class="ui-link cursor-pointer">Account requirements &amp; public listing</summary>
+        <p>The current Plugins flow does not require Developer Mode. Custom MCP is web-only and depends on account access, workspace policy, and Lockdown settings. If Add custom MCP server is missing or disabled, check access with your workspace admin.</p>
+        <p>Pro supports read/fetch permissions; full MCP support is available on Business, Enterprise and Edu. Business requires an admin or owner to create workspace plugins. Enterprise/Edu also allow creators with the “Create plugins with MCPs” permission; only admins/owners publish to the workspace. Free and Plus access is not guaranteed.</p>
+        <p>This is a custom connector, not a public marketplace install. A public listing requires OpenAI review, approval, and publishing.</p>
+        <p><a class="ui-link" href="https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt" target="_blank" rel="noopener noreferrer">ChatGPT requirements</a> · <a class="ui-link" href="https://developers.openai.com/plugins/deploy/app-review" target="_blank" rel="noopener noreferrer">Public listing review</a></p>
+      </details>
+      </section>
+      <section id="claude-connect" class="grid gap-5" aria-label="Claude setup" hidden>
+        <a id="open-claude" class="ui-button ui-button--primary justify-self-start" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener noreferrer">Open Claude <span class="sr-only">(new tab)</span></a>
+        <ol class="m-0 grid list-decimal gap-3 pl-5">
+          <li>In <strong>Customize &gt; Connectors</strong>, choose <strong>+ Add &gt; Add custom connector</strong>. Already added Eyes? Open it and resume <strong>Connect</strong> instead.</li>
+          <li>Name it <strong>Eyes</strong>, paste the server URL above with no trailing slash, and choose <strong>Continue</strong>.</li>
+          <li>Keep the detected <strong>Sign in now</strong> and <strong>Register automatically</strong> settings, add the connector, then choose <strong>Connect</strong>.</li>
+          <li>On the Eyes OAuth page, enter your <strong>existing Eyes API key</strong> and connect. If you need a key, you can choose to create one there. Never paste a key into chat. This setup does not automatically create a key or charge a card.</li>
+          <li>In a new chat, open <strong>+ &gt; Connectors</strong> and enable <strong>Eyes</strong>. Try: “Use Eyes to quote checking whether the Ferry Building in San Francisco is open.” A quote is free.</li>
+        </ol>
+        <details class="text-sm text-secondary">
+          <summary class="ui-link cursor-pointer">Claude account requirements</summary>
+          <p>Custom connectors are available on Free, Pro, Max, Team and Enterprise. Free is limited to one custom connector.</p>
+          <p>On Team, an Owner or Primary Owner must add the organization connector first. Enterprise also allows a custom role with “Manage access to Libraries”. Each member then connects individually from Customize.</p>
+          <p>This is custom connector setup, not a one-click install or a claim that Eyes is listed in the connector directory.</p>
+          <p><a class="ui-link" href="https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp" target="_blank" rel="noopener noreferrer">Claude connector requirements</a></p>
+        </details>
+      </section>
+    </div>
+  </dialog>
+
   <script>
     import { gsap } from "gsap";
     import { ScrollTrigger } from "gsap/ScrollTrigger";
     import { createFlight, wireCopy } from "../motion.ts";
+
+    const dialog = document.getElementById("connect-dialog") as HTMLDialogElement;
+    let opener: HTMLElement;
+    document.querySelectorAll<HTMLElement>("[data-connect]").forEach((button) => {
+      button.addEventListener("click", () => {
+        opener = button;
+        dialog.showModal();
+      });
+    });
+    dialog.addEventListener("close", () => opener?.focus());
+    const client = document.getElementById("connect-client") as HTMLSelectElement;
+    client.addEventListener("change", () => {
+      document.getElementById("chatgpt-connect")!.hidden = client.value !== "chatgpt";
+      document.getElementById("claude-connect")!.hidden = client.value !== "claude";
+      dialog.scrollTop = 0;
+    });
 
     wireCopy(
       document.getElementById("copy"),
