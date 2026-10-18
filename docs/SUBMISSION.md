@@ -13,7 +13,7 @@ Agents can read the internet but cannot see the street; Eyes lets any AI agent p
 ## Links
 
 - Repo: https://github.com/ayaangazali/eyes
-- MCP server: https://api.eyes.pictures/mcp
+- Current MCP server: https://api.eyes.pictures/mcp — dedicated `https://mcp.eyes.pictures/mcp` is [prepared, not active](CONNECT.md#dedicated-mcp-domain-prepared-not-active); existing connectors remain unchanged.
 - Worker JOIN page: https://app.eyes.pictures
 - **TODO** demo video: `<link>`
 - **TODO** backup video (recorded during Phase 4): `<link>`
