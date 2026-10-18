@@ -8,11 +8,31 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Context, Env, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 
 const CODE_TTL_MS = 5 * 60 * 1000;
 const CSRF_COOKIE = "eyes_oauth_csrf";
+
+// Static script: the key stays in the escaped page text, never in JavaScript or a URL.
+const COPY_KEY_SCRIPT = `const button = document.getElementById("copy-key");
+const key = document.getElementById("new-key");
+const status = document.getElementById("copy-status");
+button.addEventListener("click", async () => {
+  button.disabled = true;
+  button.textContent = "Copy";
+  status.textContent = "";
+  try {
+    await navigator.clipboard.writeText(key.textContent);
+    button.textContent = "Copied";
+    status.textContent = "Copied to clipboard.";
+  } catch {
+    status.textContent = "Could not copy. Select the key above and copy it manually.";
+  } finally {
+    button.disabled = false;
+  }
+});`;
+const COPY_KEY_HASH = createHash("sha256").update(COPY_KEY_SCRIPT).digest("base64");
 
 export interface OAuthDeps {
   /** Public issuer for this connector; the API host remains valid during staging. */
@@ -159,10 +179,10 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
     url.searchParams.set("iss", baseFor(c));
     return url.href;
   };
-  const headers = (redirect?: string) => ({
+  const headers = (redirect?: string, copyKey = false) => ({
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${redirect ? ` ${new URL(redirect).origin}` : ""}; base-uri 'none'; frame-ancestors 'none'`,
+    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline';${copyKey ? ` script-src 'sha256-${COPY_KEY_HASH}';` : ""} form-action 'self'${redirect ? ` ${new URL(redirect).origin}` : ""}; base-uri 'none'; frame-ancestors 'none'`,
   });
   const FIELDS = [
     "response_type",
@@ -262,12 +282,17 @@ ${hidden}<input type="hidden" name="action" value="create">
           "Your Eyes key",
           html`<h1>Your new Eyes key</h1>
 <p class="muted">Save it somewhere safe: it is shown only once. ${ok.client.n} uses it to pay for checks.</p>
-<p class="key">${agent.api_key}</p>
+<div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+<p id="new-key" class="key" style="flex:1;min-width:0;margin:0;white-space:pre-wrap;user-select:all;-webkit-user-select:all">${agent.api_key}</p>
+<button id="copy-key" type="button" class="button--quiet" aria-describedby="copy-status" style="margin:0">Copy</button>
+</div>
+<p id="copy-status" class="hint" role="status" aria-live="polite"></p>
 <dl><dt>Balance</dt><dd>$${agent.balance_usd.toFixed(2)}</dd></dl>
-<a class="button" href="${next}">Continue to ${ok.client.n}</a>`,
+<a class="button" href="${next}">Continue to ${ok.client.n}</a>
+<script>${raw(COPY_KEY_SCRIPT)}</script>`,
         ) as Promise<HtmlEscapedString>,
         200,
-        headers(),
+        headers(undefined, true),
       );
     }
     const key = (form.api_key ?? "").trim();
