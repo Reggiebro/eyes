@@ -414,3 +414,40 @@ describe.skipIf(!url)("test flags on Postgres (migration 030)", () => {
     expect(pins.map((p) => p.id)).not.toContain(realTask?.id);
   });
 });
+
+describe.skipIf(!url)("ops invites on Postgres (migration 031)", () => {
+  const sql = postgres(url ?? "", { onnotice: () => {} });
+  const rpc = createRpc({ kind: "postgres", url: url ?? "" });
+  const value = `invite-${randomUUID().slice(0, 8)}@eyes.test`;
+  afterAll(async () => {
+    await sql`delete from ops_allowlist where value = ${value}`;
+    await sql.end();
+  });
+
+  it("takes 3 invites a day per entry, starts over the next UTC day, and records the last outcome", async () => {
+    await migrate(url ?? "");
+    const [entry] = await rpc<{ id: string }>("eyes_ops_allowlist_add", {
+      p_kind: "email",
+      p_value: value,
+      p_added_by: "test",
+    });
+    const take = (at: string) =>
+      rpc<{ invites_today: number }>("eyes_ops_invite_take", { p_id: entry?.id, p_now: at });
+    const day = "2026-10-18T10:00:00Z";
+    expect((await take(day)).map((r) => r.invites_today)).toEqual([1]);
+    await take(day);
+    expect((await take(day)).map((r) => r.invites_today)).toEqual([3]);
+    expect(await take(day)).toEqual([]);
+    expect((await take("2026-10-19T00:30:00Z")).map((r) => r.invites_today)).toEqual([1]);
+    const [row] = await rpc<{ invite_status: string; invite_at: string }>("eyes_ops_invite_record", {
+      p_id: entry?.id,
+      p_status: "copy",
+      p_now: day,
+    });
+    expect([row?.invite_status, new Date(row?.invite_at ?? "").toISOString()]).toEqual([
+      "copy",
+      "2026-10-18T10:00:00.000Z",
+    ]);
+    expect(await rpc("eyes_ops_invite_take", { p_id: randomUUID(), p_now: day })).toEqual([]);
+  });
+});

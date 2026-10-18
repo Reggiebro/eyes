@@ -2156,7 +2156,8 @@ describe("ops access tab", () => {
     ]);
     expect(rows()).toHaveLength(3);
 
-    const removeOf = (i: number) => rows()[i]?.querySelector("button") as HTMLButtonElement;
+    const removeOf = (i: number) =>
+      rows()[i]?.querySelector('button[aria-label^="Remove"]') as HTMLButtonElement;
     expect(removeOf(1).getAttribute("aria-label")).toBe("Remove ***@example.com");
     removeOf(1).click();
     expect(rows()[1]?.querySelector(".is-confirming")?.textContent).toContain(
@@ -2185,6 +2186,94 @@ describe("ops access tab", () => {
     await page.settle();
     await page.settle();
     expect(rows().map((li) => li.querySelector("strong")?.textContent)).toEqual(["***0100", "***0123"]);
+  });
+
+  it("shows each invite's outcome, copies the link when email was refused, and resends up to the daily limit", async () => {
+    const base = { kind: "phone", added_by: "***0100", added_at: "2026-10-17T13:00:00Z", self: false };
+    let entries = [
+      {
+        ...base,
+        id: "a",
+        value: "***0123",
+        invite_status: "sent",
+        invite_at: new Date(Date.now() - 120_000).toISOString(),
+        invites_left: 2,
+      },
+      {
+        ...base,
+        id: "b",
+        kind: "email",
+        value: "***@example.org",
+        invite_status: "copy",
+        invite_at: null,
+        invites_left: 2,
+      },
+      { ...base, id: "c", value: "***0124", invite_status: "failed", invite_at: null, invites_left: 0 },
+      { ...base, id: "d", value: "***0125", invite_status: null, invite_at: null, invites_left: 3 },
+    ];
+    const replies: Response[] = [];
+    const page = await setup(
+      {
+        "GET /ops/allowlist": () => ok({ entries, login_url: "https://internal.eyes.test/login" }),
+        "POST /ops/allowlist/invite": () => replies.shift() ?? ok({}),
+        "POST /ops/allowlist": () => replies.shift() ?? ok({}),
+      },
+      { hash: "#access" },
+    );
+    const copied: string[] = [];
+    Object.defineProperty(page.win.navigator, "clipboard", {
+      value: { writeText: async (t: string) => void copied.push(t) },
+      configurable: true,
+    });
+    await page.settle();
+    const line = (i: number) => page.$("access-list").querySelectorAll(".access__invite")[i] as HTMLElement;
+    expect([0, 1, 2, 3].map((i) => line(i).textContent)).toEqual([
+      "Invite sent 2m ago Resend invite",
+      "Couldn't email them: send them this link yourself Copy link Resend invite",
+      "Invite failed Resend invite",
+      "No invite sent Resend invite",
+    ]);
+    const button = (i: number, label: string) =>
+      [...line(i).querySelectorAll("button")].find((b) => b.textContent === label) as HTMLButtonElement;
+    expect([button(2, "Resend invite").disabled, button(2, "Resend invite").title]).toEqual([
+      true,
+      "3 invites a day; try tomorrow",
+    ]);
+    button(1, "Copy link").click();
+    await page.settle();
+    expect(copied).toEqual(["https://internal.eyes.test/login"]);
+    replies.push(
+      ok({ error: "rate_limited", message: "Already 3 invites today for this entry. Try tomorrow." }, 429),
+    );
+    button(0, "Resend invite").click();
+    await page.settle();
+    await page.settle();
+    expect(button(0, "Resend invite").disabled).toBe(false);
+    for (const status of ["sent", "copy", "failed"]) {
+      entries = entries.map((e) => (e.id === "d" ? { ...e, invite_status: status } : e));
+      replies.push(ok({ entry: { ...entries[3], invite_status: status } }));
+      button(3, "Resend invite").click();
+      await page.settle();
+      await page.settle();
+    }
+    expect(line(3).textContent).toBe("Invite failed Resend invite");
+    // Adding someone says how their invite went.
+    const input = page.$<HTMLInputElement>("access-identifier");
+    for (const status of ["sent", "copy", "failed"]) {
+      replies.push(ok({ entry: { ...entries[0], invite_status: status } }));
+      input.value = "+14155550126";
+      page
+        .$("access-add")
+        .dispatchEvent(new page.happy.Event("submit", { cancelable: true }) as unknown as Event);
+      await page.settle();
+      await page.settle();
+    }
+    expect(page.requests.filter((r) => r.path === "/ops/allowlist/invite").map((r) => r.body)).toEqual([
+      { id: "a" },
+      { id: "d" },
+      { id: "d" },
+      { id: "d" },
+    ]);
   });
 
   it("says when the list cannot load, and when it is empty", async () => {

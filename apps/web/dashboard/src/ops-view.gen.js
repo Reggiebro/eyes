@@ -3041,7 +3041,57 @@ function boot(win           ) {
                      
                      
                    
+                                                      
+                              
+                          
     
+  let loginUrl = "";
+  const INVITE_TEXT = { sent: "Invite sent", failed: "Invite failed", copy: "" };
+  // The invite line under a row: what happened last, a copy button when email was refused, and Resend.
+  function inviteLine(e             ) {
+    const line = h("span", "access__invite tiny");
+    if (e.invite_status === "copy") {
+      const copy = h("button", "ui-button ui-button--ghost ui-button--sm", "Copy link");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        await win.navigator.clipboard?.writeText(loginUrl);
+        toast("Sign-in link copied");
+      });
+      line.append(h("span", "access__warn", "Couldn't email them: send them this link yourself"), " ", copy);
+    } else if (e.invite_status)
+      line.append(
+        h(
+          "span",
+          e.invite_status === "failed" ? "access__warn" : null,
+          `${INVITE_TEXT[e.invite_status]}${e.invite_at ? ` ${ago(e.invite_at, Date.now())} ago` : ""}`,
+        ),
+      );
+    else line.append(h("span", null, "No invite sent"));
+    const resend = h("button", "ui-button ui-button--ghost ui-button--sm", "Resend invite");
+    resend.type = "button";
+    resend.disabled = e.invites_left === 0;
+    if (resend.disabled) resend.title = "3 invites a day; try tomorrow";
+    resend.addEventListener("click", async () => {
+      resend.disabled = true;
+      const res = await post("/allowlist/invite", { id: e.id });
+      const body = await json                                 (res);
+      if (!res.ok || !body.entry) {
+        resend.disabled = false;
+        toast(`Not sent: ${body.message ?? res.status}`);
+        return;
+      }
+      toast(
+        body.entry.invite_status === "sent"
+          ? "Invite sent"
+          : body.entry.invite_status === "copy"
+            ? "Couldn't email them: copy the link"
+            : "Invite failed",
+      );
+      await loadAccess();
+    });
+    line.append(" ", resend);
+    return line;
+  }
   const post = (path        , body        ) =>
     fetch(path, {
       method: "POST",
@@ -3062,6 +3112,7 @@ function boot(win           ) {
         h("span", "tiny", ` added by ${e.added_by} on ${e.added_at.slice(0, 10)}`),
       ),
     );
+    if (!e.self) li.append(inviteLine(e));
     if (e.self) {
       li.append(h("span", "tiny muted", "You cannot remove yourself"));
       return li;
@@ -3108,7 +3159,8 @@ function boot(win           ) {
   }
   async function loadAccess() {
     const res = await fetch("/allowlist", { cache: "no-store", headers: { accept: "application/json" } });
-    const body = await json                                     (res);
+    const body = await json                                                         (res);
+    loginUrl = body.login_url ?? loginUrl;
     const list = $("access-list");
     if (!res.ok || !body.entries) {
       list.replaceChildren(empty(`Could not load the list: ${body.message ?? res.status}`));
@@ -3121,7 +3173,7 @@ function boot(win           ) {
     const input = $                  ("access-identifier");
     const error = $("access-error");
     const res = await post("/allowlist", { identifier: input.value });
-    const body = await json       (res);
+    const body = await json                                 (res);
     if (!res.ok) {
       error.textContent = body.message ?? `Failed: ${res.status}`;
       input.setAttribute("aria-invalid", "true");
@@ -3130,7 +3182,14 @@ function boot(win           ) {
     error.textContent = "";
     input.removeAttribute("aria-invalid");
     input.value = "";
-    toast("Added. They can sign in with a code now.");
+    const sent = body.entry?.invite_status;
+    toast(
+      sent === "sent"
+        ? "Added and invited. They sign in with a code."
+        : sent === "copy"
+          ? "Added. Couldn't email them: copy the link from their row."
+          : "Added. The invite did not go out: resend it from their row.",
+    );
     await loadAccess();
   });
 

@@ -11,7 +11,17 @@ const PHONE = "+15555550100";
 const EMAIL = "ops@example.com";
 const TASK_ID = "3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b";
 const OPS_KEY = "ops-5f2c9a1e7b3d4c8a9e0f1a2b3c4d5e6f";
-type Entry = { id: string; kind: string; value: string; added_by: string; added_at: string };
+type Entry = {
+  id: string;
+  kind: string;
+  value: string;
+  added_by: string;
+  added_at: string;
+  invite_status?: string | null;
+  invite_at?: string | null;
+  invite_day?: string | null;
+  invites_today?: number;
+};
 type Code = { identifier: string; code_hash: string; expires_at: string; attempts: number };
 type Args = Record<string, string>;
 
@@ -62,6 +72,21 @@ function setup(values = [PHONE, EMAIL], env: Record<string, string> = { EYES_OPS
     }
     if (fn === "eyes_ops_code_delete") return codes.delete(a.p_identifier ?? "") ? [] : [];
     if (fn === "eyes_dashboard_feed") return [{ tasks: [], ledger: [], workers: [], totals: {} }];
+    // 031: 3 invites per entry per UTC day.
+    if (fn === "eyes_ops_invite_take") {
+      const e = allowlist.find((x) => x.id === a.p_id);
+      const day = (a.p_now ?? "").slice(0, 10);
+      if (!e || (e.invite_day === day && (e.invites_today ?? 0) >= 3)) return [];
+      e.invites_today = e.invite_day === day ? (e.invites_today ?? 0) + 1 : 1;
+      e.invite_day = day;
+      return [{ ...e }];
+    }
+    if (fn === "eyes_ops_invite_record") {
+      const e = allowlist.find((x) => x.id === a.p_id);
+      if (!e) return [];
+      Object.assign(e, { invite_status: a.p_status, invite_at: a.p_now });
+      return [{ ...e }];
+    }
     throw new Error(`unexpected rpc ${fn}`);
   }) as Rpc;
   const providers = fakeProviders();
@@ -238,6 +263,68 @@ describe("ops allowlist", () => {
       ["+14155550123", "***0100"],
       ["ops@eyes.pictures", "***0100"],
     ]);
+  });
+
+  it("invites who is added: a sign-in link by text or email, never a code; refused emails become a copy link", async () => {
+    const { fetch, post, signIn, providers, events, allowlist } = setup();
+    const cookie = await signIn();
+    const add = async (identifier: string) =>
+      (await (await post("/ops/allowlist", { identifier }, { cookie })).json()).entry;
+    const phone = await add("+14155550123");
+    expect(phone).toMatchObject({ value: "***0123", invite_status: "sent", invites_left: 2, self: false });
+    const text = providers.messaging.outbox.at(-1);
+    expect([text?.to, text?.payload]).toEqual([
+      "+14155550123",
+      "You've been added to Eyes ops. Sign in: http://internal.eyes.test/login",
+    ]);
+    expect(String(text?.payload)).not.toMatch(/\b\d{6}\b/);
+    const email = await add("new@eyes.pictures");
+    expect(email.invite_status).toBe("sent");
+    expect(providers.email.outbox.at(-1)).toMatchObject({
+      to: "new@eyes.pictures",
+      subject: "You've been added to Eyes ops",
+    });
+
+    // Primitive refuses people who never emailed us (403 recipient_not_allowed, or a gate_denied send).
+    const refuse = (err: Error) => vi.spyOn(providers.email, "send").mockRejectedValueOnce(err);
+    refuse(
+      Object.assign(new Error("recipient not allowed"), { status: 403, gates: [{ name: "known_address" }] }),
+    );
+    expect((await add("stranger@example.org")).invite_status).toBe("copy");
+    refuse(new Error("Primitive send gate_denied (request r1)"));
+    expect((await add("other@example.org")).invite_status).toBe("copy");
+    refuse(new Error("socket hang up"));
+    expect((await add("third@example.org")).invite_status).toBe("failed");
+    vi.spyOn(providers.messaging, "sendText").mockRejectedValueOnce(new Error("inkbox down"));
+    expect((await add("+14155550124")).invite_status).toBe("failed");
+
+    const list = await (await fetch("/ops/allowlist", { headers: { cookie } })).json();
+    expect(list.login_url).toBe("http://internal.eyes.test/login");
+    expect(list.entries.map((e: { invite_status: string | null }) => e.invite_status ?? null)).toEqual([
+      null,
+      null,
+      "sent",
+      "sent",
+      "copy",
+      "copy",
+      "failed",
+      "failed",
+    ]);
+    // Resend: up to 3 a day per entry, then 429; an unknown entry is a 400.
+    const id = allowlist.find((e) => e.value === "+14155550123")?.id;
+    const resend = () => post("/ops/allowlist/invite", { id }, { cookie });
+    expect((await (await resend()).json()).entry.invites_left).toBe(1);
+    expect((await (await resend()).json()).entry.invites_left).toBe(0);
+    const limited = await resend();
+    expect([limited.status, (await limited.json()).error]).toEqual([429, "rate_limited"]);
+    expect((await post("/ops/allowlist/invite", { id: "nope" }, { cookie })).status).toBe(400);
+    expect(
+      events
+        .recent()
+        .filter((e) => e.summary.startsWith("ops invite"))
+        .map((e) => [e.summary, e.level]),
+    ).toContainEqual(["ops invite failed", "warn"]);
+    expect(JSON.stringify(events.recent())).not.toContain("+14155550123");
   });
 
   it("removes another entry but never yourself or the last one", async () => {
