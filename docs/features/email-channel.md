@@ -22,6 +22,8 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 4. Refresh your setup page at `/me`. The Email row shows your address (masked); it has text instructions, not an Add email button or provider chooser.
 5. Later, sign in at https://app.eyes.pictures/login: enter that email, tap "Email me a sign-in link", and open the link within 15 minutes.
 
+Send from an address your mail provider verifies; custom aliases need SPF/DKIM.
+
 To change the email, text EMAIL in the same iMessage thread and send the prepared message from the new address. Remove on `/me` stops email right away; texts keep coming.
 
 ## Where in the code
