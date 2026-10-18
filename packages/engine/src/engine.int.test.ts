@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from "node:crypto";
+import { createHmac, randomInt, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   type Agent,
@@ -27,6 +27,7 @@ import {
 import { migrate } from "@eyes/db";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { inkboxRoutes } from "../../comms/src/inkbox.ts";
 import { verifySubmission } from "../../verify/src/index.ts";
 import { createEyesService } from "./index.ts";
 
@@ -150,6 +151,85 @@ describe.skipIf(!url)("engine on Postgres", () => {
     } finally {
       send.mockRestore();
       error.mockRestore();
+    }
+  });
+
+  it("two signed YES webhooks from distinct workers send one committed-owner capture link", async () => {
+    const at = somewhere();
+    const racers = [await worker(north(at, 100)), await worker(north(at, 200))];
+    const asked = await ask(await agent(), at);
+    const signingKey = "test-claim-race-signing-key";
+    const sent = outbox.length;
+    const deliver = providers.messaging.sendCaptureLink;
+    const send = vi.spyOn(providers.messaging, "sendCaptureLink").mockImplementation(async (to, msg) => {
+      const target = racers.find((w) => w.phone === to);
+      expect(target).toBeDefined();
+      expect(msg.task_id).toBe(asked.task_id);
+      const [task] = await sql`select status, claimed_by from tasks where id = ${msg.task_id}`;
+      expect(task).toMatchObject({ status: "claimed", claimed_by: target?.worker_id });
+      return deliver(to, msg);
+    });
+    let requests: Promise<Response>[] = [];
+    try {
+      await sql.begin(async (tx) => {
+        await tx`select id from tasks where id = ${asked.task_id} for update`;
+        requests = racers.map(async ({ phone }) => {
+          const app = inkboxRoutes(
+            { service: createEyesService(deps), providers, config: deps.config },
+            { INKBOX_WEBHOOK_SIGNING_KEY: signingKey },
+          );
+          const body = JSON.stringify({
+            event_type: "text.received",
+            data: { text_message: { id: randomUUID(), remote_phone_number: phone, text: "YES" } },
+          });
+          const id = randomUUID();
+          const timestamp = String(Math.floor(providers.clock.now().getTime() / 1000));
+          const signature = createHmac("sha256", signingKey)
+            .update(`${id}.${timestamp}.${body}`)
+            .digest("hex");
+          return app.request("/", {
+            method: "POST",
+            body,
+            headers: {
+              "content-type": "application/json",
+              "x-inkbox-request-id": id,
+              "x-inkbox-timestamp": timestamp,
+              "x-inkbox-signature": `sha256=${signature}`,
+            },
+          });
+        });
+        const deadline = Date.now() + 3_000;
+        let waiting = await claimsWaitingOnLock();
+        while (waiting < 2 && Date.now() < deadline) {
+          await sleep(10);
+          waiting = await claimsWaitingOnLock();
+        }
+        expect(waiting).toBe(2);
+        expect(send).not.toHaveBeenCalled();
+        expect(
+          outbox.slice(sent).filter((m) => m.kind === "capture_link" || m.kind === "already_claimed"),
+        ).toEqual([]);
+      });
+      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([200, 200]);
+      expect(send).toHaveBeenCalledTimes(1);
+      const links = outbox.slice(sent).filter((m) => m.kind === "capture_link");
+      const losers = outbox.slice(sent).filter((m) => m.kind === "already_claimed");
+      expect(links).toHaveLength(1);
+      expect(losers).toHaveLength(1);
+      const link = links[0];
+      const winner = racers.find((w) => w.phone === link?.to);
+      if (!link || !winner) throw new Error("no winner");
+      expect(losers[0]?.to).toBe(racers.find((w) => w.phone !== winner.phone)?.phone);
+      const [task] = await sql`select status, claimed_by from tasks where id = ${asked.task_id}`;
+      expect(task).toMatchObject({ status: "claimed", claimed_by: winner.worker_id });
+      const token = new URL(String(link.payload.capture_url)).searchParams.get("t") ?? "";
+      expect(await service.getOffer(token)).toMatchObject({
+        task_id: asked.task_id,
+        claimed_by_you: true,
+      });
+    } finally {
+      await Promise.allSettled(requests);
+      send.mockRestore();
     }
   });
 
