@@ -59,6 +59,8 @@ export type OutboundEmail = {
   in_reply_to?: string;
   references?: string[];
   attachments?: EmailAttachment[];
+  /** Where replies go, e.g. the Primitive inbound address while another provider sends. */
+  reply_to?: string;
 };
 
 export interface Email {
@@ -82,7 +84,12 @@ export interface Payments {
     success_url: string;
     cancel_url: string;
   }): Promise<{ url: string; session_id: string }>;
-  createWorkerAccount(i: { worker_id: string; phone: string; name: string }): Promise<{ account_id: string }>;
+  createWorkerAccount(i: {
+    worker_id: string;
+    phone: string;
+    email: string | null;
+    name: string;
+  }): Promise<{ account_id: string }>;
   createOnboardingLink(i: {
     account_id: string;
     refresh_url: string;

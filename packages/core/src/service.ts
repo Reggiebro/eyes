@@ -104,7 +104,10 @@ export interface EyesService {
   joinWorker(input: JoinWorkerInput): Promise<JoinWorkerOutput>;
   workerConnectUrl(token: string): Promise<string>;
   markWorkerOnboarded(account_id: string): Promise<void>;
-  handleWorkerReply(input: { phone: string; intent: ReplyIntent; text: string }): Promise<void>;
+  /** `phone` for iMessage, `email` for an authenticated (DMARC-passing) email. */
+  handleWorkerReply(
+    input: ({ phone: string } | { email: string }) & { intent: ReplyIntent; text: string },
+  ): Promise<void>;
   /** token: the worker's "e:" token, the /me page's code (ADR-028). Throws unauthorized. */
   workerSetup(token: string): Promise<WorkerSetup>;
   /** token: as workerSetup. One page of the worker's tasks, newest first, and the totals. Throws unauthorized. */

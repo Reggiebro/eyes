@@ -231,6 +231,83 @@ describe.skipIf(!url)("engine on Postgres", () => {
     });
   });
 
+  it("email is an extra channel on a phone account: unverified gets no offers, an authenticated email verifies it but only a text turns tasks on, offers reach both channels, YES by email answers by email, STOP drops login codes", async () => {
+    const at = somewhere();
+    const email = `w${randomInt(1e9)}@workers.test`;
+    const phone = newPhone();
+    const joined = await service.joinWorker({
+      name: "Mail Worker",
+      phone,
+      email: email.toUpperCase(),
+      ...north(at, 100),
+    });
+    expect(joined.opt_in_instructions).toContain(
+      `saying START from ${email} to work@brave-otter.primitive.email`,
+    );
+    const [row] =
+      await sql`select id, email, email_verified_at, opted_in from workers where phone = ${phone}`;
+    expect(row).toMatchObject({ email, email_verified_at: null, opted_in: false });
+
+    const other = newPhone();
+    await service.joinWorker({ name: "Squatter", phone, email: "x@workers.test", ...at });
+    await service.joinWorker({ name: "Second", phone: other, email, ...at });
+    expect(await sql`select email from workers where phone in (${phone}, ${other}) order by email`).toEqual([
+      { email },
+      { email: null },
+    ]);
+
+    await service.handleWorkerReply({ email, intent: "start", text: "START" });
+    expect(outbox.at(-1)).toMatchObject({
+      to: email,
+      payload: expect.stringContaining("from your phone first"),
+    });
+    const [unconfirmed] = await sql`select opted_in, email_verified_at from workers where phone = ${phone}`;
+    expect(unconfirmed).toMatchObject({ opted_in: false, email_verified_at: null });
+    expect(providers.email.outbox.filter((m) => m.to === email)).toEqual([]);
+
+    await service.handleWorkerReply({
+      email: `u${randomInt(1e9)}@workers.test`,
+      intent: "start",
+      text: "START",
+    });
+    expect(String(outbox.at(-1)?.payload)).toContain(
+      "join with your phone number at https://w.eyes.test first",
+    );
+
+    await service.handleWorkerReply({ phone, intent: "start", text: "START" });
+    expect(String(outbox.at(-1)?.payload)).toContain(`confirmation link to w…@workers.test. Not yours?`);
+    const link = providers.email.outbox.findLast((m) => m.to === email);
+    expect(link).toMatchObject({
+      reply_to: "work@brave-otter.primitive.email",
+      text: expect.stringContaining("https://w.eyes.test/login#c="),
+    });
+    await service.handleWorkerReply({ email, intent: "help", text: "HELP" });
+    const [confirmed] = await sql`select email_verified_at from workers where phone = ${phone}`;
+    expect(confirmed?.email_verified_at).not.toBeNull();
+
+    const later = await worker(north(at, 200));
+    const laterEmail = `b${randomInt(1e9)}@workers.test`;
+    await sql`select eyes_set_worker_email(${later.worker_id}, ${laterEmail})`;
+    const asked = await ask(await agent(), at);
+    const sent = outbox
+      .filter((m) => m.kind === "offer" && m.payload.task_id === asked.task_id)
+      .map((m) => m.to);
+    expect(sent.sort()).toEqual([phone, email, later.phone].sort());
+    expect(asked.workers_notified).toBe(2);
+
+    await service.handleWorkerReply({ email, intent: "yes", text: "yes" });
+    expect(outbox.at(-1)).toMatchObject({ to: email, kind: "capture_link" });
+
+    await sql`select eyes_issue_worker_code(${email.toUpperCase()}, ${`h${email}`}, now() + interval '15 minutes')`;
+    await service.handleWorkerReply({ email, intent: "stop", text: "STOP" });
+    expect(await sql`select 1 from worker_login_codes where email = ${email}`).toHaveLength(0);
+    const [stopped] = await sql`select opted_in, lat from workers where phone = ${phone}`;
+    expect(stopped).toMatchObject({ opted_in: false, lat: null });
+    expect(await sql`select email, email_verified_at from eyes_set_worker_email(${row?.id}, null)`).toEqual([
+      { email: null, email_verified_at: null },
+    ]);
+  });
+
   it("never lets a repeat join rewrite an existing worker or tell the caller it exists, even after STOP, and sends the payout link only by text after START", async () => {
     const at = somewhere();
     const phone = newPhone();

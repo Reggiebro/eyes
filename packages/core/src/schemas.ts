@@ -57,6 +57,8 @@ export type Agent = z.infer<typeof Agent>;
 export const Worker = z.object({
   id: Id,
   phone: Phone,
+  email: z.string().nullable().optional(),
+  email_verified_at: Timestamp.nullable().optional(),
   name: z.string(),
   stripe_account_id: z.string().nullable(),
   lat: z.number().nullable(),
@@ -415,6 +417,7 @@ export const JoinWorkerInput = z
   .object({
     name: z.string().min(2).max(80),
     phone: Phone,
+    email: z.email().max(254).toLowerCase().optional(),
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
   })
