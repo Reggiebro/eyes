@@ -269,3 +269,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge "$PR_URL" --auto --merge
+
+  docs-automerge-disable:
+    # A code PR must not stay armed for auto-merge from an earlier docs-only push.
+    needs: [scope]
+    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge if this PR is not docs-only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if gh pr merge "$PR_URL" --disable-auto; then exit 0; fi
+          # The disable failed. That is fine only if auto-merge was never enabled on this PR.
+          if [ -z "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest // empty')" ]; then
+            echo "auto-merge was not enabled; nothing to disable"
+            exit 0
+          fi
+          exit 1
