@@ -59,6 +59,8 @@ export const Worker = z.object({
   phone: Phone,
   email: z.string().nullable().optional(),
   email_verified_at: Timestamp.nullable().optional(),
+  email_skipped: z.boolean().optional(),
+  app_connected: z.boolean().optional(),
   name: z.string(),
   stripe_account_id: z.string().nullable(),
   lat: z.number().nullable(),
@@ -560,12 +562,13 @@ export const WorkerTasksQuery = z.object({
 export const WorkerSetup = z.object({
   opted_in: z.boolean(),
   spot: z.object({ at: Timestamp.nullable(), fresh: z.boolean(), max_age_h: z.number() }),
-  app: z.object({ last_at: Timestamp.nullable(), sending: z.boolean() }),
+  app: z.object({ connected: z.boolean(), last_at: Timestamp.nullable(), sending: z.boolean() }),
   payouts: z.object({ set_up: z.boolean(), live: z.boolean(), setup_url: z.string().nullable() }),
   here_url: z.string(),
   /** j…@example.com; the full address is never returned. */
   email_masked: z.string().nullable(),
   email_status: z.enum(["none", "pending", "verified"]),
+  email_skipped: z.boolean(),
 });
 
 export const CaptureResult = z.object({
@@ -618,6 +621,7 @@ export const HTTP_ROUTES = {
   worker_me: "GET /w/me",
   worker_me_tasks: "GET /w/me/tasks",
   worker_me_install: "POST /w/me/install",
+  worker_me_email_skip: "POST /w/me/email/skip",
   offer_view: "GET /w/offers/:token",
   offer_capture: "POST /w/offers/:token/capture",
   worker_device: "POST /w/device",

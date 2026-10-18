@@ -745,7 +745,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect(WorkerSetup.parse(await service.workerSetup(token))).toEqual({
         opted_in: true,
         spot: { at: joined?.created_at.toISOString(), fresh: true, max_age_h: 24 },
-        app: { last_at: null, sending: false },
+        app: { connected: false, last_at: null, sending: false },
         payouts: {
           set_up: false,
           live: true,
@@ -754,6 +754,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         here_url: expect.stringMatching(/^https:\/\/w\.eyes\.test\/here\.html\?t=[\w-]+\.[\w-]+$/),
         email_masked: null,
         email_status: "none",
+        email_skipped: false,
       });
 
       // Six claims from two agents (each stays within its $20 grant); the list has all of them, newest first.
@@ -851,15 +852,9 @@ describe.skipIf(!url)("engine on Postgres", () => {
           expect(await hub(intent)).toEqual([`You're all set. ${head}`, ...tail]);
         }
 
-        // The app's last fix is over 24 h old: the app step is back, alone and unnumbered.
+        // An old fix makes the spot stale, not the installed app.
         providers.clock.advance(24 * hour);
-        expect(await hub("help")).toEqual([
-          `You're in. ${head}`,
-          expect.stringMatching(
-            /^Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/,
-          ),
-          ...tail,
-        ]);
+        expect(await hub("help")).toEqual([`You're all set. ${head}`, ...tail]);
       } finally {
         providers.clock.set(start);
       }
