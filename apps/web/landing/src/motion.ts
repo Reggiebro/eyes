@@ -11,23 +11,23 @@ export type Clickable = {
 
 export type TextNode = { textContent: string | null };
 
-/** Shown after the connect command is copied. */
-export const COPIED_HINT = "Copied. Run it in the terminal where EYES_API_KEY is set.";
-
-/**
- * Copies the connect command when the copy button is clicked, then shows the hint. With no button there is
- * nothing to wire. With no connect element the empty string is copied. When the write fails the hint is
- * left as it was.
- */
+/** Clipboard feedback for the browser-based connection flow. */
+export const COPIED_HINT = "Copied. Paste this server URL into your app.";
 export function wireCopy(
   button: Clickable | null,
-  source: TextNode | null,
+  source: (TextNode & { value?: string; focus?: () => void; select?: () => void }) | null,
   hint: TextNode,
   write: (text: string) => Promise<void>,
 ): void {
   button?.addEventListener("click", async () => {
-    await write(source?.textContent ?? "");
-    hint.textContent = COPIED_HINT;
+    try {
+      await write(source?.value ?? source?.textContent ?? "");
+      hint.textContent = COPIED_HINT;
+    } catch {
+      source?.focus?.();
+      source?.select?.();
+      hint.textContent = "Copy unavailable. Select the server URL and copy it manually.";
+    }
   });
 }
 

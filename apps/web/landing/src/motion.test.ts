@@ -32,14 +32,14 @@ function fakeButton() {
 }
 
 describe("wireCopy", () => {
-  it("writes the connect command and then shows the hint", async () => {
+  it("copies only the server URL from a readonly input and shows the hint", async () => {
     const button = fakeButton();
     const hint = { textContent: "" };
     const write = vi.fn(async (_text: string) => {});
-    wireCopy(button, { textContent: "eyes connect --key k" }, hint, write);
+    wireCopy(button, { value: "https://mcp.eyes.pictures/mcp", textContent: "" }, hint, write);
     expect(button.addEventListener).toHaveBeenCalledWith("click", expect.any(Function));
     await button.click();
-    expect(write).toHaveBeenCalledWith("eyes connect --key k");
+    expect(write).toHaveBeenCalledWith("https://mcp.eyes.pictures/mcp");
     expect(hint.textContent).toBe(COPIED_HINT);
   });
 
@@ -69,15 +69,33 @@ describe("wireCopy", () => {
     expect(write).toHaveBeenCalledWith("");
   });
 
-  it("leaves the hint unchanged and rejects when the clipboard write fails", async () => {
+  it("selects the URL for manual copying when clipboard access fails", async () => {
     const button = fakeButton();
     const hint = { textContent: "before" };
+    const source = {
+      textContent: "",
+      value: "https://mcp.eyes.pictures/mcp",
+      focus: vi.fn(),
+      select: vi.fn(),
+    };
     const write = vi.fn(async (_text: string) => {
       throw new Error("clipboard denied");
     });
-    wireCopy(button, { textContent: "cmd" }, hint, write);
-    await expect(button.click()).rejects.toThrow("clipboard denied");
-    expect(hint.textContent).toBe("before");
+    wireCopy(button, source, hint, write);
+    await button.click();
+    expect(source.focus).toHaveBeenCalledOnce();
+    expect(source.select).toHaveBeenCalledOnce();
+    expect(hint.textContent).toBe("Copy unavailable. Select the server URL and copy it manually.");
+  });
+
+  it("reports clipboard failure even without a selectable source", async () => {
+    const button = fakeButton();
+    const hint = { textContent: "" };
+    wireCopy(button, null, hint, async () => {
+      throw new Error("clipboard unavailable");
+    });
+    await button.click();
+    expect(hint.textContent).toContain("copy it manually");
   });
 });
 
