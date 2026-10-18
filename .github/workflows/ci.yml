@@ -31,6 +31,7 @@ jobs:
       e2e_golden: ${{ steps.scope.outputs.e2e_golden }}
       web: ${{ steps.scope.outputs.web }}
       reason: ${{ steps.scope.outputs.reason }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,13 +45,25 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: origin/${{ github.base_ref }}
         run: |
+          docs_only=false
           if [ "$EVENT" = "pull_request" ]; then
             node scripts/ci-scope.ts "$BASE"
+            # Only root notes and Markdown under docs/ or intent/ are documentation.
+            # App Markdown can be executable (for example, Astro pages).
+            # --no-renames also checks the old path and mode of moved source files.
+            files=$(git diff --no-renames --name-only "$BASE...HEAD")
+            non_docs=$(printf '%s\n' "$files" | grep -Ev '^(LICENSE|[^/.][^/]*\.md|(docs|intent)/([^/.][^/]*/)*[^/.][^/]*\.md)$' || true)
+            modes=$(git diff --no-renames --raw "$BASE...HEAD")
+            unsafe_modes=$(printf '%s\n' "$modes" | grep -E '^:(100755|120000) |^:[0-9]{6} (100755|120000) ' || true)
+            if [ -n "$files" ] && [ -z "$non_docs" ] && [ -z "$unsafe_modes" ]; then docs_only=true; fi
           else
             node scripts/ci-scope.ts --full
           fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   lint:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +71,8 @@ jobs:
       - run: pnpm lint
 
   typecheck:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +81,7 @@ jobs:
 
   unit:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +97,7 @@ jobs:
 
   contract:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +113,7 @@ jobs:
 
   integration:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -128,7 +143,7 @@ jobs:
 
   coverage:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.coverage_mode == 'changed'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.coverage_mode == 'changed')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -163,7 +178,7 @@ jobs:
 
   e2e:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.e2e_worker == 'true' || needs.scope.outputs.e2e_golden == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.e2e_worker == 'true' || needs.scope.outputs.e2e_golden == 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -197,7 +212,7 @@ jobs:
 
   safety-rules:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -217,8 +232,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup
-      - run: pnpm intent:check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-intent.ts
         env:
           INTENT_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
 
@@ -234,9 +251,54 @@ jobs:
 
   build:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: pnpm build
+
+  docs-automerge:
+    # Auto-merge docs-only PRs once secrets-scan and intent pass. Same-repo, non-draft PRs only: forks and drafts cannot merge.
+    needs: [scope, secrets-scan, intent]
+    if: success() && needs.scope.outputs.docs_only == 'true' && github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          current=$(gh pr view "$PR_URL" --json headRefOid,isDraft,state --jq '[.headRefOid, .isDraft, .state] | @tsv')
+          if [ "$current" != "$(printf '%s\tfalse\tOPEN' "$TESTED_HEAD")" ]; then
+            echo "PR head or eligibility changed since this run; refusing auto-merge"
+            exit 1
+          fi
+          gh pr merge "$PR_URL" --auto --merge --match-head-commit "$TESTED_HEAD"
+
+  docs-automerge-disable:
+    # A code PR must not stay armed for auto-merge from an earlier docs-only push.
+    needs: [scope]
+    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge if this PR is not docs-only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if gh pr merge "$PR_URL" --disable-auto; then exit 0; fi
+          # A failed lookup must fail the job, not masquerade as an unarmed PR.
+          armed=$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          if [ "$armed" = "false" ]; then
+            echo "auto-merge was not enabled; nothing to disable"
+            exit 0
+          fi
+          exit 1

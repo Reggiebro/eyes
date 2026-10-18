@@ -11,7 +11,31 @@ permissions:
   id-token: write
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          docs_only=false
+          files=$(git diff --no-renames --name-only "$BASE...HEAD")
+          non_docs=$(printf '%s\n' "$files" | grep -Ev '^(LICENSE|[^/.][^/]*\.md|(docs|intent)/([^/.][^/]*/)*[^/.][^/]*\.md)$' || true)
+          modes=$(git diff --no-renames --raw "$BASE...HEAD")
+          unsafe_modes=$(printf '%s\n' "$modes" | grep -E '^:(100755|120000) |^:[0-9]{6} (100755|120000) ' || true)
+          if [ -n "$files" ] && [ -z "$non_docs" ] && [ -z "$unsafe_modes" ]; then docs_only=true; fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   review:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
