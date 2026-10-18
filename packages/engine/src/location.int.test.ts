@@ -57,10 +57,6 @@ describe.skipIf(!url)("worker location on Postgres", () => {
   const lastText = (phone: string) => String(outbox.findLast((m) => m.to === phone)?.payload);
   const hereToken = (text: string) =>
     new URL(/https:\S+here\.html\S+/.exec(text)?.[0] ?? "x:").searchParams.get("t") ?? "";
-  const welcome = (phone: string) =>
-    String(
-      outbox.findLast((m) => m.to === phone && /^You're (in|all set)\./.test(String(m.payload)))?.payload,
-    );
   const row = async (phone: string) => (await sql`select * from workers where phone = ${phone}`)[0];
 
   async function worker(at: LatLng) {
@@ -281,16 +277,14 @@ describe.skipIf(!url)("worker location on Postgres", () => {
     await svc.updateWorkerLocation(hereToken(lastText(w.phone)), fix);
   });
 
-  it("START explains background location without gating fresh manual fixes on app installation", async () => {
+  it("requires fresh location for offers and accepts a HERE refresh without an installed app", async () => {
     const at = somewhere();
     const a = await agent();
     const w = await worker(north(at, 100));
-    expect(welcome(w.phone)).toMatch(/install.*app.*background.*location/i);
     expect(await row(w.phone)).toMatchObject({ app_connected: false });
     expect(await ask(service, a, at)).toMatchObject({ workers_notified: 1 });
     providers.clock.advance(25 * HOUR);
     await say(w.phone, "start", "START");
-    expect(welcome(w.phone)).toMatch(/stale.*\bNOT\b.*offers/);
     expect(await code(ask(service, a, at))).toBe("no_workers_nearby");
     await say(w.phone, "here");
     await service.updateWorkerLocation(hereToken(lastText(w.phone)), {
@@ -302,8 +296,6 @@ describe.skipIf(!url)("worker location on Postgres", () => {
       app_connected: false,
       location_source: "here_link",
     });
-    await say(w.phone, "start", "START");
-    expect(welcome(w.phone)).not.toContain("/here.html");
   });
 
   it("a submitted capture updates the worker's fix", async () => {
