@@ -113,3 +113,13 @@ curl -s -X POST https://api.eyes.pictures/v1/tasks \
 7. Send the next email thread (skip while email is simulated) with a new subject.
 8. Dashboard needs nothing; reload the tab if the map drifted.
 9. Note pass or fail and what broke. Three passes in a row is G3.
+
+## ChatGPT: Eyes connected
+
+Recorded segment: `~/tmp/eyes-video/chatgpt-connected.mp4` (39.4 seconds, H.264, 1440×900, 30 fps). Use this standalone connection-and-quote segment before the paid dispatch demonstration; it is not a recording of a completed field check.
+
+1. ChatGPT's Eyes settings show a connected account using OAuth at `https://api.eyes.pictures/mcp`. The public URL forwards through Cloudflare to the Manufact-hosted server.
+2. The actual `quote_task` card shows the San Francisco Ferry Building, `is_open`, zero nearby workers, and a $3.00 bounty plus $0.50 fee. Open status is not verified.
+3. The actual `get_balance` card shows $20.00 available and $0.00 escrowed. No `ask_eyes` call, worker text, or paid dispatch was made.
+
+Stills: `~/tmp/eyes-video/connector.png`, `~/tmp/eyes-video/quote.png`, and `~/tmp/eyes-video/balance.png`. The video uses the real ChatGPT tab captured through CDP, with loading time removed and no fabricated cards or overlays. No combined demo render was produced.
