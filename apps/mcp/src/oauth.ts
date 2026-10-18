@@ -15,8 +15,8 @@ const CODE_TTL_MS = 5 * 60 * 1000;
 const CSRF_COOKIE = "eyes_oauth_csrf";
 
 export interface OAuthDeps {
-  /** Public origin, e.g. https://api.eyes.pictures; the issuer and the base of every endpoint. */
-  base: string;
+  /** Public issuer for this connector; the API host remains valid during staging. */
+  base: string | ((c: Context) => string);
   /** EYES_OAUTH_SECRET, at least 32 characters. */
   secret: string;
   /** True when the key belongs to an agent. */
@@ -72,17 +72,17 @@ const same = (a: string, b: string) =>
   a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
-  const { base, layout } = deps;
+  const { layout } = deps;
+  const baseFor = (c: Context) => (typeof deps.base === "string" ? deps.base : deps.base(c));
   const box = sealer(deps.secret);
-  const resource = `${base}/mcp`;
-  const protectedResource = {
-    resource,
+  const protectedResource = (base: string) => ({
+    resource: `${base}/mcp`,
     authorization_servers: [base],
     bearer_methods_supported: ["header"],
     resource_name: "Eyes",
     resource_documentation: "https://eyes.pictures",
-  };
-  const metadata = {
+  });
+  const metadata = (base: string) => ({
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/oauth/token`,
@@ -92,14 +92,14 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     authorization_response_iss_parameter_supported: true,
-  };
+  });
   for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"])
-    app.get(path, (c) => c.json(protectedResource));
+    app.get(path, (c) => c.json(protectedResource(baseFor(c))));
   for (const path of [
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-authorization-server/mcp",
   ])
-    app.get(path, (c) => c.json(metadata));
+    app.get(path, (c) => c.json(metadata(baseFor(c))));
 
   app.post("/oauth/register", async (c) => {
     const body = await c.req.json().catch(() => null);
@@ -144,7 +144,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       return { error: "The app must use the authorization code flow with PKCE (S256)." };
     return { client, redirect: q.redirect_uri, challenge: q.code_challenge as string };
   };
-  const finish = (q: Record<string, string | undefined>, key: string, challenge: string) => {
+  const finish = (c: Context, q: Record<string, string | undefined>, key: string, challenge: string) => {
     const code = box.seal({
       t: "code",
       k: key,
@@ -156,7 +156,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
     const url = new URL(q.redirect_uri as string);
     url.searchParams.set("code", code);
     if (q.state) url.searchParams.set("state", q.state);
-    url.searchParams.set("iss", base);
+    url.searchParams.set("iss", baseFor(c));
     return url.href;
   };
   const headers = (redirect?: string) => ({
@@ -187,7 +187,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       setCookie(c, CSRF_COOKIE, csrf, {
         path: "/oauth",
         httpOnly: true,
-        secure: base.startsWith("https:"),
+        secure: baseFor(c).startsWith("https:"),
         sameSite: "Lax",
         maxAge: 3600,
       });
@@ -256,7 +256,7 @@ ${hidden}<input type="hidden" name="action" value="create">
           return { error: body?.fix ?? body?.message ?? "Could not create a key. Try again later." };
         });
       if ("error" in agent) return page(c, form, ok.client.n, ok.redirect, agent.error);
-      const next = finish(form, agent.api_key, ok.challenge);
+      const next = finish(c, form, agent.api_key, ok.challenge);
       return c.html(
         layout(
           "Your Eyes key",
@@ -279,7 +279,7 @@ ${hidden}<input type="hidden" name="action" value="create">
         ok.redirect,
         "That key is not valid. Check it, or create a new one below.",
       );
-    return c.redirect(finish(form, key, ok.challenge), 302);
+    return c.redirect(finish(c, form, key, ok.challenge), 302);
   });
 
   app.post("/oauth/token", async (c) => {
