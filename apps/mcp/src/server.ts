@@ -1056,6 +1056,15 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     throttle(c, c.req.path, `code ${createHash("sha256").update(token).digest("hex")}`);
     return c.json(await service.workerSetEmail(token, email));
   });
+  // Optional email acknowledgement; no address, verification or delivery side effects.
+  server.post("/w/me/email/skip", async (c) => {
+    c.header("Cache-Control", "no-store");
+    const origin = c.req.header("origin");
+    if (origin && origin !== new URL(config.worker_web_url).origin) throw new EyesError("unauthorized");
+    const token = /^Bearer\s+(\S+)\s*$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+    parse(z.object({}).strict(), await readJson(c));
+    return c.json(await service.workerSkipEmail(token));
+  });
   // The worker emails first (T6.51): a one-time mailto to work@ whose email connects the sender,
   // verified. 5 an hour per code, shared with /w/me/email.
   server.post("/w/me/email/start", async (c) => {

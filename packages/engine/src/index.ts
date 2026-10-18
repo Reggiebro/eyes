@@ -177,7 +177,6 @@ const START_FIRST = {
   message: "Text START to the Eyes number first.",
   fix: "Text START from your phone, then add the email again.",
 };
-const APP_SENDING_MS = 24 * HOUR_MS; // the app sent a fix this recently: no "Get the app" step
 const PING_MAX = 5;
 const PING_WAIT_MS = 30_000;
 const PING_IN_INPUT = /Eyes ping ([0-9a-f]{8})/i;
@@ -357,16 +356,16 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
   async function hubReply(worker: Worker & { location_source: string | null }): Promise<string> {
     const t = now().getTime();
     const steps: string[] = [];
-    const appSending =
-      worker.location_source === "app" && t - Date.parse(worker.location_at ?? "") <= APP_SENDING_MS;
     // Again within the hour (a retry, a double tap) mints no second code (each one evicts an older
     // device's): the step links to the setup page, which has the app button.
-    if (!appSending) {
+    if (!worker.app_connected || !worker.opted_in) {
       const last = appLinkSentAt.get(worker.id);
       const mint = last === undefined || t - last >= HOUR_MS;
       if (mint) appLinkSentAt.set(worker.id, t);
       const link = mint ? appUrl(await mintLocationCode(worker.id)) : meUrl(worker.id);
-      steps.push(`Get the app (keeps your spot fresh): ${link}`);
+      steps.push(
+        `${worker.app_connected ? "Reconnect the app" : "Get the app (keeps your spot fresh)"}: ${link}`,
+      );
     }
     if (config.live_payouts) {
       const e = await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: worker.id });
@@ -506,7 +505,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     return {
       opted_in: w.opted_in,
       spot: { at, fresh, max_age_h: config.location_max_age_h },
-      app: { last_at: app ? at : null, sending: app && fresh },
+      app: { connected: w.app_connected ?? false, last_at: app ? at : null, sending: app && fresh },
       payouts: {
         set_up: e.payouts_set_up,
         live: config.live_payouts,
@@ -515,6 +514,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       here_url: hereUrl(w.id),
       email_masked: w.email ? maskEmail(w.email) : null,
       email_status: !w.email ? "none" : w.email_verified_at ? "verified" : "pending",
+      email_skipped: w.email_skipped ?? false,
     };
   }
 
@@ -1599,6 +1599,15 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
 
     workerSetup,
 
+    async workerSkipEmail(token) {
+      const workerId = tokenPayload(token, "e");
+      const w = workerId
+        ? await maybe<Worker>("eyes_skip_worker_email", { p_worker_id: workerId })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      return workerSetup(token);
+    },
+
     async workerSetEmail(token, email) {
       const workerId = tokenPayload(token, "e");
       const w = workerId
@@ -1832,11 +1841,8 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         profile_url: `${config.public_api_url}/w/device/profile/${ticket}`,
         registered: devices.length > 0,
         ready: devices.some((d) => d.released_at !== null),
-        // The install page's done signal: the app sent a fix in the last 10 minutes.
-        app_connected:
-          w.location_source === "app" &&
-          w.location_at !== null &&
-          now().getTime() - Date.parse(w.location_at) <= 10 * 60_000,
+        // Completion survives later task photos, location changes and elapsed time.
+        app_connected: w.app_connected ?? false,
       };
     },
 

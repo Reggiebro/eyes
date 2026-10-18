@@ -127,6 +127,8 @@ export interface EyesService {
   workerSetup(token: string): Promise<WorkerSetup>;
   /** Adds, changes (pending, link emailed) or with null removes the worker's email. */
   workerSetEmail(token: string, email: string | null): Promise<WorkerSetup>;
+  /** Records the optional email step as skipped; never adds/verifies email or sends mail. */
+  workerSkipEmail(token: string): Promise<WorkerSetup>;
   /** token: as workerSetup. A 24-hour one-time mailto to work@ that connects the sender's email, verified (the worker emails first). Throws unauthorized, or invalid_input before the phone texted START. */
   workerEmailStart(token: string): Promise<{ mailto: string }>;
   /** An authenticated email carrying a connect code: sets the sender as that worker's email, verified. Returns the in-thread reply. */
@@ -143,7 +145,7 @@ export interface EyesService {
   submitCapture(token: string, fields: CaptureFields, photo: PhotoUpload | null): Promise<CaptureResult>;
   /** token: a 30-minute HERE token or the worker's long-lived location token. Throws unauthorized, invalid_input or rate_limited. */
   updateWorkerLocation(token: string, input: WorkerLocationInput): Promise<void>;
-  /** code: the worker's location code. A 1-hour profile link to register an iPhone for ad hoc install, that worker's device state, and whether the app sent a fix in the last 10 minutes. Throws unauthorized. */
+  /** code: the worker's location code. Returns device state and durable proof of an accepted native app fix. Throws unauthorized. */
   workerDevice(
     code: string,
   ): Promise<{ profile_url: string; registered: boolean; ready: boolean; app_connected: boolean }>;
