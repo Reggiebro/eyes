@@ -43,7 +43,7 @@ async function main() {
   const base = process.env.EYES_PUBLIC_API_URL?.replace(/\/+$/, "");
   if (!base) {
     console.error(
-      "Set EYES_PUBLIC_API_URL to the server to test, e.g. EYES_PUBLIC_API_URL=https://dark-wave-wfmpm.run.mcp-use.com pnpm smoke:live",
+      "Set EYES_PUBLIC_API_URL to the server to test, e.g. EYES_PUBLIC_API_URL=https://api.eyes.pictures pnpm smoke:live",
     );
     process.exit(2);
   }

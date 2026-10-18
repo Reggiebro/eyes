@@ -23,7 +23,7 @@ Sponsor tracks:
 - Primitive: agents get an Eyes email identity; agents email questions to their private Eyes address (ADR-007) and get threaded answers with the photo attached. Workers are reached by text only; worker email replies were dropped (ADR-007). Inbound mail reaches our signed `/webhooks/primitive` route from Primitive's managed subdomain. Prize: best agent communication setup, demo must show an agent-side email thread.
 - Stripe: prepaid agent balance via Checkout; per-API-key spend controls (max bounty, daily cap, allowed task types); escrow, release, Connect Express payout to workers (test mode); refunds on expiry. Prize wants clear user control over what agents can do and spend: spend limits and the refund path must be visible in the demo.
 - Inkbox: the Eyes dispatcher is an Inkbox identity with a phone number; texts or iMessages workers, receives YES claims, sends capture links and payout confirmations.
-- Manufact: MCP server built with the mcp-use SDK (TypeScript), deployed on Manufact Cloud.
+- Manufact: MCP server built with the mcp-use SDK (TypeScript). The landing page's connect commands use the Manufact CLI (`npx mcp-use client connect`). Hosting moved from Manufact Cloud to Cloudflare Containers.
 - Armature: best Agent Experience (AX), see §9.
 - InsForge: Postgres, storage (photos), functions, schedules (cron), Sites hosting for worker pages.
 
@@ -76,7 +76,7 @@ Phase 1, golden path on fakes plus first live text:
 Phase 2, money, verification, deploy:
 - T2.1 `payments-builder`: Stripe adapter: Checkout top-up, Connect Express onboarding, transfers on release, webhook verification, `/topup/:token`, `/w/connect/:token`. Verifiers: spec, test, security, intent.
 - T2.2 `verification-builder`: `verifySubmission` (gps_ok within 150 m, fresh_ok, vision_ok via Claude vision, confidence) and `createClaudeVision`; auto-approve only if all pass, else `needs_review` with escrow held. Verifiers: spec, test, intent.
-- T2.3 orchestrator: deploy MCP on Manufact, worker web on InsForge Sites, env wiring, live smoke checklist. Verifiers: integration.
+- T2.3 orchestrator: deploy MCP on Cloudflare Containers behind the `eyes-api` Worker (Manufact Cloud was the earlier host), worker web on InsForge Sites, env wiring, live smoke checklist. Verifiers: integration.
 - T2.4 `mcp-builder`: `dispute_answer`, `get_balance`, `get_spend_policy`; real `quote_task` numbers. Verifiers: spec, test, ax, intent.
 - Gate G2: live end-to-end including Stripe test-mode escrow -> payout visible in the dashboard; safety refusal works live.
 
