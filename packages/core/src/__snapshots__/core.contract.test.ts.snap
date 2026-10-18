@@ -214,7 +214,7 @@ exports[`tool schemas > match the committed snapshot 1`] = `
                       "type": "boolean",
                     },
                     "vision_ok": {
-                      "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct.",
+                      "description": "The photo check completed without confirmed graphic gore or explicit sexual content. Content uncertainty alone passes; provider failures need review. It does not mean the answer is correct.",
                       "type": "boolean",
                     },
                     "vision_reason": {
@@ -583,7 +583,7 @@ exports[`tool schemas > match the committed snapshot 1`] = `
                       "type": "boolean",
                     },
                     "vision_ok": {
-                      "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct.",
+                      "description": "The photo check completed without confirmed graphic gore or explicit sexual content. Content uncertainty alone passes; provider failures need review. It does not mean the answer is correct.",
                       "type": "boolean",
                     },
                     "vision_reason": {
