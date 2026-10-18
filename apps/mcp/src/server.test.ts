@@ -2022,6 +2022,18 @@ describe("ChatGPT and Claude widget", () => {
 });
 
 describe("Claude sandbox domain", () => {
+  it.each([
+    "https://mcp.eyes.pictures/other",
+    "https://mcp.eyes.pictures/mcp?query=1",
+    "https://mcp.eyes.pictures/mcp#fragment",
+    "https://user@mcp.eyes.pictures/mcp",
+    "https://:password@mcp.eyes.pictures/mcp",
+  ])("rejects an invalid staged connector URL: %s", (url) => {
+    expect(() => setup({}, { EYES_PUBLIC_MCP_URL: url })).toThrow(
+      "EYES_PUBLIC_MCP_URL must be an origin followed by /mcp.",
+    );
+  });
+
   const claudeDomain = `${createHash("sha256").update("http://api.eyes.test/mcp").digest("hex").slice(0, 32)}.claudemcpcontent.com`;
   const read = async (
     name: string,
