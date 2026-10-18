@@ -2,10 +2,12 @@
 
 | URL | Use it for |
 | --- | --- |
-| `https://dark-steel-ofaoa.run.mcp-use.com/mcp` | **Manufact gateway (default).** Cursor, VS Code, Claude Code, Gemini CLI, Codex, Instinct, the mcp-use SDKs and any other MCP client. |
-| `https://api.eyes.pictures/mcp` | **Direct.** ChatGPT and claude.ai / Claude Desktop connectors (cards and OAuth), and the fallback if the gateway is down. |
+| `https://api.eyes.pictures/mcp` | **Public endpoint (recommended).** ChatGPT, claude.ai / Claude Desktop connectors, and other MCP clients. |
+| `https://dark-steel-ofaoa.run.mcp-use.com/mcp` | **Optional Manufact gateway.** Proxy access for Cursor, VS Code, Claude Code, Gemini CLI, Codex, Instinct and the mcp-use SDKs. |
 
-Both URLs reach the same server and the same 10 tools: `quote_task`, `ask_eyes`, `await_answer`, `get_task`, `show_task`, `list_tasks`, `cancel_task`, `dispute_answer`, `get_balance`, `get_spend_policy`. The gateway is a [Manufact](https://docs.manufact.com/dashboard/connect-existing-server) proxy in front of `api.eyes.pictures`. It adds usage analytics and sessions, but it does not host the server and does not hold your key. Every client sends its own Eyes API key.
+The actual MCP/API server is hosted on **Manufact Cloud**, server `eyes-prod`, at `https://warm-spark-aocdd.run.mcp-use.com`. Cloudflare's `eyes-api` Worker only forwards `api.eyes.pictures` and `internal.eyes.pictures` to that origin. Static `eyes.pictures` and `app.eyes.pictures` remain on Cloudflare.
+
+Both client URLs reach the same server and the same 10 tools: `quote_task`, `ask_eyes`, `await_answer`, `get_task`, `show_task`, `list_tasks`, `cancel_task`, `dispute_answer`, `get_balance`, `get_spend_policy`. The optional gateway is a [Manufact](https://docs.manufact.com/dashboard/connect-existing-server) proxy in front of `api.eyes.pictures`. It adds usage analytics and sessions, but is not the server host and does not hold your key. Every client sends its own Eyes API key.
 
 ## 1. Get an Eyes API key
 
@@ -21,9 +23,11 @@ Save `api_key` from the reply. The reply shows it only once. A new test key star
 export AUTHORIZATION="Bearer <api_key>"
 ```
 
-## 2. Connect through Manufact
+## 2. Optional Manufact gateway
 
 These are the configs that Manufact's **Add to client** dialog generates for this server (server page > URL chip > **Add to client**). Replace `your-AUTHORIZATION-value` with `Bearer <api_key>`.
+
+For the recommended public endpoint, use these same bearer configurations with the URL changed to `https://api.eyes.pictures/mcp`. The gateway is not required for Manufact hosting.
 
 ### Claude Code
 
@@ -117,7 +121,7 @@ Clients without a header field can use OAuth. The gateway's 401 points to `/.wel
 
 Ask the client: "Use Eyes to quote checking whether the Ferry Building in San Francisco is open." It should reply with `allowed: true`, a price of about $3, and the number of workers nearby. A quote spends nothing.
 
-## 3. Direct URL: ChatGPT, claude.ai, and fallback
+## 3. Public URL: ChatGPT and claude.ai
 
 Use `https://api.eyes.pictures/mcp` for app connectors. Claude checks the card sandbox domain against the exact connector URL, and that domain is derived from `api.eyes.pictures`. Through the gateway, the cards would not render.
 
@@ -141,7 +145,7 @@ Claude Desktop uses the connectors from your claude.ai account. On Team and Ente
 
 ### Fallback for every other client
 
-If the gateway returns errors (for example `402` once the Manufact plan's monthly credits run out), use any config from section 2 with the URL changed to `https://api.eyes.pictures/mcp`. For example:
+For every other client, the public URL also works without the optional gateway. If the gateway returns errors (for example `402` once its plan's monthly credits run out), replace the section 2 URL with `https://api.eyes.pictures/mcp`. For example:
 
 ```sh
 claude mcp add --transport http eyes https://api.eyes.pictures/mcp \
@@ -158,7 +162,7 @@ codex mcp add eyes --url https://api.eyes.pictures/mcp --bearer-token-env-var EY
 
 ## How the sign-in works (for operators)
 
-- **Discovery:** `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server`. A 401 from `/mcp` also points to the first one through `WWW-Authenticate`. The Manufact gateway rewrites `resource` to its own URL and keeps `authorization_servers: ["https://api.eyes.pictures"]`.
+- **Discovery:** `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server`. A 401 from `/mcp` also points to the first one through `WWW-Authenticate`. The public resource must be `https://api.eyes.pictures/mcp` with authorization server `https://api.eyes.pictures`. As of the 2026-10-18 Manufact cutover, edge normalization of Manufact's rewritten resource metadata is pending verification; do not treat OAuth discovery as verified yet. The optional gateway has its own resource URL.
 - **Registration:** `POST /oauth/register` is dynamic client registration. Only https redirect URIs are accepted, plus loopback http.
 - **Sign-in page:** `GET /oauth/authorize`. It requires PKCE S256. **Create a key** counts against the same per-IP limit as `/v1/signup` (5 per hour).
 - **Token:** `POST /oauth/token` returns the Eyes API key as the access token, so existing bearer clients work unchanged. The token does not expire. To revoke it, rotate the key.

@@ -58,7 +58,7 @@ The agent asks and pays; Eyes texts nearby workers, checks the photo and pays th
 ```mermaid
 sequenceDiagram
     participant A as Agent (MCP / REST)
-    participant E as Eyes API (Cloudflare Container)
+    participant E as Eyes API (Manufact Cloud)
     participant W as Worker iPhone (iMessage)
     participant C as Capture page (app.eyes.pictures)
     A->>E: quote_task, then ask_eyes
@@ -106,9 +106,10 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 
 | Provider | What Eyes uses it for | Where in the repo | Status |
 |---|---|---|---|
-| Cloudflare Workers | `eyes-api` Worker fronts the API on `api.eyes.pictures`; static Workers serve `eyes.pictures` and `app.eyes.pictures` | [apps/edge/api](apps/edge/api), [apps/web/landing](apps/web/landing), [apps/web/worker](apps/web/worker) | live |
-| Cloudflare Containers | Runs the API server image (repo [Dockerfile](Dockerfile), Node, port 3000) | [apps/edge/api/wrangler.jsonc](apps/edge/api/wrangler.jsonc), [docs/DEPLOY.md](docs/DEPLOY.md) §2 | live |
-| Cloudflare Durable Objects + Cron | One `EyesServer` object keeps a single container; a once-a-minute cron calls it so the container never idles out | [apps/edge/api/worker.js](apps/edge/api/worker.js) | live |
+| Manufact Cloud | Hosts the actual MCP/API server (`eyes-prod`), including REST, webhooks, OAuth and the ops dashboard; origin `https://warm-spark-aocdd.run.mcp-use.com`, public MCP `https://api.eyes.pictures/mcp` | [apps/mcp](apps/mcp), [Dockerfile](Dockerfile), [docs/DEPLOY.md](docs/DEPLOY.md) §2 | live |
+| Cloudflare Workers | `eyes-api` is a thin forwarder for `api.eyes.pictures` and `internal.eyes.pictures` to Manufact; static Workers serve `eyes.pictures` and `app.eyes.pictures` | [apps/edge/api](apps/edge/api), [apps/web/landing](apps/web/landing), [apps/web/worker](apps/web/worker) | live |
+| Manufact gateway (optional) | `https://dark-steel-ofaoa.run.mcp-use.com/mcp` proxies the public MCP endpoint for gateway analytics; this is separate from the Manufact server host | [docs/CONNECT.md](docs/CONNECT.md) | optional |
+| Cloudflare Containers + Durable Objects | Previous API hosting path; not the current production origin | [apps/edge/api/worker.js](apps/edge/api/worker.js) | legacy |
 | Cloudflare KV + Cron | `eyes-monitor` checks `/healthz` every minute, keeps state in KV, texts an alert after two failures | [apps/edge/monitor](apps/edge/monitor) | live |
 | Cloudflare DNS | `eyes.pictures` zone and the three custom domains | wrangler configs above | live |
 | Cloudflare Workers AI (`clef-omni`) | First-pass task safety classifier and photo moderation (safe / faces) | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
