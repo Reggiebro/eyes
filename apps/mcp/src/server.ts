@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isIPv6 } from "node:net";
 import { join } from "node:path";
@@ -49,7 +49,7 @@ import { cors } from "hono/cors";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { MCPServer, registerViews, type ViewsManifest } from "mcp-use";
+import { MCPServer } from "mcp-use";
 import { z } from "zod";
 import { deviceProfile, parseDeviceAttributes } from "./device-profile.ts";
 import { oauthRoutes } from "./oauth.ts";
@@ -95,21 +95,6 @@ const AskEyesToolOutput = z.object({
   fix: z.string().optional(),
 });
 const DOCS_DIR = fileURLToPath(new URL("../../../docs/public/", import.meta.url));
-const VIEWS_MANIFEST = fileURLToPath(new URL("../.mcp-use/build/manifest.json", import.meta.url));
-const TASK_CARD = "task-card";
-const CARD_INVOCATION = { invoking: "Loading the Eyes task card", invoked: "Eyes task card ready" };
-
-function taskCard(file: string) {
-  if (!existsSync(file)) return undefined;
-  try {
-    return (JSON.parse(readFileSync(file, "utf8")) as { views?: ViewsManifest }).views?.[TASK_CARD];
-  } catch (err) {
-    console.error(
-      `views manifest ${file} is unreadable, so show_task has no card: ${err instanceof Error ? err.name : typeof err}`,
-    );
-    return undefined;
-  }
-}
 const AGENT_CARD = "/.well-known/agent-card.json";
 const DOCS = {
   "/llms.txt": "text/plain; charset=utf-8",
@@ -698,8 +683,6 @@ Next: to wait for an answer call await_answer instead of polling get_task.`,
     (input, ctx) => run(() => service.getTask(ctx.get("agent"), input)),
   );
 
-  const card = taskCard(env.EYES_VIEWS_MANIFEST || VIEWS_MANIFEST);
-  if (card) server[registerViews]({ [TASK_CARD]: card });
   server.tool(
     {
       name: "show_task",
@@ -710,20 +693,7 @@ Next: call it once await_answer returns answered true, so your user sees the ans
       inputSchema: TOOLS.get_task.input,
       outputSchema: TOOLS.get_task.output,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      ...(card && {
-        _meta: {
-          "openai/toolInvocation": CARD_INVOCATION,
-          "openai/toolInvocation/invoking": CARD_INVOCATION.invoking,
-          "openai/toolInvocation/invoked": CARD_INVOCATION.invoked,
-        },
-        view: {
-          name: TASK_CARD,
-          description: "An Eyes task: status, answer, photo, verification checks and cost.",
-          ...(env.INSFORGE_BASE_URL && {
-            csp: { resourceDomains: [new URL(env.INSFORGE_BASE_URL).origin] },
-          }),
-        },
-      }),
+      _meta: widgetToolMeta("Loading the Eyes task card", "Eyes task card ready"),
     },
     (input, ctx) => run(() => service.getTask(ctx.get("agent"), input)),
   );

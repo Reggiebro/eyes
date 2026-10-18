@@ -8,7 +8,7 @@ Eyes works as an app inside ChatGPT, claude.ai and Claude Desktop. You sign in w
 - The sign-in page at `/oauth/authorize` takes an existing Eyes key or creates one. New test keys start with a $20 balance.
 - `/oauth/token` returns the Eyes API key as the access token, so the `/mcp` bearer check does not change. The token does not expire. To revoke it, rotate the key.
 - Nothing is stored. Clients and authorization codes are AES-GCM sealed blobs keyed by `EYES_OAUTH_SECRET`. If that secret is unset, the OAuth routes are off and only bearer keys work.
-- A single widget resource, `ui://eyes/card.html` (`text/html;profile=mcp-app`), renders `quote_task`, `ask_eyes`, `await_answer`, `get_task` and `get_balance` results as cards.
+- A single widget resource, `ui://eyes/card.html` (`text/html;profile=mcp-app`), renders `quote_task`, `ask_eyes`, `await_answer`, `get_task`, `show_task` and `get_balance` results as cards. `show_task` uses the same current photo, theme, review and action UI as `get_task`; no separate view build is needed.
 - ChatGPT finds the widget through `openai/outputTemplate`. Claude gets `ui/resourceUri` plus a per-connector `ui.domain`. Photos load from InsForge storage and the CDN.
 
 ## How to try it
