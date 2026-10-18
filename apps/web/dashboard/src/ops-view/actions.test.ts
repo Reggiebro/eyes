@@ -69,6 +69,40 @@ describe("actionArea", () => {
     expect(toasts).toEqual(["Done."]);
   });
 
+  it("ignores stale action clicks and repeated confirmation while a decision is pending", async () => {
+    let resolve: (outcome: Outcome) => void = () => {};
+    const pending = new Promise<Outcome>((done) => {
+      resolve = done;
+    });
+    const notes: string[] = [];
+    const { area, button, happy, key, toasts } = mount({
+      run: (note) => {
+        notes.push(note);
+        return pending;
+      },
+    });
+    const note = area.querySelector("textarea") as HTMLTextAreaElement;
+    note.value = "  checked  ";
+    const primary = button("Release");
+    primary.click();
+    const confirm = button("Release $5");
+    confirm.click();
+    primary.click();
+    confirm.dispatchEvent(new happy.Event("click", { bubbles: true }) as unknown as Event);
+    key(confirm, "Escape");
+    expect(notes).toEqual(["checked"]);
+    expect(area.querySelector(".decide__question")?.textContent).toBe("Pay $5?");
+    expect(confirm.disabled).toBe(true);
+    expect(button("Cancel").disabled).toBe(true);
+    expect(note.disabled).toBe(true);
+    expect(toasts).toEqual([]);
+    resolve({ ok: true, message: "Saved once." });
+    await tick();
+    await tick();
+    expect(area.querySelectorAll(".decide__row button")).toHaveLength(0);
+    expect(toasts).toEqual(["Saved once."]);
+  });
+
   it("needs a note when required, and cancels by button or Escape", () => {
     const { area, button, key, doc } = mount({ required: true });
     button("Release").click();
