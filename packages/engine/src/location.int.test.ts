@@ -208,15 +208,30 @@ describe.skipIf(!url)("worker location on Postgres", () => {
     expect(sent()).toBe(before + 2);
     expect(await codes()).toBe(2);
 
-    // An hour after the last link, START sends none while the app keeps sending (the fix above)...
+    // An hour after the last link, START sends none for an app that connected...
     providers.clock.advance(61 * 60_000);
     await say(w.phone, "start", "START");
     expect(appCode(lastText(w.phone))).toBe("");
-    // ...and a new one once the app's last fix is over 24 hours old.
+    // ...even once that app's last fix is over 24 hours old.
     providers.clock.advance(24 * HOUR);
     await say(w.phone, "start", "START");
-    expect(appCode(lastText(w.phone))).not.toBe("");
-    expect(await codes()).toBe(3);
+    expect(appCode(lastText(w.phone))).toBe("");
+    expect(await codes()).toBe(2);
+
+    // STOP revokes old device codes. START reconnects the existing install, not a reinstall.
+    await say(w.phone, "stop", "STOP");
+    expect(await codes()).toBe(0);
+    expect(await row(w.phone)).toMatchObject({ lat: null, location_at: null, app_connected: true });
+    await expect(
+      service.updateWorkerLocation(second, { lat: 37.7, lng: -122.4, source: "app" }),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    await say(w.phone, "start", "START");
+    expect(lastText(w.phone)).toContain("Reconnect the app:");
+    const reconnected = appCode(lastText(w.phone));
+    expect(reconnected).not.toBe("");
+    expect(await codes()).toBe(1);
+    await service.updateWorkerLocation(reconnected, { lat: 37.7, lng: -122.4, source: "app" });
+    expect(await service.workerDevice(reconnected)).toMatchObject({ app_connected: true });
   });
 
   it("finds the worker by any stored code hash and records when it was last used", async () => {
@@ -376,11 +391,11 @@ describe.skipIf(!url)("worker location on Postgres", () => {
       ready: true,
       app_connected: false,
     });
-    // The install page's done signal: a fix from the app in the last 10 minutes.
+    // Native connection remains complete when the latest fix is no longer fresh.
     await service.updateWorkerLocation(appCode, { lat: 37.7, lng: -122.4, source: "app" });
     expect(await service.workerDevice(appCode)).toMatchObject({ app_connected: true });
     await sql`update workers set location_at = location_at - interval '11 minutes' where id = ${w.id}`;
-    expect(await service.workerDevice(appCode)).toMatchObject({ app_connected: false });
+    expect(await service.workerDevice(appCode)).toMatchObject({ app_connected: true });
     expect((await sql`select os_version from worker_devices where udid = ${udid}`)[0]?.os_version).toBe(
       "23G5",
     );
