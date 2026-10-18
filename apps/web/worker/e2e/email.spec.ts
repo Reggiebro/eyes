@@ -44,204 +44,52 @@ test("/me shows no email row while the API does not send the email fields", asyn
   await expect(emailRow(page)).toHaveCount(0);
 });
 
-const MAILTO = "mailto:work@example.test?subject=Eyes%20abc&body=Send%20this";
+const instruction = "Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email.";
 
-/** Mocks POST /w/me/email/start; records its auth headers and every mailto the page opens. */
-async function mockStart(page: Page) {
-  const starts: (string | undefined)[] = [];
-  const opened: string[] = [];
-  page.on("request", (r) => r.url().startsWith("mailto:") && opened.push(r.url()));
-  await page.route("**/api/w/me/email/start", (route) => {
-    starts.push(route.request().headers().authorization);
-    return route.fulfill({ json: { mailto: MAILTO } });
-  });
-  return { starts, opened };
-}
-
-const GMAIL =
-  "https://mail.google.com/mail/?view=cm&fs=1&to=work%40example.test&su=Eyes%20abc&body=Send%20this";
-const OUTLOOK =
-  "https://outlook.live.com/mail/0/deeplink/compose?to=work%40example.test&subject=Eyes%20abc&body=Send%20this";
-
-for (const [state, button] of [
-  ["none", "Add email"],
-  ["pending", "Send again"],
-  ["verified", "Change"],
-] as const) {
-  test(`/me ${state}: ${button} shows the email to send with Gmail, Outlook and the Mail app, and asks for no link`, async ({
-    page,
-  }) => {
-    const { starts, opened } = await mockStart(page);
-    const posts = await mockMe(page, withEmail(state, state === "none" ? null : MASKED));
-    const requests: string[] = [];
-    page.on("request", (request) => requests.push(request.url()));
-    const before = page.url();
-    const row = emailRow(page);
-    await row.getByRole("button", { name: button }).click();
-    const panel = row.getByRole("group", { name: "Send one email to connect" });
-    await expect(panel).toContainText("To:work@example.test");
-    await expect(panel).toContainText("Subject:Eyes abc");
-    await expect(panel).toContainText("Send it from the address you want to add. Then refresh this page.");
-    // Desktop: Gmail first, then Outlook, then the Mail app; webmail in a new tab.
-    const links = panel.getByRole("link");
-    await expect(links).toHaveText(["Open Gmail", "Open Outlook", "Open Mail app"]);
-    await expect(links.nth(0)).toHaveAttribute("href", GMAIL);
-    await expect(links.nth(0)).toHaveAttribute("target", "_blank");
-    await expect(links.nth(1)).toHaveAttribute("href", OUTLOOK);
-    await expect(links.nth(2)).toHaveAttribute("href", MAILTO);
-    await expect(row.getByRole("textbox")).toHaveCount(0);
-    expect(opened).toEqual([]);
-    expect(page.url()).toBe(before);
-    expect(new URL(page.url()).hash).toBe("");
-    expect(page.context().pages()).toHaveLength(1);
-    expect(requests.every((url) => new URL(url).origin === new URL(before).origin)).toBe(true);
-    expect(requests.some((url) => url.includes(code) || url.includes("Eyes%20abc"))).toBe(false);
-    expect(starts).toEqual([`Bearer ${code}`]);
-    expect(posts).toEqual([]);
-  });
-}
-
-test("/me: Copy puts the address and subject on the clipboard and says Copied", async ({ page, context }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await mockStart(page);
-  await mockMe(page, withEmail("none", null));
-  const row = emailRow(page);
-  await row.getByRole("button", { name: "Add email" }).click();
-  const copies = row.getByRole("button", { name: /^Cop/ });
-  await copies.nth(0).click();
-  await expect(copies.nth(0)).toHaveText("Copied");
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("work@example.test");
-  await copies.nth(1).click();
-  await expect(copies.nth(1)).toHaveText("Copied");
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Eyes abc");
-});
-
-for (const unavailable of [false, true]) {
-  test(`/me: clipboard ${unavailable ? "unavailable" : "denied"} gives a manual-copy instruction`, async ({
-    page,
-  }) => {
-    await page.addInitScript((missing) => {
-      Object.defineProperty(navigator, "clipboard", {
-        value: missing ? undefined : { writeText: () => Promise.reject(new Error("denied")) },
-      });
-    }, unavailable);
-    await mockStart(page);
-    await mockMe(page, withEmail("none", null));
-    const row = emailRow(page);
-    await row.getByRole("button", { name: "Add email" }).click();
-    await row.getByRole("button", { name: "Copy", exact: true }).first().click();
-    await expect(row.getByRole("alert")).toContainText("Could not copy.");
-    await expect(row.getByRole("alert")).toContainText("Select the To or Subject text and copy it manually.");
-    await expect(row.getByRole("button", { name: "Copied", exact: true })).toHaveCount(0);
-  });
-}
-
-for (const [label, href] of [
-  ["Open Gmail", GMAIL],
-  ["Open Outlook", OUTLOOK],
-] as const) {
-  test(`/me: ${label} opens its compose URL only after an explicit click`, async ({ page, context }) => {
-    const outgoing: { url: string; headers: Record<string, string> }[] = [];
-    await context.route("https://mail.google.com/**", (route) => {
-      outgoing.push({ url: route.request().url(), headers: route.request().headers() });
-      return route.fulfill({ body: "Mock compose" });
-    });
-    await context.route("https://outlook.live.com/**", (route) => {
-      outgoing.push({ url: route.request().url(), headers: route.request().headers() });
-      return route.fulfill({ body: "Mock compose" });
-    });
-    await mockStart(page);
-    await mockMe(page, withEmail("none", null));
-    const before = page.url();
-    await emailRow(page).getByRole("button", { name: "Add email" }).click();
-    await expect(emailRow(page).getByRole("link", { name: label })).toBeVisible();
-    expect(outgoing).toEqual([]);
-    const opened = context.waitForEvent("page");
-    await emailRow(page).getByRole("link", { name: label }).click();
-    const popup = await opened;
-    await expect(popup).toHaveURL(href);
-    expect(page.url()).toBe(before);
-    expect(outgoing).toEqual([{ url: href, headers: expect.any(Object) }]);
-    expect(outgoing[0]?.headers.authorization).toBeUndefined();
-    expect(outgoing[0]?.headers.referer).toBeUndefined();
-    expect(href).not.toContain(code);
-    await popup.close();
-  });
-}
-
-test("/me: a malicious start response never becomes a provider link", async ({ page }) => {
-  await page.route("**/api/w/me/email/start", (route) =>
-    route.fulfill({ json: { mailto: "javascript:alert('secret')" } }),
-  );
-  await mockMe(page, withEmail("none", null));
-  await emailRow(page).getByRole("button", { name: "Add email" }).click();
-  await expect(emailRow(page).getByRole("alert")).toContainText("Eyes returned an invalid connect email.");
-  await expect(emailRow(page).getByRole("group", { name: "Send one email to connect" })).toBeHidden();
-  await expect(emailRow(page).getByRole("link")).toHaveCount(0);
-  await expect(emailRow(page).getByRole("alert")).not.toContainText("secret");
-});
-
-test("/me on a phone: Open Mail app comes first and opens the mailto", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const { opened } = await mockStart(page);
-  await mockMe(page, withEmail("none", null));
-  const row = emailRow(page);
-  await row.getByRole("button", { name: "Add email" }).click();
-  const links = row.getByRole("link");
-  await expect(links).toHaveText(["Open Mail app", "Open Gmail", "Open Outlook"]);
-  await links.nth(0).click();
-  await expect.poll(() => opened).toEqual([MAILTO]);
-});
-
-test("/me on a phone: the full connect code wraps without horizontal overflow", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const subject = `Eyes ${"a".repeat(43)}`;
-  await page.route("**/api/w/me/email/start", (route) =>
-    route.fulfill({ json: { mailto: `mailto:work@example.test?subject=${encodeURIComponent(subject)}` } }),
-  );
-  await mockMe(page, withEmail("none", null));
-  await emailRow(page).getByRole("button", { name: "Add email" }).click();
-  await expect(emailRow(page).locator("span[data-field=subject]")).toHaveText(subject);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
-});
-
-/** SHOTS=<dir> saves the send panel at 390 and 1440 px, light and dark. */
-test("/me send panel screenshots", async ({ page }) => {
-  test.skip(!process.env.SHOTS, "SHOTS not set");
-  await mockStart(page);
-  for (const width of [390, 1440])
-    for (const scheme of ["light", "dark"] as const) {
+for (const width of [390, 1440]) {
+  for (const state of ["none", "pending", "verified"]) {
+    test(`/me ${state} at ${width}px: text-only onboarding never starts email from the page`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width, height: 1000 });
-      await page.emulateMedia({ colorScheme: scheme });
-      await mockMe(page, withEmail("none", null));
-      await emailRow(page).getByRole("button", { name: "Add email" }).click();
-      await emailRow(page).screenshot({ path: `${process.env.SHOTS}/me-email-${width}-${scheme}.png` });
-    }
-});
+      const starts: string[] = [];
+      await page.route("**/api/w/me/email/start", (route) => {
+        starts.push(route.request().method());
+        return route.abort();
+      });
+      const posts = await mockMe(page, withEmail(state, state === "none" ? null : MASKED));
+      const row = emailRow(page);
+      await expect(row).toContainText(instruction);
+      await expect(row).toContainText("Eyes iMessage: +14155550100");
+      await expect(row).toContainText(
+        "Send from an address your mail provider verifies; custom aliases need SPF/DKIM.",
+      );
+      await expect(row.getByRole("button")).toHaveText(state === "none" ? [] : ["Remove"]);
+      await expect(row.getByRole("link")).toHaveCount(0);
+      await expect(
+        row.locator("[data-act=add], [data-act=resend], [data-act=change], [data-act=copy]"),
+      ).toHaveCount(0);
+      await expect(page.locator(".me-email__send, .me-email__links, .me-email__fields")).toHaveCount(0);
+      await row.locator(".ui-check__detail").click();
+      await expect(row).toContainText(instruction);
+      expect(starts).toEqual([]);
+      expect(posts).toEqual([]);
+      expect(new URL(page.url()).hash).toBe("");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+      if (process.env.SHOTS) {
+        await expect(row).toHaveCSS("opacity", "1");
+        await row.screenshot({ path: `${process.env.SHOTS}/me-email-${state}-${width}.png` });
+      }
+    });
+  }
+}
 
-test("/me none: Add email shows the API's words when it refuses", async ({ page }) => {
-  await page.route("**/api/w/me/email/start", (route) =>
-    route.fulfill({
-      status: 400,
-      json: { error: "invalid_input", message: "Text START to the Eyes number first.", fix: "" },
-    }),
-  );
-  await mockMe(page, withEmail("none", null));
-  await emailRow(page).getByRole("button", { name: "Add email" }).click();
-  await expect(emailRow(page).getByRole("alert")).toContainText("Text START to the Eyes number first.");
-  await expect(emailRow(page).getByRole("button", { name: "Add email" })).not.toHaveAttribute("aria-busy");
-});
-
-test("/me none before START: says to text START first, offers nothing", async ({ page }) => {
+test("/me before START: still gives text-first email instructions without an onboarding button", async ({
+  page,
+}) => {
   await mockMe(page, withEmail("none", null, { opted_in: false }));
-  await expect(emailRow(page)).toContainText("Text START first, then add an email.");
+  await expect(emailRow(page)).toContainText(instruction);
   await expect(emailRow(page).getByRole("button")).toHaveCount(0);
-});
-
-test("/me pending: says to tap Send again and send the email", async ({ page }) => {
-  await mockMe(page, withEmail("pending"));
-  await expect(emailRow(page)).toContainText("Finish adding your email");
-  await expect(emailRow(page)).toContainText(`Tap Send again, then send the email we open from ${MASKED}.`);
 });
 
 test("/me pending: Remove asks first; Keep it backs out, Remove email removes", async ({ page }) => {
@@ -251,21 +99,24 @@ test("/me pending: Remove asks first; Keep it backs out, Remove email removes", 
   await expect(row.getByText("Stop sending tasks to this email? Texts keep coming.")).toBeVisible();
   await expect(row.getByRole("button", { name: "Remove email" })).toBeFocused();
   await row.getByRole("button", { name: "Keep it" }).click();
-  await expect(row.getByRole("button", { name: "Send again" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
   expect(posts).toEqual([]);
   await row.getByRole("button", { name: "Remove" }).click();
   await row.getByRole("button", { name: "Remove email" }).click();
   await expect(emailRow(page)).toContainText("Get tasks by email too");
-  await expect(emailRow(page).getByRole("button", { name: "Add email" })).toBeFocused();
-  expect(posts[0]?.body).toEqual({ email: null });
+  await expect(emailRow(page)).toContainText(instruction);
+  await expect(page.locator("#title")).toBeFocused();
+  expect(posts).toEqual([{ body: { email: null }, auth: `Bearer ${code}` }]);
 });
 
-test("/me verified: shows the masked address with Change and Remove", async ({ page }) => {
+test("/me verified: keeps the masked address and Remove, with text-first instructions instead of Change", async ({
+  page,
+}) => {
   await mockMe(page, withEmail("verified"));
   const row = emailRow(page);
   await expect(row).toHaveClass(/ui-check--pass/);
   await expect(row).toContainText(`Tasks also go to ${MASKED}.`);
-  await expect(row.getByRole("button", { name: "Change" })).toBeVisible();
+  await expect(row).toContainText(instruction);
   await expect(row.getByRole("button", { name: "Remove" })).toBeVisible();
 });
 

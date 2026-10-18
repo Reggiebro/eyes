@@ -23,7 +23,7 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 - **[MCP tools](docs/features/mcp-tools.md):** 9 tools to quote, ask, wait and pay; also REST.
 - **[ChatGPT and Claude apps](docs/features/chatgpt-claude-apps.md):** OAuth sign-in; answers show as photo cards.
 - **[iMessage dispatch](docs/features/imessage-dispatch.md):** the 3 nearest workers get a text; first YES wins.
-- **[Email channel](docs/features/email-channel.md):** optional email for offers, links and sign-in; mobile still required.
+- **[Email channel](docs/features/email-channel.md):** text EMAIL to Eyes in iMessage for a link to send your first email; offers, links and sign-in by email, with mobile still required.
 - **[Photo checks](docs/features/photo-checks.md):** GPS within 150 m, taken live, safe to share.
 - **[Escrow](docs/features/escrow.md):** bounty plus $0.50 fee held on ask; refunded if no answer.
 - **[Safety](docs/features/safety.md):** rules, then an AI check; homes, people, cars, faces refused.
