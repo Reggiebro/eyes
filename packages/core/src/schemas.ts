@@ -413,11 +413,13 @@ export type ToolName = keyof typeof TOOLS;
 export type ToolInput<T extends ToolName> = z.output<(typeof TOOLS)[T]["input"]>;
 export type ToolOutput<T extends ToolName> = z.output<(typeof TOOLS)[T]["output"]>;
 
+export const WorkerEmail = z.email().max(254).toLowerCase();
+
 export const JoinWorkerInput = z
   .object({
     name: z.string().min(2).max(80),
     phone: Phone,
-    email: z.email().max(254).toLowerCase().optional(),
+    email: WorkerEmail.optional(),
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
   })
@@ -498,6 +500,9 @@ export const WorkerSetup = z.object({
   app: z.object({ last_at: Timestamp.nullable(), sending: z.boolean() }),
   payouts: z.object({ set_up: z.boolean(), live: z.boolean(), setup_url: z.string().nullable() }),
   here_url: z.string(),
+  /** j…@example.com; the full address is never returned. */
+  email_masked: z.string().nullable(),
+  email_status: z.enum(["none", "pending", "verified"]),
 });
 
 export const CaptureResult = z.object({

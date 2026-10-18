@@ -31,6 +31,8 @@ function setup(over: Partial<WorkerSetup> = {}): WorkerSetup {
     app: { last_at: minAgo(5), sending: true },
     payouts: { set_up: true, live: true, setup_url: null },
     here_url: HERE,
+    email_masked: null,
+    email_status: "none",
     ...over,
   };
 }

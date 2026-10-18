@@ -110,6 +110,12 @@ export interface EyesService {
   ): Promise<void>;
   /** token: the worker's "e:" token, the /me page's code (ADR-028). Throws unauthorized. */
   workerSetup(token: string): Promise<WorkerSetup>;
+  /** Adds, changes (pending, link emailed) or with null removes the worker's email. */
+  workerSetEmail(token: string, email: string | null): Promise<WorkerSetup>;
+  /** Emails a 15-minute sign-in link to a verified email of an opted-in worker; silent otherwise. */
+  workerEmailLogin(email: string): Promise<void>;
+  /** Trades a one-time email link code for the setup page token. */
+  workerLoginCode(code: string): Promise<{ token: string }>;
   /** token: as workerSetup. One page of the worker's tasks, newest first, and the totals. Throws unauthorized. */
   workerTasks(token: string, query: WorkerTasksQuery): Promise<WorkerTasks>;
   /** token: as workerSetup. Mints a location code; returns the app install link carrying it. Throws unauthorized. */

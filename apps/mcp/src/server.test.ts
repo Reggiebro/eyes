@@ -347,6 +347,8 @@ describe("worker setup page (ADR-028)", () => {
     app: { last_at: "2026-10-17T18:00:00.000Z", sending: true },
     payouts: { set_up: false, live: true, setup_url: "http://api.eyes.test/w/connect/c" },
     here_url: "http://worker.eyes.test/here.html?t=l",
+    email_masked: null,
+    email_status: "none",
   };
   const TASKS: WorkerTasks = {
     paid_usd: 0,

@@ -28,7 +28,9 @@ import {
   usdToCents,
   verifyToken,
   type Worker,
+  WorkerEmail,
   WorkerLocationInput,
+  type WorkerSetup,
   type WorkerTasks,
 } from "@eyes/core";
 import { createRpc, type RpcArgs } from "@eyes/db";
@@ -264,8 +266,10 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
   const connectUrl = (workerId: string) =>
     `${config.public_api_url}/w/connect/${signToken(config.link_secret, `c:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
   // The setup page (ADR-028) takes the worker's "e:" token, in the fragment so no server logs it.
-  const meUrl = (workerId: string) =>
-    `${config.worker_web_url}/me#c=${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
+  // The setup page's code (ADR-028); /w/login/code returns the same token after an email link.
+  const meToken = (workerId: string) =>
+    signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS));
+  const meUrl = (workerId: string) => `${config.worker_web_url}/me#c=${meToken(workerId)}`;
   const captureUrl = (task: Task, workerId: string) =>
     `${config.worker_web_url}/capture.html?t=${signToken(config.link_secret, `o:${task.id}:${workerId}`, new Date(task.deadline_at))}`;
   const hereUrl = (workerId: string) =>
@@ -370,6 +374,37 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       else console.error(`worker email for ${workerId} failed: ${describeSendError(err)}`);
       return false;
     }
+  }
+
+  async function workerSetup(token: string): Promise<WorkerSetup> {
+    const workerId = tokenPayload(token, "e");
+    const [w, e] = workerId
+      ? await Promise.all([
+          maybe<Worker & { location_source: string | null }>("eyes_worker", {
+            p_worker_id: workerId,
+            p_phone: null,
+          }),
+          maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }),
+        ])
+      : [];
+    if (!w || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+    // Same spot rule as START: a fix, or the sign-up location until the first fix.
+    const at = w.lat === null ? null : iso(w.location_at ?? w.created_at);
+    const fresh = at !== null && now().getTime() - Date.parse(at) <= config.location_max_age_h * 3_600_000;
+    const app = w.location_source === "app";
+    return {
+      opted_in: w.opted_in,
+      spot: { at, fresh, max_age_h: config.location_max_age_h },
+      app: { last_at: app ? at : null, sending: app && fresh },
+      payouts: {
+        set_up: e.payouts_set_up,
+        live: config.live_payouts,
+        setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
+      },
+      here_url: hereUrl(w.id),
+      email_masked: w.email ? maskEmail(w.email) : null,
+      email_status: !w.email ? "none" : w.email_verified_at ? "verified" : "pending",
+    };
   }
 
   async function emailOwner(to: string, agentId: string, subject: string, intro: string): Promise<boolean> {
@@ -1318,33 +1353,52 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       } satisfies WorkerTasks;
     },
 
-    async workerSetup(token) {
+    workerSetup,
+
+    async workerSetEmail(token, email) {
       const workerId = tokenPayload(token, "e");
-      const [w, e] = workerId
-        ? await Promise.all([
-            maybe<Worker & { location_source: string | null }>("eyes_worker", {
-              p_worker_id: workerId,
-              p_phone: null,
-            }),
-            maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }),
-          ])
-        : [];
-      if (!w || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
-      // Same spot rule as START: a fix, or the sign-up location until the first fix.
-      const at = w.lat === null ? null : iso(w.location_at ?? w.created_at);
-      const fresh = at !== null && now().getTime() - Date.parse(at) <= config.location_max_age_h * 3_600_000;
-      const app = w.location_source === "app";
-      return {
-        opted_in: w.opted_in,
-        spot: { at, fresh, max_age_h: config.location_max_age_h },
-        app: { last_at: app ? at : null, sending: app && fresh },
-        payouts: {
-          set_up: e.payouts_set_up,
-          live: config.live_payouts,
-          setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
-        },
-        here_url: hereUrl(w.id),
-      };
+      const w = workerId
+        ? await maybe<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      const next = email === null ? null : parse(WorkerEmail, email);
+      // Only a phone that has texted START may add an email (the /me link itself comes by text).
+      if (next !== null && !w.opted_in)
+        throw new EyesError(
+          "invalid_input",
+          {},
+          {
+            message: "Text START to the Eyes number first.",
+            fix: "Text START from your phone, then add the email again.",
+          },
+        );
+      await rpc("eyes_set_worker_email", { p_worker_id: w.id, p_email: next }).catch((err: unknown) => {
+        throw (err as { code?: string }).code === "23505" ? new EyesError("email_taken") : err;
+      });
+      // Same address again re-sends the link, unless it is already verified.
+      if (next !== null && !(next === w.email && w.email_verified_at)) await sendEmailLink(w.id, next, true);
+      return workerSetup(token);
+    },
+
+    async workerEmailLogin(email) {
+      const address = parse(WorkerEmail, email);
+      const w = await maybe<Worker>("eyes_worker", { p_worker_id: null, p_phone: address });
+      // Silent for anyone else, so the answer never tells which emails have accounts.
+      if (w?.opted_in && w.email === address && w.email_verified_at)
+        await sendEmailLink(w.id, address, false);
+    },
+
+    async workerLoginCode(code) {
+      const used = await maybe<{ email: string }>("eyes_consume_worker_code", {
+        p_code_hash: sha256(code),
+        p_now: nowIso(),
+      });
+      // A confirmation link verifies the email (only for an opted-in worker); any link signs in.
+      const w = used
+        ? await maybe<Worker>("eyes_verify_worker_email", { p_email: used.email, p_now: nowIso() })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      return { token: meToken(w.id) };
     },
 
     async workerInstallLink(token) {

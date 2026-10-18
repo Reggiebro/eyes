@@ -308,6 +308,53 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ]);
   });
 
+  it("email on /me: adding needs a phone that texted START; the emailed link signs in once and verifies; sign-in links go only to verified emails; a taken email is 409; null removes it", async () => {
+    const eToken = (workerId: string) => signToken("test-link-secret-0123456789", `e:${workerId}`);
+    // The one-time code in the last link emailed to this address.
+    const linkCode = (to: string) =>
+      /\/login#c=(\S+)/.exec(providers.email.outbox.findLast((m) => m.to === to)?.text ?? "")?.[1] ?? "";
+    const off = await worker(somewhere(), false);
+    await expect(service.workerSetEmail(eToken(off.worker_id), "a@workers.test")).rejects.toMatchObject({
+      code: "invalid_input",
+      message: "Text START to the Eyes number first.",
+    });
+    await expect(service.workerSetEmail("bad", null)).rejects.toMatchObject({ code: "unauthorized" });
+
+    const w = await worker(somewhere());
+    const email = `m${randomInt(1e9)}@workers.test`;
+    expect(await service.workerSetEmail(eToken(w.worker_id), email.toUpperCase())).toMatchObject({
+      email_masked: "m…@workers.test",
+      email_status: "pending",
+    });
+    const confirm = linkCode(email);
+    const sent = providers.email.outbox.length;
+    await service.workerEmailLogin(email);
+    await service.workerEmailLogin(`n${randomInt(1e9)}@workers.test`);
+    expect(providers.email.outbox).toHaveLength(sent);
+    await expect(service.workerEmailLogin("not an email")).rejects.toMatchObject({ code: "invalid_input" });
+
+    const { token } = await service.workerLoginCode(confirm);
+    expect(await service.workerSetup(token)).toMatchObject({ email_status: "verified" });
+    await expect(service.workerLoginCode(confirm)).rejects.toMatchObject({ code: "unauthorized" });
+    await service.workerSetEmail(eToken(w.worker_id), email);
+    expect(providers.email.outbox).toHaveLength(sent);
+
+    await service.workerEmailLogin(email.toUpperCase());
+    expect(providers.email.outbox.at(-1)).toMatchObject({ to: email, subject: "Your Eyes sign-in link" });
+    expect(await service.workerSetup((await service.workerLoginCode(linkCode(email))).token)).toMatchObject({
+      opted_in: true,
+    });
+
+    const other = await worker(somewhere());
+    await expect(service.workerSetEmail(eToken(other.worker_id), email)).rejects.toMatchObject({
+      code: "email_taken",
+    });
+    expect(await service.workerSetEmail(eToken(w.worker_id), null)).toMatchObject({
+      email_masked: null,
+      email_status: "none",
+    });
+  });
+
   it("never lets a repeat join rewrite an existing worker or tell the caller it exists, even after STOP, and sends the payout link only by text after START", async () => {
     const at = somewhere();
     const phone = newPhone();
@@ -417,6 +464,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
           setup_url: expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/[\w-]+\.[\w-]+$/),
         },
         here_url: expect.stringMatching(/^https:\/\/w\.eyes\.test\/here\.html\?t=[\w-]+\.[\w-]+$/),
+        email_masked: null,
+        email_status: "none",
       });
 
       // Six claims from two agents (each stays within its $20 grant); the list has all of them, newest first.
