@@ -31,6 +31,7 @@ jobs:
       e2e_golden: ${{ steps.scope.outputs.e2e_golden }}
       web: ${{ steps.scope.outputs.web }}
       reason: ${{ steps.scope.outputs.reason }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,13 +45,22 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: origin/${{ github.base_ref }}
         run: |
+          docs_only=false
           if [ "$EVENT" = "pull_request" ]; then
             node scripts/ci-scope.ts "$BASE"
+            # Docs-only: every changed path is Markdown (outside dot-dirs), under docs/ or intent/, or LICENSE.
+            # --no-renames: a moved source file also counts under its old path.
+            files=$(git diff --no-renames --name-only "$BASE...HEAD")
+            non_docs=$(printf '%s\n' "$files" | grep -Ev '^(docs/|intent/|LICENSE$|([^/.][^/]*/)*[^/]+\.md$)' || true)
+            if [ -n "$files" ] && [ -z "$non_docs" ]; then docs_only=true; fi
           else
             node scripts/ci-scope.ts --full
           fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   lint:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +68,8 @@ jobs:
       - run: pnpm lint
 
   typecheck:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +78,7 @@ jobs:
 
   unit:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +94,7 @@ jobs:
 
   contract:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +110,7 @@ jobs:
 
   integration:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -128,7 +140,7 @@ jobs:
 
   coverage:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.coverage_mode == 'changed'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.coverage_mode == 'changed')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -163,7 +175,7 @@ jobs:
 
   e2e:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.e2e_worker == 'true' || needs.scope.outputs.e2e_golden == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.e2e_worker == 'true' || needs.scope.outputs.e2e_golden == 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -197,7 +209,7 @@ jobs:
 
   safety-rules:
     needs: scope
-    if: needs.scope.outputs.changed == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -234,7 +246,7 @@ jobs:
 
   build:
     needs: scope
-    if: needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true'
+    if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
