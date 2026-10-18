@@ -960,7 +960,7 @@
                                 },
                                 "vision_ok": {
                                   "type": "boolean",
-                                  "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct."
+                                  "description": "The photo check completed without confirmed graphic gore or explicit sexual content. Content uncertainty alone passes; provider failures need review. It does not mean the answer is correct."
                                 },
                                 "vision_reason": {
                                   "type": "string",
@@ -1152,7 +1152,7 @@
                                 },
                                 "vision_ok": {
                                   "type": "boolean",
-                                  "description": "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct."
+                                  "description": "The photo check completed without confirmed graphic gore or explicit sexual content. Content uncertainty alone passes; provider failures need review. It does not mean the answer is correct."
                                 },
                                 "vision_reason": {
                                   "type": "string",

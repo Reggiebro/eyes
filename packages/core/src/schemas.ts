@@ -152,7 +152,7 @@ export const Verification = z.object({
   vision_ok: z
     .boolean()
     .describe(
-      "The photo is safe to share (no prominent faces, private spaces, personal details or explicit content, and a real photo). It does not mean the answer is correct.",
+      "The photo check completed without confirmed graphic gore or explicit sexual content. Content uncertainty alone passes; provider failures need review. It does not mean the answer is correct.",
     ),
   vision_reason: z.string().describe("Why the photo is or is not safe to share."),
 });

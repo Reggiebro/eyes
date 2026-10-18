@@ -121,7 +121,6 @@ export type VisionJudgeInput = { photo_url: string };
 export type VisionVerdict = {
   allowed: boolean;
   reason: string;
-  prominent_faces: boolean;
   confidence: number;
 };
 

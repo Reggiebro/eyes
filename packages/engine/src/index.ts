@@ -1663,7 +1663,6 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
             })
           ).url
         : null;
-      let faces = false;
       const v = await deps.verifySubmission({
         task,
         submission: {
@@ -1676,23 +1675,16 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           answer_text: capture.answer_text,
           answer_bool: capture.answer_bool,
         },
-        vision: {
-          judge: async (i) => {
-            const verdict = await providers.vision.judge(i);
-            faces = verdict.prominent_faces;
-            return verdict;
-          },
-        },
+        vision: providers.vision,
       });
       const dropPhoto = () =>
         providers.storage
           .deletePhoto({ key })
           .catch(() => console.error(`photo delete for task ${task.id} failed`));
-      if (faces) await dropPhoto();
       const submitted = await one<Task>("eyes_submit", {
         p_task_id: task.id,
         p_worker_id: workerId,
-        p_photo_url: faces ? null : photo_url,
+        p_photo_url: photo_url,
         p_answer_text: capture.answer_text,
         p_answer_bool: capture.answer_bool,
         p_lat: capture.lat,
@@ -1708,7 +1700,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       }).catch(async (err: unknown) => {
         const lost =
           err instanceof EyesError && (err.code === "task_already_claimed" || err.code === "offer_invalid");
-        if (lost && photo_url && !faces) await dropPhoto();
+        if (lost && photo_url) await dropPhoto();
         throw err;
       });
       await storeFix(workerId, { ...capture, source: "capture" }, null).catch((err) =>
