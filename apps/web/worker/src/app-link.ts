@@ -1,3 +1,5 @@
+import { type InstallDeps, loadSaved, readCode } from "./install.ts";
+
 /** Deep link for a connect code in the URL fragment, or null when the code is missing or malformed. */
 export function connectDeepLink(hash: string): string | null {
   const code = new URLSearchParams(hash.slice(1)).get("c") ?? "";
@@ -20,9 +22,18 @@ export type AppPageDeps = {
   doc: EventTarget & { hidden: boolean };
   win: EventTarget;
   testflightUrl: string | undefined;
+  store?: InstallDeps["store"];
 };
 
-export type OpenAppDeps = Pick<AppPageDeps, "navigate" | "doc" | "win" | "testflightUrl">;
+export type OpenAppDeps = Pick<AppPageDeps, "navigate" | "doc" | "win" | "testflightUrl" | "store">;
+
+// A post-install return belongs on the readiness-gated page, not the ordinary auto-open path.
+function resumeInstall(deep: string, d: Pick<AppPageDeps, "store" | "navigate">) {
+  const saved = d.store && loadSaved(d.store, Date.now());
+  if (!saved?.installPending || saved.code !== readCode(new URL(deep).hash)) return false;
+  d.navigate(`/install${new URL(deep).hash}`);
+  return true;
+}
 
 /**
  * Opens the app, or installs it when it is missing. An opened app hides the page (cancel). iOS's
@@ -31,6 +42,7 @@ export type OpenAppDeps = Pick<AppPageDeps, "navigate" | "doc" | "win" | "testfl
  * When the clock runs out: TestFlight, or the ad hoc install page with the same code in its fragment.
  */
 export function openApp(deep: string, d: OpenAppDeps): void {
+  if (resumeInstall(deep, d)) return;
   d.navigate(deep);
   let left = 2500;
   let started = Date.now();
@@ -76,10 +88,15 @@ export function startApp(d: AppPageDeps): string | null {
     d.reveal("missing");
     return null;
   }
+  if (resumeInstall(deep, d)) return deep;
   d.setHref("open", deep);
   d.reveal("ready");
   d.onTap(() => openApp(deep, d));
   // Opens the app at once when it is installed; after load, so the page is there to fall back on.
-  d.onLoad(() => d.later(() => d.navigate(deep), 300));
+  d.onLoad(() =>
+    d.later(() => {
+      if (!resumeInstall(deep, d)) d.navigate(deep);
+    }, 300),
+  );
   return deep;
 }
