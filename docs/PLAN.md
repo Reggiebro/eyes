@@ -4,11 +4,11 @@ Living plan. `STATUS.md` is the task board; this file says what remains, who doe
 
 Hacking: Sat Oct 17 10:30 AM to Sun Oct 18 10:00 AM (submissions). Feature freeze 6:00 AM Sun.
 
-## 1. Where we are (2026-10-17 10:53 PT)
+## 1. Where we are (hosting updated 2026-10-18; other verification dated below)
 
 | Area | State |
 |---|---|
-| Live mode | `EYES_PROVIDERS=live` on Cloudflare Containers (`eyes-api` Worker, api.eyes.pictures): Inkbox texting (shared line +16504849720, `connect @hackathon` then START), Claude vision and safety classifier, InsForge storage, place lookup. Stripe and Primitive simulated, and every worker-facing text and page says so (#75) |
+| Live mode | Actual MCP/API server hosted on Manufact Cloud (`eyes-prod`, `https://warm-spark-aocdd.run.mcp-use.com`); public https://api.eyes.pictures/mcp through the Cloudflare `eyes-api` forwarder. Ops remains https://internal.eyes.pictures; static app and landing remain on Cloudflare. OAuth metadata normalization and the permanent Manufact deploy path are pending verification |
 | Live-verified (STATUS) | safety rules and classifier refusals; Claude vision verdicts; face-photo deletion; real Claude over the MCP connector through quote, ask and await with a stand-in worker; worker sign-up page against the live API; owner console; smoke 13/13 |
 | Not yet live-verified | a real iMessage to a phone (G1), Stripe top-up and transfer (G2), Primitive email thread, Armature analytics |
 | CI and tests | lint, typecheck, unit, contract, integration, golden and demo e2e, safety rules, intent, secrets; `pnpm ax:eval` (Claude client passes locally); `safety-llm-eval` and the Claude PR reviewer run with the repo secret |
@@ -18,8 +18,8 @@ Hacking: Sat Oct 17 10:30 AM to Sun Oct 18 10:00 AM (submissions). Feature freez
 
 | Task | What | Status |
 |---|---|---|
-| T4.26 (#80) | fewer false refusals from the Claude classifier; recall stayed 1.000 on 3 runs, 34 adversarial tasks blocked | merged 10:51 PT; needs a server redeploy |
-| T4.27 (#81, fixes #78) | place lookup must not pick the wrong branch of a chain store | verifying |
+| T4.26 (#80) | fewer false refusals from the Claude classifier; recall stayed 1.000 on 3 runs, 34 adversarial tasks blocked | shipped; STATUS records the 2026-10-17 11:00 PT live verification |
+| T4.27 (#81, fixes #78) | place lookup must not pick the wrong branch of a chain store | shipped; STATUS records the 2026-10-17 12:03 PT live verification |
 
 Every PR: spec + test + intent verifiers, security on money/auth/webhooks/safety, ax on agent surfaces. Auto-merge on PASS + green CI. ADR-010 decides blocking vs deferred. Verdicts live in `intent/verdicts/`.
 
@@ -35,7 +35,7 @@ Every PR: spec + test + intent verifiers, security on money/auth/webhooks/safety
 
 Order agreed with the humans: Inkbox (in person) -> Manufact -> InsForge -> Stripe -> Primitive -> Armature. Anthropic is a prerequisite for any live mode: without `ANTHROPIC_API_KEY` the server refuses `EYES_PROVIDERS=live` on purpose (the safety classifier and photo verification would be off).
 
-Set server env with `npx mcp-use servers env set 0526925a-58ae-4d83-9c3b-ed378926c260 KEY=VALUE` (secrets with `--secret` where supported), then `npx mcp-use deployments restart <running id>` (env is read at start; merges do not auto-deploy). Code changes: `npx mcp-use deploy --yes --dockerfile Dockerfile` from an up-to-date main.
+Production is now Manufact `eyes-prod`, not the earlier `0526925a` server. Follow [DEPLOY §2](DEPLOY.md#2-mcp-server-on-manufact-cloud) for current hosting and deployment state. The old Cloudflare-container API deploy loop is paused; do not resume it or deploy without preserving the Manufact origin. Permanent deployment commands are pending confirmation by the hosting worker.
 
 | Key | Steps | Proof (live-verified) |
 |---|---|---|
@@ -64,4 +64,4 @@ Claude asks "Is the line at Blue Bottle Coffee, Mint Plaza long right now? Use E
 | Stripe Connect onboarding friction | pre-onboard one teammate worker before demos; show the transfer in the dashboard |
 | Claude API slow or down during the demo | the classifier fails closed within 12 seconds (refusal, nothing charged) and vision sends the task to review; rules still refuse the demo's unsafe task |
 | Venue GPS drift | verify radius 150 m; capture at the cafe door |
-| Container deploy breaks | check out the last good commit and run the deploy step in [DEPLOY §2](DEPLOY.md); if a fix is not quick, roll back to the Mac ([DEPLOY](DEPLOY.md#roll-back-to-the-mac)) |
+| Manufact server deploy breaks | use the last verified Manufact deployment and the current recovery procedure in [DEPLOY §2](DEPLOY.md#2-mcp-server-on-manufact-cloud); preserve the public domains and Cloudflare forwarder. Do not silently switch the API back to a Cloudflare Container |
