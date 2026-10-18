@@ -7,7 +7,7 @@ Open [ChatGPT Plugins](https://chatgpt.com/plugins). This is a custom connector 
 1. Choose **Add / + > Add custom MCP server**. If Eyes is already added, open it and resume **Connect** instead of creating a duplicate.
 2. Name it **Eyes**, set Server URL to `https://mcp.eyes.pictures/mcp`, and choose **OAuth**.
 3. Check **I understand and want to continue**, then choose **Create as a plugin** and **Connect**.
-4. On the Eyes OAuth page, enter your **existing Eyes API key** and connect. If needed, explicitly choose to create a key there. Never paste a key into chat. Connecting does not automatically create a key or charge a card.
+4. If you create a key on the Eyes OAuth page, click **Continue to ChatGPT**; your app receives it automatically. Save the key only if you want direct API access. If using an **existing Eyes API key**, enter it on that page and click **Connect**. Never paste a key into chat. Connecting does not charge a card.
 5. In a new chat, type **@**, select **Eyes**, and ask for a free quote: “Use Eyes to quote checking whether the Ferry Building in San Francisco is open.”
 
 The current Plugins flow does **not** require enabling Developer Mode. Access is web-only and depends on your account, workspace policy, and Lockdown settings. Pro supports read/fetch permissions; full MCP is available on Business, Enterprise and Edu. Business requires an admin/owner to create workspace plugins; Enterprise/Edu also permit creators with **Create plugins with MCPs**. Only admins/owners publish to the workspace. Free and Plus access is not guaranteed. If **Add custom MCP server** is missing or disabled, check account/workspace access.
@@ -23,7 +23,7 @@ Open [Claude Connectors](https://claude.ai/customize/connectors). The same remot
 1. In **Customize > Connectors**, choose **+ Add > Add custom connector**. If Eyes is already added, open it and resume **Connect** instead of creating a duplicate.
 2. Name it **Eyes**, paste `https://mcp.eyes.pictures/mcp` with no trailing slash, and choose **Continue**.
 3. Keep the detected **Sign in now** and **Register automatically** settings, add the connector, then choose **Connect**.
-4. On the Eyes OAuth page, enter your **existing Eyes API key** and connect. If needed, explicitly choose to create a key there. Never paste a key into chat; connecting does not automatically create a key or charge a card.
+4. If you create a key on the Eyes OAuth page, click **Continue to Claude**; your app receives it automatically. Save the key only if you want direct API access. If using an **existing Eyes API key**, enter it on that page and click **Connect**. Never paste a key into chat. Connecting does not charge a card.
 5. In a new chat, open **+ > Connectors** and enable **Eyes**. Ask for the same free quote above.
 
 Custom connectors are available on Free, Pro, Max, Team and Enterprise. Free is limited to one custom connector. On Team, an Owner or Primary Owner must add the organization connector first; Enterprise also permits a custom role with **Manage access to Libraries**. Each member then connects individually from Customize. Organization admins use [admin connector settings](https://claude.ai/admin-settings/connectors).
@@ -46,7 +46,7 @@ Both client URLs reach the same server and the same 13 tools: `quote_task`, `ask
 
 ## Dedicated MCP domain: ready for connector migration
 
-`https://mcp.eyes.pictures/mcp` is ready for new connectors; the ChatGPT web steps above use it. Existing connectors have not been switched. The domain owner verified the deployed host's OAuth flow, all 12 tools and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors can keep using `https://api.eyes.pictures/mcp`.
+`https://mcp.eyes.pictures/mcp` supports new ChatGPT and Claude connectors using the web steps above. The domain owner verified the deployed host's OAuth flow, tool registry and matching card metadata on 2026-10-18. It uses the same Manufact-hosted server. Existing ChatGPT, Claude and third-party connectors at `https://api.eyes.pictures/mcp` remain supported.
 
 Verified dedicated-host values:
 
@@ -185,7 +185,7 @@ Use the [ChatGPT web steps above](#chatgpt-web-no-terminal-required). Do not pas
 
 Use the [Claude web steps above](#claude-web-no-terminal-required) for new connectors. Existing API-host connectors can stay unchanged.
 
-When OAuth creates a key, click **Copy** beside the displayed key to save it before continuing. **Copied** confirms success; if clipboard access is unavailable or denied, select the displayed key and copy it manually. Copy never submits the page or follows **Continue**.
+When OAuth creates a key, click **Continue to your app** to finish connecting; the app receives the key automatically. **Copy** is optional for direct API access, and the key is shown only once. **Copied** confirms success; if clipboard access is unavailable or denied, select the displayed key and copy it manually. Copy never submits the page or follows **Continue**.
 
 ### Fallback for every other client
 
