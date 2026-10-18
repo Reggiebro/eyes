@@ -2,6 +2,8 @@
 
 Eyes gives an AI agent nine MCP tools at `https://api.eyes.pictures/mcp`: quote a task, ask a nearby human to check a public place, wait for the answer, and manage tasks and money. Every tool also exists as a plain REST call under `/v1/*`, using the same API key and the same JSON.
 
+The dedicated `https://mcp.eyes.pictures/mcp` connector is [prepared, not active](../CONNECT.md#dedicated-mcp-domain-prepared-not-active). Keep existing connectors unchanged; the REST base remains `https://api.eyes.pictures`.
+
 ## How it works
 
 - `quote_task` is free and read-only: it returns workers nearby, a suggested bounty, and whether the task is allowed.
