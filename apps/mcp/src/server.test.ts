@@ -356,11 +356,12 @@ describe("worker setup page (ADR-028)", () => {
   const SETUP: WorkerSetup = {
     opted_in: true,
     spot: { at: "2026-10-17T18:00:00.000Z", fresh: true, max_age_h: 24 },
-    app: { last_at: "2026-10-17T18:00:00.000Z", sending: true },
+    app: { connected: true, last_at: "2026-10-17T18:00:00.000Z", sending: true },
     payouts: { set_up: false, live: true, setup_url: "http://api.eyes.test/w/connect/c" },
     here_url: "http://worker.eyes.test/here.html?t=l",
     email_masked: null,
     email_status: "none",
+    email_skipped: false,
   };
   const TASKS: WorkerTasks = {
     paid_usd: 0,

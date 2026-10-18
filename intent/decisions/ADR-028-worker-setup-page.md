@@ -13,6 +13,13 @@ A worker's setup is scattered across texts. START sends the payout setup link an
 - Both routes send `Cache-Control: no-store` and use the existing `/w/*` CORS rule, which allows only the worker web origin.
 - No migration: `eyes_worker` gives the opt-in, spot and `location_source`; `eyes_worker_earnings` gives the payout setup and the claims, newest first.
 
+### Durable completion (2026-10-18, T6.62)
+
+- `app.connected` is independent of `app.last_at` and `app.sending`. Migration 038 records an accepted native `source=app` location update as a boolean; task captures, other GPS updates and elapsed time cannot undo it. START/HELP and install-page `app_connected` use that same fact. No new GPS history is retained.
+- STOP still clears GPS and revokes codes. START after STOP sends a replacement reconnect link without pretending the existing app needs reinstalling or erasing its completion history.
+- Existing `location_source=app` rows backfill regardless of age. No reliable native history exists for rows already overwritten; their next normal app report completes the step without reinstalling. Install links, browser polling and device registration never count as connected.
+- `email_skipped` records only an optional setup acknowledgement. `POST /w/me/email/skip` requires the existing signed setup bearer token, accepts `{}`, rejects other browser origins and responds with the full uncached setup. It never changes email, verification, opt-in or sends mail. Real email addition/verification clears the acknowledgement; existing iMessage and STOP behavior are unchanged.
+
 ## Alternatives rejected
 - Code in the query string (`/w/me?c=<code>`): CDNs, proxies and request logs record query strings, and the code opens the worker's spot and recent tasks for 7 days.
 - Mint the install code on GET: every page view would add a code. A worker keeps at most 5 codes, so a few views would rotate out the code that a working device uses.
