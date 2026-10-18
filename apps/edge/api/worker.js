@@ -53,6 +53,23 @@ export class EyesServer extends DurableObject {
     return true;
   }
 
+  // With ORIGIN serving traffic, a container still running from before would run a second set of
+  // sweeps and payout loops. First tick: SIGTERM, so the server drains like in a rollout; a later
+  // tick that still finds it running destroys it.
+  async stop() {
+    const container = this.ctx.container;
+    if (!container.running) return false;
+    if (this.stopping) {
+      console.log("eyes container still running after SIGTERM: destroying it (ORIGIN is set)");
+      await container.destroy();
+    } else {
+      console.log("eyes container running while ORIGIN is set: sending SIGTERM");
+      container.signal(15);
+      this.stopping = true;
+    }
+    return true;
+  }
+
   async fetch(request) {
     if (await this.ensure()) this.ready = false;
     const length = request.headers.get("content-length");
@@ -113,9 +130,11 @@ export default {
   },
 
   async scheduled(_event, env) {
-    // Keep the origin warm; never start the container while ORIGIN serves traffic.
+    // Keep the origin warm and stop any container left from before; never start one while ORIGIN
+    // serves traffic.
     if (env.ORIGIN) {
       await fetch(new URL("/healthz", env.ORIGIN)).catch((err) => console.error("origin ping failed", err));
+      await server(env).stop();
       return;
     }
     await server(env).ensure();

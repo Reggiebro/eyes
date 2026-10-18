@@ -35,11 +35,14 @@ interface FakeContainer {
   setInactivityTimeout: Mock<(ms: number) => Promise<void>>;
   monitor: () => Promise<void>;
   getTcpPort: Mock<() => FakePort>;
+  signal: Mock<(signo: number) => void>;
+  destroy: Mock<() => Promise<void>>;
 }
 
 interface FakeStub {
   fetch: Mock<(request: Request) => Promise<Response>>;
   ensure: Mock<() => Promise<boolean>>;
+  stop: Mock<() => Promise<boolean>>;
 }
 
 function fakePort(): FakePort {
@@ -56,6 +59,10 @@ function fakeContainer(options: FakeContainerOptions = {}): FakeContainer {
     setInactivityTimeout: vi.fn(async (_ms: number) => {}),
     monitor: options.monitor ?? (() => Promise.resolve()),
     getTcpPort: vi.fn(() => container.port),
+    signal: vi.fn((_signo: number) => {}),
+    destroy: vi.fn(async () => {
+      container.running = false;
+    }),
   };
   return container;
 }
@@ -68,6 +75,7 @@ function fakeStub(): FakeStub {
   return {
     fetch: vi.fn(async (_request: Request) => new Response("routed", { status: 200 })),
     ensure: vi.fn(async () => false),
+    stop: vi.fn(async () => false),
   };
 }
 
@@ -192,7 +200,7 @@ describe("api worker routing", () => {
     expect(stub.fetch.mock.calls[0]?.[0].headers.get("host")).toBeNull();
   });
 
-  it("scheduled() with ORIGIN pings ORIGIN /healthz and never touches the container", async () => {
+  it("scheduled() with ORIGIN pings ORIGIN /healthz and stops, never ensures, the container", async () => {
     const stub = fakeStub();
     const upstream = vi.fn(async (_input: URL | string) => new Response("ok"));
     vi.stubGlobal("fetch", upstream);
@@ -208,7 +216,8 @@ describe("api worker routing", () => {
       "https://eyes.run.mcp-use.com/healthz",
     ]);
     expect(error).toHaveBeenCalledWith("origin ping failed", expect.any(Error));
-    expect(env.EYES.get).not.toHaveBeenCalled();
+    expect(env.EYES.idFromName).toHaveBeenCalledWith("main");
+    expect(stub.stop).toHaveBeenCalledTimes(2);
     expect(stub.ensure).not.toHaveBeenCalled();
   });
 
@@ -234,6 +243,26 @@ describe("EyesServer", () => {
     const ctx = fakeCtx(idle);
     new EyesServer(ctx, {});
     expect(ctx.blockConcurrencyWhile).not.toHaveBeenCalled();
+  });
+
+  it("stop() does nothing when no container runs, else SIGTERM first and destroy on a later call", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const idle = fakeContainer();
+    expect(await new EyesServer(fakeCtx(idle), {}).stop()).toBe(false);
+    expect(idle.signal).not.toHaveBeenCalled();
+    expect(idle.destroy).not.toHaveBeenCalled();
+
+    const container = fakeContainer({ running: true });
+    const server = new EyesServer(fakeCtx(container), {});
+
+    expect(await server.stop()).toBe(true);
+    expect(container.signal).toHaveBeenCalledWith(15);
+    expect(container.destroy).not.toHaveBeenCalled();
+    expect(await server.stop()).toBe(true);
+    expect(container.destroy).toHaveBeenCalledOnce();
+    expect(await server.stop()).toBe(false);
+    expect(container.signal).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledTimes(2);
   });
 
   it("ensure() does nothing and returns false when the container is already running", async () => {
