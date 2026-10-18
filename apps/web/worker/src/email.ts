@@ -120,3 +120,57 @@ export async function signIn(
   const { token } = (await d.send("/w/login/code", post({ code }))) as { token: string };
   d.navigate(`me.html#c=${token}`);
 }
+
+/** The connect email, read out of the API's mailto so /me can show it and offer webmail. */
+export type Compose = { to: string; subject: string; body: string; mailto: string };
+
+export function parseMailto(mailto: string): Compose {
+  try {
+    if (typeof mailto !== "string" || /\s/.test(mailto) || mailto.includes("#")) throw new Error();
+    decodeURIComponent(mailto); // Reject malformed escapes rather than silently changing the connect code.
+    const url = new URL(mailto);
+    const to = decodeURIComponent(url.pathname);
+    if (
+      url.protocol !== "mailto:" ||
+      !validEmail(to) ||
+      !/^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9.-]+$/.test(to)
+    )
+      throw new Error();
+    const fields = new Map<string, string>();
+    for (const [key, value] of url.searchParams) {
+      const name = key.toLowerCase();
+      if (!["subject", "body"].includes(name) || fields.has(name) || value.includes("\0")) throw new Error();
+      fields.set(name, value);
+    }
+    const subject = fields.get("subject") ?? "";
+    if (/[\r\n]/.test(subject)) throw new Error();
+    return { to, subject, body: fields.get("body") ?? "", mailto };
+  } catch {
+    throw new Problem("Eyes returned an invalid connect email.", "Try Add email again.");
+  }
+}
+
+export type ComposeLink = { id: "gmail" | "outlook" | "mail"; label: string; href: string; newTab: boolean };
+
+/** True on a phone: narrow screen or iOS, where the Mail app is the likely sender. */
+export const onPhone = (userAgent: string, width: number) =>
+  width < 640 || /iPhone|iPad|iPod/.test(userAgent);
+
+/** Gmail, Outlook and the Mail app, so the email can go out with no mail app set up; the likeliest one first. */
+export function composeLinks(c: Compose, phone: boolean): ComposeLink[] {
+  const e = encodeURIComponent;
+  const gmail: ComposeLink = {
+    id: "gmail",
+    label: "Open Gmail",
+    href: `https://mail.google.com/mail/?view=cm&fs=1&to=${e(c.to)}&su=${e(c.subject)}&body=${e(c.body)}`,
+    newTab: true,
+  };
+  const outlook: ComposeLink = {
+    id: "outlook",
+    label: "Open Outlook",
+    href: `https://outlook.live.com/mail/0/deeplink/compose?to=${e(c.to)}&subject=${e(c.subject)}&body=${e(c.body)}`,
+    newTab: true,
+  };
+  const mail: ComposeLink = { id: "mail", label: "Open Mail app", href: c.mailto, newTab: false };
+  return phone ? [mail, gmail, outlook] : [gmail, outlook, mail];
+}
