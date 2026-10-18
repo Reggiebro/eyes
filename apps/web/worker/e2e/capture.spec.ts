@@ -148,6 +148,42 @@ test("a message that does not repeat the title is shown whole", async ({ page })
   await expect(page.locator("#message")).toHaveText(message);
 });
 
+for (const width of [390, 900]) {
+  test(`review result shows its long reason once at ${width}px without claiming payment`, async ({
+    page,
+  }, info) => {
+    const reason = "The automatic safety check was not sure about this photo, so a person will review it.";
+    const message = `Thanks, we got it. Your answer needs a quick manual check (${reason}). You will be paid once it is approved. To request a manual review, reply HELP to the Eyes text.`;
+    await page.setViewportSize({ width, height: 1000 });
+    await mockOffer(page, offer, (route) =>
+      route.fulfill({
+        json: {
+          ...okResult,
+          status: "needs_review",
+          message,
+          verification: { ...okResult.verification, vision_ok: false, vision_reason: reason },
+        },
+      }),
+    );
+    await page.goto("/capture.html?t=tok");
+    await takePhoto(page);
+    await page.getByRole("button", { name: "Send to Eyes" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Sent, needs a quick review", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#message")).toHaveText(message);
+    await expect(page.locator("#reason")).toBeHidden();
+    const visibleText = await page.locator("#result").innerText();
+    expect(visibleText.split(reason)).toHaveLength(2);
+    expect(visibleText).toContain("You will be paid once it is approved.");
+    await expect(page.getByText("Photo is safe to share: failed")).toBeVisible();
+    const label = await page.locator("#checks > li").last().boundingBox();
+    expect(label?.height).toBeLessThan(50);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`worker-${width}.png`), fullPage: true });
+  });
+}
+
 test("an expired or invalid link shows the error and fix, with no camera", async ({ page }) => {
   await page.route("**/api/**", (route) =>
     route.fulfill({
