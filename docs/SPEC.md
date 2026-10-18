@@ -191,7 +191,7 @@ intent/  scripts/  e2e/  .claude/agents/  .github/workflows/  STATUS.md
 
 Eyes only allows tasks about public, commercial or civic places.
 - Every task passes the rule layer and the LLM classifier before dispatch. Reject: targeting a specific private person; private residences or home addresses; a person's vehicle; entering private property; photographing identifiable people; following anyone; illegal or dangerous tasks. Rejections return a clear, non-judgmental `unsafe_task` error with `fix`.
-- Workers are told never to photograph faces; photos with prominent faces are rejected (vision verdict `prominent_faces`).
+- Photo moderation rejects only confirmed graphic gore or explicit sexual/adult content. Ordinary public scenes and incidental faces are allowed; content uncertainty alone is not a rejection. Provider failures remain unavailable and require review. These photo rules do not relax the task-request restrictions above.
 - Per-agent spend caps and daily caps. Workers can report a task; reported tasks pause (stretch).
 
 ## §13 Demo script (90 seconds)

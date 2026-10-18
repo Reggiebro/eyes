@@ -85,20 +85,20 @@ describe("instrumentProviders", () => {
     const base = fakeProviders();
     const p = instrumentProviders(base, log);
     await p.vision.judge({} as never);
-    base.vision.setVerdict({ allowed: false, reason: "faces", prominent_faces: true, confidence: 0.456 });
+    base.vision.setVerdict({ allowed: false, reason: "graphic gore", confidence: 0.9 });
     await expect(p.vision.judge({} as never)).resolves.toMatchObject({ allowed: false });
     expect(events).toEqual([
       {
         kind: "vision",
         level: "info",
         summary: "safe to share (90%): The photo is safe to share.",
-        data: { allowed: true, confidence: 0.9, prominent_faces: false },
+        data: { allowed: true, confidence: 0.9 },
       },
       {
         kind: "vision",
         level: "warn",
-        summary: "blocked (46%): faces",
-        data: { allowed: false, confidence: 0.456, prominent_faces: true },
+        summary: "blocked (90%): graphic gore",
+        data: { allowed: false, confidence: 0.9 },
       },
     ]);
   });

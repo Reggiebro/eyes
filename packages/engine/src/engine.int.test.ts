@@ -27,6 +27,7 @@ import {
 import { migrate } from "@eyes/db";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { verifySubmission } from "../../verify/src/index.ts";
 import { createEyesService } from "./index.ts";
 
 const url = process.env.DATABASE_URL;
@@ -59,7 +60,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     verifySubmission: async ({ submission: s, vision }) => {
       if (!s.photo_url) return PASS;
       const v = await vision.judge({ photo_url: s.photo_url });
-      const vision_ok = v.allowed && !v.prominent_faces;
+      const vision_ok = v.allowed;
       return vision_ok ? PASS : { ...PASS, vision_ok, vision_reason: v.reason, auto_approve: false };
     },
     config: AppConfig.parse({
@@ -74,7 +75,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   beforeAll(() => migrate(url ?? ""));
   afterAll(() => sql.end());
-  afterEach(() => providers.vision.setVerdict({ allowed: true, prominent_faces: false }));
+  afterEach(() => providers.vision.setVerdict({ allowed: true }));
 
   const somewhere = (): LatLng => ({ lat: 10 + Math.random() * 40, lng: -120 + Math.random() * 60 });
   const north = (p: LatLng, meters: number): LatLng => ({ lat: p.lat + meters / 111_320, lng: p.lng });
@@ -1248,11 +1249,11 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(verified.result).toMatchObject({ status: "verified", message: `Verified. ${simulated}` });
     expect(last("paid")).toMatchObject({ task_id: verified.task_id, live_payouts: false });
 
-    providers.vision.setVerdict({ allowed: false, reason: "A screen shows personal details." });
+    providers.vision.setVerdict({ allowed: false, reason: "The photo shows graphic gore." });
     const review = await capture();
     expect(review.result).toMatchObject({
       status: "needs_review",
-      message: `Thanks, we got it. Your answer needs a quick manual check (A screen shows personal details.). ${simulated} To request a manual review, reply HELP to the Eyes text.`,
+      message: `Thanks, we got it. Your answer needs a quick manual check (The photo shows graphic gore.). ${simulated} To request a manual review, reply HELP to the Eyes text.`,
     });
     expect(outbox.some((m) => m.to === phone && JSON.stringify(m.payload).includes("/w/connect/"))).toBe(
       false,
@@ -1603,60 +1604,44 @@ describe.skipIf(!url)("engine on Postgres", () => {
   const stored = (taskId: string) =>
     [...providers.storage.objects.keys()].filter((key) => key.startsWith(`${taskId}/`));
 
-  it("deletes a photo rejected for prominent faces and never gives the agent its URL", async () => {
-    const at = somewhere();
-    const { a, task_id, token } = await claimed(at);
-    providers.vision.setVerdict({ prominent_faces: true });
-
-    expect(await capture(token, at)).toMatchObject({
-      status: "needs_review",
-      verification: { vision_ok: false },
-    });
-    expect(providers.vision.calls).toContainEqual(
-      expect.objectContaining({ photo_url: expect.stringContaining(`/photos/${task_id}/`) }),
-    );
-    expect(stored(task_id)).toEqual([]);
-    expect(await service.awaitAnswer(a, { task_id, timeout_seconds: 1 })).toMatchObject({
-      answered: true,
-      answer: { answer_text: "short", photo_url: null },
-    });
-    expect((await service.getTask(a, { task_id })).answer?.photo_url).toBeNull();
-  });
-
-  it("keeps the photo without prominent faces, delivering it only when moderation allows it", async () => {
-    for (const allowed of [true, false]) {
-      providers.vision.setVerdict({ allowed });
+  it.each([
+    ["ordinary public photo with incidental faces", true, 0.95, false],
+    ["uncertain content", true, 0.1, false],
+    ["graphic gore", false, 0.95, false],
+    ["explicit sexual content", false, 0.95, false],
+    ["provider unavailable", false, 0, true],
+  ])("moderates %s without deleting photos or paying twice", async (reason, allowed, confidence, fails) => {
+    const verify = vi.spyOn(deps, "verifySubmission").mockImplementation(verifySubmission);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const remove = vi.spyOn(providers.storage, "deletePhoto");
+    const judge = vi.spyOn(providers.vision, "judge");
+    if (fails) judge.mockRejectedValue(new Error("provider failed"));
+    providers.vision.setVerdict({ allowed, confidence, reason });
+    try {
       const at = somewhere();
-      const { a, task_id, token } = await claimed(at);
-      const { status } = await capture(token, at);
-      expect(status === "needs_review").toBe(!allowed);
+      const { a, task_id, token, w } = await claimed(at);
+      await service.workerConnectUrl(connectToken(w.phone));
+      expect(await capture(token, at)).toMatchObject({
+        status: allowed ? "paid" : "needs_review",
+        verification: { gps_ok: true, fresh_ok: true, vision_ok: allowed },
+      });
       const [key] = stored(task_id);
       expect(key).toBeDefined();
-      expect((await service.getTask(a, { task_id })).answer?.photo_url).toBe(
-        allowed ? `https://storage.fake.test/photos/${key}` : null,
-      );
-    }
-  });
-
-  it("accepts the capture and hides the URL when deleting a face photo fails, logging only the task id", async () => {
-    const at = somewhere();
-    const { a, task_id, token } = await claimed(at);
-    providers.vision.setVerdict({ prominent_faces: true });
-    const remove = vi
-      .spyOn(providers.storage, "deletePhoto")
-      .mockRejectedValueOnce(new Error("storage down at https://storage.fake.test/photos/secret"));
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect(await capture(token, at)).toMatchObject({ status: "needs_review" });
-      expect(remove).toHaveBeenCalledOnce();
-      expect(error.mock.calls).toEqual([[`photo delete for task ${task_id} failed`]]);
-      expect((await service.getTask(a, { task_id })).answer).toMatchObject({
-        answer_text: "short",
-        photo_url: null,
-      });
+      expect(remove).not.toHaveBeenCalled();
+      const answer = (await service.getTask(a, { task_id })).answer;
+      expect(answer?.photo_url).toBe(allowed ? `https://storage.fake.test/photos/${key}` : null);
+      if (fails) expect(answer?.verification.vision_reason).toContain("unavailable");
+      await expect(capture(token, at)).rejects.toMatchObject({ code: "offer_invalid" });
+      await service.retryPayouts();
+      const released = await sql`select id from ledger where task_id = ${task_id} and type = 'release'`;
+      expect(released).toHaveLength(allowed ? 1 : 0);
+      const paid = providers.payments.transfers.filter((p) => p.task_id === task_id);
+      expect(paid).toHaveLength(allowed ? 1 : 0);
     } finally {
+      verify.mockRestore();
+      judge.mockRestore();
       remove.mockRestore();
-      error.mockRestore();
+      log.mockRestore();
     }
   });
 
@@ -1665,12 +1650,12 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   it("HELP after a held answer opens a ticket, a free-text reply adds to it, and resolving it texts the worker", async () => {
     const at = somewhere();
-    providers.vision.setVerdict({ allowed: false, reason: "A screen shows personal details." });
+    providers.vision.setVerdict({ allowed: false, reason: "The photo shows graphic gore." });
     const { task_id, token, w } = await claimed(at);
     expect(await capture(token, at)).toMatchObject({
       status: "needs_review",
       message:
-        "Thanks, we got it. Your answer needs a quick manual check (A screen shows personal details.). You will be paid once it is approved. To request a manual review, reply HELP to the Eyes text.",
+        "Thanks, we got it. Your answer needs a quick manual check (The photo shows graphic gore.). You will be paid once it is approved. To request a manual review, reply HELP to the Eyes text.",
     });
     const last = () => outbox.findLast((m) => m.to === w.phone)?.payload;
 
