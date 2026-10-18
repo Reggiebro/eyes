@@ -102,6 +102,13 @@
       "examples": ["cancel_task({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
     },
     {
+      "id": "accept_answer",
+      "name": "Accept an answer",
+      "description": "Record your user's positive feedback on an owned answered task with status verified or paid. Returns status accepted and the first accepted_at timestamp. Repeated calls are idempotent; get_task and await_answer retain accepted_at. This is not machine verification, never changes payment, and does not remove the right to dispute. Next: accept only after your user says the answer looks good.",
+      "tags": ["feedback"],
+      "examples": ["accept_answer({\"task_id\":\"3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b\"})"]
+    },
+    {
       "id": "dispute_answer",
       "name": "Dispute an answer",
       "description": "Flag an answered task (status verified, paid or needs_review) as wrong. The worker payout is held and the task goes to human review. Give a specific reason. To get a fresh answer now, call ask_eyes again with a new idempotency_key.",
