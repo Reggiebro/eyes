@@ -1375,6 +1375,29 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
         FEED_HEADERS,
       );
     });
+    server.app.get("/ops/workers/:id/dispute-review", ops.operator, async (c) => {
+      const id = c.req.param("id");
+      const [review] = UUID.test(id)
+        ? await rpc<Record<string, unknown>>("eyes_worker_dispute_review", { p_worker_id: id })
+        : [];
+      return review
+        ? c.json(review, 200, FEED_HEADERS)
+        : c.json({ error: "worker_not_found" }, 404, FEED_HEADERS);
+    });
+    server.app.post("/ops/workers/:id/dispute-review", ops.sameOrigin, ops.operator, async (c) => {
+      const id = c.req.param("id");
+      if (!UUID.test(id)) return c.json({ error: "worker_not_found" }, 404, FEED_HEADERS);
+      const { note } = parse(z.object({ note: z.string().trim().min(5).max(1000) }), await readJson(c));
+      const operator = c.get("operator");
+      const [review] = await rpc<Record<string, unknown>>("eyes_review_worker_disputes", {
+        p_worker_id: id,
+        p_actor: `${operator.id} (${operator.label})`,
+        p_note: note,
+        p_now: deps.providers.clock.now().toISOString(),
+      });
+      if (!review) return c.json({ error: "worker_not_found" }, 404, FEED_HEADERS);
+      return c.json(review, review.error === "worker_not_held" ? 409 : 200, FEED_HEADERS);
+    });
     server.app.post("/ops/tasks/:id/resolve", ops.sameOrigin, ops.operator, async (c) => {
       const body = parse(TaskResolve, { ...(await readJson(c)), task_id: c.req.param("id") });
       const operator = c.get("operator").label;

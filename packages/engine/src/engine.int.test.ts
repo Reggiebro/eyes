@@ -1849,6 +1849,21 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(offersTo(releaser.phone)).toHaveLength(1);
   });
 
+  it("blocks new YES claims over phone and verified email when an earlier offer's worker is held", async () => {
+    const at = somewhere();
+    const a = await agent();
+    const w = await worker(at);
+    const email = `held-${randomUUID()}@example.test`;
+    await sql`update workers set email = ${email}, email_verified_at = now() where id = ${w.worker_id}`;
+    const { task_id } = await ask(a, at);
+    await sql`update workers set dispute_hold_at = now() where id = ${w.worker_id}`;
+    await reply(w.phone);
+    await service.handleWorkerReply({ email, intent: "yes", text: "YES" });
+    expect((await service.getTask(a, { task_id })).status).toBe("dispatched");
+    expect(outbox.filter((m) => m.kind === "capture_link" && m.payload.task_id === task_id)).toHaveLength(0);
+    expect((await service.quoteTask(a, { location: at, task_type: "line_length" })).workers_nearby).toBe(0);
+  });
+
   describe("disputes (ADR-026)", () => {
     // A paid task: the worker finished payout setup, so the capture pays out a fake transfer.
     async function paidTask() {
@@ -1863,8 +1878,28 @@ describe.skipIf(!url)("engine on Postgres", () => {
       Number((await sql`select id from tickets where task_id = ${task_id} and kind = 'dispute'`)[0]?.id);
 
     it("dispute_answer opens a dispute ticket that get_task reports as open", async () => {
-      const { a, task_id } = await paidTask();
-      await service.disputeAnswer(a, { task_id, reason: "The photo shows a different cafe." });
+      const { a, task_id, at } = await paidTask();
+      const before = await service.getTask(a, { task_id });
+      const money = await service.getBalance(a);
+      const disputed = await service.disputeAnswer(a, { task_id, reason: "The photo shows a different cafe." });
+      expect(disputed.retry_context).toEqual({
+        question: before.question,
+        location: { ...at, label: before.place_label },
+        task_type: before.task_type,
+        bounty_usd: before.bounty_usd,
+      });
+      expect((await service.getTask(a, { task_id })).retry_context).toEqual(disputed.retry_context);
+      expect(await service.disputeAnswer(a, { task_id, reason: "The same report again." })).toEqual(disputed);
+      const count = Number((await sql`select count(*) as n from tasks where agent_id = ${a.id}`)[0]?.n);
+      const quote = await service.quoteTask(a, {
+        location: disputed.retry_context.location, task_type: disputed.retry_context.task_type,
+      });
+      expect(quote.allowed).toBe(true);
+      expect(await service.getBalance(a)).toEqual(money);
+      expect(Number((await sql`select count(*) as n from tasks where agent_id = ${a.id}`)[0]?.n)).toBe(count);
+      const retry = await service.askEyes(a, { ...disputed.retry_context, idempotency_key: randomUUID() });
+      expect(retry.task_id).not.toBe(task_id);
+      expect((await service.getBalance(a)).balance_usd).toBe(money.balance_usd - before.bounty_usd - before.fee_usd);
       const [t] =
         await sql`select kind, status, dispute_status, message from tickets where task_id = ${task_id}`;
       expect(t).toMatchObject({
