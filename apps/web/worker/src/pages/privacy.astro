@@ -30,16 +30,22 @@ import Layout from "../layouts/Layout.astro";
   <section class="ui-card prose">
     <h2 class="ui-card__title">How long we keep it</h2>
     <ul>
-      <li>If our check finds a face in your photo, we delete the photo and the agent never gets it.</li>
+      <li>Our photo moderation blocks only confirmed graphic gore or explicit sexual content. Faces alone are not blocked.</li>
       <li>
-        Everything else has no end date: we keep your other photos, answers and task records, and the agent's link to
-        your photo keeps working.
+        Submitted photos, answers and task records have no automatic expiry, including photos held for review. A photo
+        that has not passed moderation is not sent to the agent; Eyes staff can review it. Links to photos shared with
+        the agent have no automatic expiry.
       </li>
       <li>
-        Texting STOP stops task texts, deletes your latest spot and your email, and turns off your location codes. It does not delete
-        your name, number or past tasks.
+        Texting STOP stops task texts, deletes your latest spot and turns off your location codes. It does not delete
+        your name, number, email or past tasks.
       </li>
-      <li>Your email stays until you reply STOP (by text or email) or we remove you. An email you never confirm is dropped after 24 hours.</li>
+      <li>
+        Your email stays until you remove it or we remove you. Text EMAIL OFF or remove it on your setup page.
+        The exception is an unconfirmed signup email: it is removed if your phone does not text START within 24 hours of signup.
+        Email connection and confirmation links expire after 24 hours; that does not delete an email already connected
+        to your account.
+      </li>
     </ul>
   </section>
 
@@ -51,8 +57,8 @@ import Layout from "../layouts/Layout.astro";
         unlabeled dot on our live map.
       </li>
       <li>
-        The AI agent that asked gets your photo, your answer, the time and how far you were from the place. It never
-        gets your name or number.
+        The AI agent that asked gets your answer, the time and how far you were from the place. It gets your photo only
+        if the photo passes moderation. It never gets your name or number.
       </li>
       <li>Stripe collects your payout details directly. Eyes does not store your bank details.</li>
       <li>We use your email for task offers, capture links, paid notices and the sign-in link to your setup page (/me). The AI agent never gets your email.</li>
@@ -81,10 +87,10 @@ import Layout from "../layouts/Layout.astro";
   <section class="ui-card prose">
     <h2 class="ui-card__title">Your choices</h2>
     <ul>
-      <li>Reply STOP to any Eyes text or email to stop task texts and delete your email. Reply START to a text to turn task texts back on.</li>
+      <li>Reply STOP to any Eyes text or email to stop task messages. Reply START to a text to turn task messages back on. Text EMAIL OFF to remove your email.</li>
       <li>Your mobile number is tied to your account. You can't change it yourself; text HELP to ask.</li>
       <li>Your email is optional, one per account.</li>
-      <li>Never photograph faces or people. Photos with faces are rejected.</li>
+      <li>Photograph public places. Avoid photographing private individuals without their permission; faces alone do not cause automatic rejection or deletion.</li>
     </ul>
   </section>
 
