@@ -3,7 +3,7 @@ WORKDIR /app
 RUN npm install -g pnpm@11.18.0
 COPY . .
 RUN pnpm install --frozen-lockfile --filter "@eyes/mcp..."
-RUN pnpm --filter @eyes/web-dashboard build && pnpm --filter @eyes/mcp build
+RUN pnpm --filter @eyes/web-dashboard build
 ENV HOST=0.0.0.0 PORT=3000 NODE_ENV=production
 EXPOSE 3000
 # The deployer writes .eyes-commit into the build context; it wins over the EYES_COMMIT env, which a Durable

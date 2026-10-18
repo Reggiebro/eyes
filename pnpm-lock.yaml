@@ -87,12 +87,6 @@ importers:
       happy-dom:
         specifier: 21.0.3
         version: 21.0.3
-      react:
-        specifier: 19.3.0
-        version: 19.3.0
-      react-dom:
-        specifier: 19.3.0
-        version: 19.3.0(react@19.3.0)
 
   apps/web/dashboard:
     dependencies:
