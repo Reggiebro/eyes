@@ -240,6 +240,19 @@ describe.each(["MCP Apps", "ChatGPT"])("%s readable tool errors", (bridge) => {
   );
 });
 
+it.each([
+  [true, "Yes", "Yes"],
+  [false, " no. ", "No"],
+  [true, "YES!", "Yes"],
+  [true, "Yes, the side entrance is open.", "Yes Yes, the side entrance is open."],
+  [false, "Opens tomorrow", "No Opens tomorrow"],
+  [null, "Yes", "Yes"],
+])("renders boolean %s and text %s without repeating the answer", (answer_bool, answer_text, expected) => {
+  const w = boot();
+  w.show({ ...TASK, status: "needs_review", answer: { ...ANSWER, answer_bool, answer_text } });
+  expect(w.root.querySelector(".ui-card__answer")?.textContent?.trim()).toBe(expected);
+});
+
 it("inlines the script and the call helper in the HTML resource", () => {
   expect(WIDGET_HTML).toContain(WIDGET_SCRIPT);
   expect(WIDGET_HTML).toContain('"tools/call"');
