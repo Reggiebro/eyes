@@ -1339,6 +1339,12 @@ describe("routes", () => {
     const email = { EYES_PROVIDERS: "live", PRIMITIVE_API_KEY: "prim_test" };
     const gated = await (await setup({}, email).fetch("http://eyes.test/status")).text();
     expect(gated).toContain("Email: live (replies only until Primitive enables any-domain sending)");
+    const inkbox = await (
+      await setup({}, { ...email, INKBOX_API_KEY: "ik_test" }).fetch("http://eyes.test/status")
+    ).text();
+    expect(inkbox).toContain(
+      "Email: live (first contact via Inkbox until Primitive enables any-domain sending)",
+    );
     const open = await (
       await setup({}, { ...email, PRIMITIVE_SEND_ANY_DOMAIN: "1" }).fetch("http://eyes.test/status")
     ).text();

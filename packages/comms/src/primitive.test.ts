@@ -10,6 +10,7 @@ import {
   type OutboundEmail,
   type ToolOutput,
 } from "@eyes/core";
+import { PrimitiveApiError } from "@primitivedotdev/sdk";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { createPrimitiveEmail, parseTaskEmail, primitiveRoutes } from "./index.ts";
 
@@ -1011,6 +1012,26 @@ describe("createPrimitiveEmail", () => {
     await expect(createPrimitiveEmail(env).send({ to: "x@y.test", subject: "s", text: "t" })).rejects.toThrow(
       /gate_denied/,
     );
+  });
+
+  it("hands a recipient-gate refusal to the first-contact sender and rethrows anything else", async () => {
+    const fallback = { send: vi.fn(async () => ({ id: "ib_1", message_id: null })) };
+    const msg = { to: "owner@gmail.test", subject: "s", text: "t" };
+    sdk.send.mockRejectedValueOnce(
+      new PrimitiveApiError("gates denied", { payload: null, status: 403, code: "recipient_not_allowed" }),
+    );
+    await expect(createPrimitiveEmail(env, fallback).send(msg)).resolves.toEqual({
+      id: "ib_1",
+      message_id: null,
+    });
+    sdk.send.mockResolvedValueOnce({ id: "se_3", status: "gate_denied", requestId: "req_3" });
+    await createPrimitiveEmail(env, fallback).send(msg);
+    expect(fallback.send).toHaveBeenCalledTimes(2);
+    expect(fallback.send).toHaveBeenCalledWith(msg);
+    const other = new PrimitiveApiError("rate limited", { payload: null, status: 429, code: "rate_limited" });
+    sdk.send.mockRejectedValueOnce(other);
+    await expect(createPrimitiveEmail(env, fallback).send(msg)).rejects.toBe(other);
+    expect(fallback.send).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a filename that has an extension and the caller's type when the download has no content-type", async () => {

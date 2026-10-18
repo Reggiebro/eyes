@@ -250,14 +250,13 @@ const statusRow = (
 ) =>
   html`<li><span class="dot ${tone}" aria-hidden="true"></span><b>${title}</b>${detail ? html`<br><span class="muted">${detail}</span>` : ""}</li>`;
 
-const EMAIL_REPLIES_ONLY = "live (replies only until Primitive enables any-domain sending)";
 const statusPage = (
   live: Live,
   classifier: boolean,
   db: string,
   commit: string | undefined,
   sandbox: boolean,
-  anyDomainEmail: boolean,
+  emailNote: string | null,
 ) =>
   layout(
     "Eyes status",
@@ -267,7 +266,7 @@ ${simulatedNotice(live, sandbox)}
 <ul class="rows">
 ${Object.entries(PROVIDER_LINES).map(([name, [label, meaning]]) => {
   const on = live[name as keyof typeof live];
-  const state = !on ? "simulated" : name === "email" && !anyDomainEmail ? EMAIL_REPLIES_ONLY : "live";
+  const state = !on ? "simulated" : name === "email" && emailNote ? `live (${emailNote})` : "live";
   return statusRow(on ? "live" : "simulated", `${label}: ${state}`, meaning);
 })}
 ${statusRow(
@@ -1034,15 +1033,13 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     Object.entries(live).map(([name, on]) => [name, on ? "live" : "fake"]),
   );
   server.get("/healthz", (c) => c.json({ ok: true, providers, db }));
-  // Primitive gates outbound mail per org; until it grants send_to_any_domain, owner emails to normal domains are refused.
-  const status = statusPage(
-    live,
-    classifier,
-    db,
-    env.EYES_COMMIT,
-    sandbox,
-    env.PRIMITIVE_SEND_ANY_DOMAIN === "1",
-  );
+  // Primitive gates outbound mail per org: until it grants send_to_any_domain, first contact (owner links,
+  // sign-in codes, worker email) goes out through Inkbox when it is configured, or not at all.
+  const emailNote =
+    env.PRIMITIVE_SEND_ANY_DOMAIN === "1"
+      ? null
+      : `${live.messaging ? "first contact via Inkbox" : "replies only"} until Primitive enables any-domain sending`;
+  const status = statusPage(live, classifier, db, env.EYES_COMMIT, sandbox, emailNote);
   server.get("/status", (c) => c.html(status, 200, PAGE_HEADERS));
   // The Eyes viewfinder (apps/web/worker/public/favicon.svg); browsers asking for .ico get the SVG.
   server.get("/favicon.svg", (c) =>

@@ -1,6 +1,7 @@
 export {
   alreadyClaimedText,
   captureLinkText,
+  createInkboxEmail,
   createInkboxMessaging,
   inkboxRoutes,
   offerText,

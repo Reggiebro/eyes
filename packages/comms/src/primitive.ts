@@ -18,6 +18,7 @@ import {
   isTrustedSender,
   normalizeReceivedEmail,
   PRIMITIVE_SIGNATURE_HEADER,
+  PrimitiveApiError,
   type ReceivedEmail,
   safeValidateEmailReceivedEvent,
   verifyWebhookSignature,
@@ -76,7 +77,11 @@ async function download(attachment: EmailAttachment) {
   };
 }
 
-export function createPrimitiveEmail(env: Env): Email {
+/**
+ * `firstContact` takes the sends Primitive's recipient gate refuses (403 recipient_not_allowed, or an
+ * async gate_denied): until the org has send_to_any_domain, only replies and *.primitive.email pass it.
+ */
+export function createPrimitiveEmail(env: Env, firstContact?: Email): Email {
   const apiKey = env.PRIMITIVE_API_KEY;
   const domain = env.PRIMITIVE_DOMAIN;
   if (!apiKey) {
@@ -91,15 +96,22 @@ export function createPrimitiveEmail(env: Env): Email {
   return {
     async send(msg) {
       const attachments = await Promise.all((msg.attachments ?? []).map(download));
-      const sent = await client.send({
-        from: `eyes@${domain}`,
-        to: msg.to,
-        subject: msg.subject,
-        bodyText: msg.text,
-        bodyHtml: msg.html,
-        thread: { inReplyTo: msg.in_reply_to, references: msg.references },
-        attachments,
-      });
+      const sent = await client
+        .send({
+          from: `eyes@${domain}`,
+          to: msg.to,
+          subject: msg.subject,
+          bodyText: msg.text,
+          bodyHtml: msg.html,
+          thread: { inReplyTo: msg.in_reply_to, references: msg.references },
+          attachments,
+        })
+        .catch((err: unknown) => {
+          if (firstContact && err instanceof PrimitiveApiError && err.code === "recipient_not_allowed")
+            return null;
+          throw err;
+        });
+      if (!sent || (firstContact && sent.status === "gate_denied")) return (firstContact as Email).send(msg);
       if (sent.status === "gate_denied" || sent.status === "agent_failed") {
         throw new Error(`Primitive send ${sent.status} (request ${sent.requestId})`);
       }

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  type Email,
   EyesError,
   type Messaging,
   type OfferMessage,
@@ -219,6 +220,63 @@ export function createInkboxMessaging(env: Env): Messaging {
     sendPaid: (to, msg) =>
       send(to, paidText(msg), `${msg.live_payouts ? "paid" : "accepted"}:${msg.task_id}:${to}`),
     sendText: (to, body) => send(to, body),
+  };
+}
+
+const field = (o: unknown, key: string): unknown =>
+  o !== null && typeof o === "object" && key in o ? Reflect.get(o, key) : undefined;
+const INKBOX_API = "https://inkbox.ai/api/v1";
+
+/**
+ * Email from the dispatcher identity's Inkbox mailbox, for first contact Primitive's recipient gate refuses
+ * (owner control links, ops sign-in codes, worker email). No attachments: photo answers are replies, which
+ * Primitive sends. Inkbox caps an org at 100 new recipients a day; a 429 surfaces as a send error.
+ */
+export function createInkboxEmail(env: Env): Email {
+  const apiKey = env.INKBOX_API_KEY;
+  const handle = env.INKBOX_AGENT_HANDLE;
+  if (!apiKey || !handle) throw new Error("Inkbox email needs INKBOX_API_KEY and INKBOX_AGENT_HANDLE.");
+  const inkbox = new Inkbox({ apiKey });
+  let mailbox: Promise<string> | undefined;
+  return {
+    async send(msg) {
+      mailbox ??= inkbox
+        .getIdentity(handle)
+        .then((identity) => {
+          if (!identity.emailAddress) throw new Error(`Inkbox identity ${handle} has no mailbox`);
+          return identity.emailAddress;
+        })
+        .catch((err: unknown) => {
+          mailbox = undefined;
+          throw sendError(err);
+        });
+      const from = await mailbox;
+      const res = await fetch(`${INKBOX_API}/mail/mailboxes/${encodeURIComponent(from)}/messages`, {
+        method: "POST",
+        headers: { "X-API-Key": apiKey, "content-type": "application/json" },
+        body: JSON.stringify({
+          recipients: { to: [msg.to] },
+          subject: msg.subject,
+          body_text: msg.text,
+          body_html: msg.html,
+          in_reply_to_message_id: msg.in_reply_to,
+          // Reply-To for worker email (work@<PRIMITIVE_DOMAIN>); set once OutboundEmail carries reply_to.
+          reply_to: "reply_to" in msg && typeof msg.reply_to === "string" ? msg.reply_to : undefined,
+        }),
+      });
+      const body: unknown = await res.json().catch(() => null);
+      const id = field(body, "id");
+      if (!res.ok || typeof id !== "string") {
+        const detail = field(body, "detail");
+        const code = typeof detail === "string" ? detail : field(detail, "error");
+        throw sendFailure(
+          "Inkbox email failed",
+          `${res.status} ${typeof code === "string" ? code : "no error code"}`,
+        );
+      }
+      const messageId = field(body, "message_id");
+      return { id, message_id: typeof messageId === "string" ? messageId : null };
+    },
   };
 }
 
