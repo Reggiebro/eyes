@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import {
   type Agent,
   AppConfig,
@@ -2207,6 +2208,7 @@ describe("OAuth for connectors", () => {
       expect(page.status).toBe(200);
       expect(await page.text()).toContain("Connect ChatGPT to Eyes");
       expect(page.headers.get("content-security-policy")).toContain("form-action 'self' https://chatgpt.com");
+      expect(page.headers.get("content-security-policy")).not.toContain("script-src");
       const redirect = await submit({ action: "key", api_key: KEY });
       expect(redirect.status).toBe(302);
       const back = new URL(redirect.headers.get("location") ?? "");
@@ -2248,6 +2250,73 @@ describe("OAuth for connectors", () => {
     expect(limited.status).toBe(400);
     expect(await limited.text()).toContain("calls per hour");
   });
+
+  it.each(["success", "denied", "unavailable"])(
+    "copies only the displayed new key on click (%s), without changing Continue",
+    async (outcome) => {
+      const key = " eyes_test_copy_fixture_✓ ";
+      const { submit, token } = await begin({
+        signupAgent: async () => ({
+          agent_id: AGENT.id,
+          api_key: key,
+          balance_usd: 20,
+          top_up_url: null,
+          email_address: null,
+          next_step: "Call quote_task.",
+        }),
+      });
+      const shown = await submit({ action: "create" });
+      const body = await shown.text();
+      const script = body.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+      expect(script).not.toBe("");
+      expect(script).not.toContain(key);
+      const hash = createHash("sha256").update(script).digest("base64");
+      expect(shown.headers.get("content-security-policy")).toBe(
+        `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+      );
+      expect(shown.headers.get("cache-control")).toBe("no-store");
+      expect(shown.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(body).toContain('id="copy-key" type="button"');
+      expect(body).toContain('role="status" aria-live="polite"');
+      expect(body).toContain("user-select:all");
+      const displayed = { textContent: body.match(/id="new-key"[^>]*>([^<]*)<\/p>/)?.[1] };
+      expect(displayed.textContent).toBe(key);
+      const status = { textContent: "" };
+      const button = { textContent: "Copy", disabled: false, addEventListener: vi.fn() };
+      const writeText = vi.fn(async () => {
+        if (outcome === "denied") throw new Error("Clipboard denied");
+      });
+      runInNewContext(script, {
+        document: {
+          getElementById: (id: "copy-key" | "new-key" | "copy-status") =>
+            ({ "copy-key": button, "new-key": displayed, "copy-status": status })[id],
+        },
+        navigator: { clipboard: outcome === "unavailable" ? undefined : { writeText } },
+      });
+      expect(writeText).not.toHaveBeenCalled();
+      expect(button.addEventListener).toHaveBeenCalledWith("click", expect.any(Function));
+      const clicked = button.addEventListener.mock.calls[0]?.[1]();
+      expect(button.textContent).toBe("Copy");
+      await clicked;
+      if (outcome !== "unavailable") expect(writeText).toHaveBeenCalledExactlyOnceWith(key);
+      expect(button.disabled).toBe(false);
+      expect(button.textContent).toBe(outcome === "success" ? "Copied" : "Copy");
+      expect(status.textContent).toBe(
+        outcome === "success"
+          ? "Copied to clipboard."
+          : "Could not copy. Select the key above and copy it manually.",
+      );
+      const href = body.match(/<a class="button" href="([^"]+)">Continue to ChatGPT<\/a>/)?.[1] ?? "";
+      expect(href).not.toContain(key);
+      const back = new URL(href.replaceAll("&amp;", "&"));
+      expect(back.origin + back.pathname).toBe(REDIRECT);
+      expect(back.searchParams.get("state")).toBe("st8");
+      expect(await (await token({ code: back.searchParams.get("code") ?? "" })).json()).toMatchObject({
+        access_token: key,
+        token_type: "Bearer",
+      });
+    },
+  );
 
   it("rejects a wrong verifier, an expired code, a tampered client_id and a redirect_uri mismatch", async () => {
     const { submit, token, params, fetch, client_id } = await begin();
