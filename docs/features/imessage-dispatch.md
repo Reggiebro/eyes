@@ -16,7 +16,7 @@ When an agent asks Eyes a question about a place, Eyes texts the nearest free wo
 
 START and HELP (when no held answer opens a review ticket) show every canonical command, one per line with a short meaning and blank lines between setup, commands, and accepted inputs. Aliases below still work but are not listed in the message. Two or more open setup steps are numbered; one is unnumbered; none says "You're all set." Live texts keep all links short and send the whole reply in one message.
 
-The app step says to install the app for background location. START and HELP warn that stale location stops new offers until updated. This is not an app-install gate: a fresh HERE, map, Shortcut, or photo fix still qualifies for nearby offers under the existing dispatch rules.
+The app step says to install the app for background location. START and HELP explicitly warn that workers will NOT receive new task offers if their location stops updating and becomes stale. This is not an app-install gate: a fresh HERE, map, Shortcut, or photo fix still qualifies for nearby offers under the existing dispatch rules.
 
 - **Tasks:** YES (Y, YEP, YUP, YEAH, YEA, OK, OKAY, SURE, CLAIM, 👍) takes a task; NO (N, NOPE, NAH, PASS) declines or gives it back; TASK (LINK) resends the current capture link.
 - **Setup:** START (UNSTOP) joins/resumes; HELP (INFO, ?) shows setup or requests review of a held answer; APP / INSTALL (DOWNLOAD, TESTFLIGHT) gets the app.

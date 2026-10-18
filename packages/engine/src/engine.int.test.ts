@@ -74,7 +74,8 @@ function hubLines(payload: unknown): string[] {
   const setupLines = setup?.split("\n") ?? [];
   const warning = setupLines.find((line) => /stale/i.test(line));
   expect(warning).toMatch(/location/i);
-  expect(warning).toMatch(/stop.*offers|offers.*stop/i);
+  expect(warning).toMatch(/\bNOT\b/);
+  expect(warning).toMatch(/offers/i);
   expect(warning).toMatch(/updat/i);
   return setupLines.filter((line) => line !== warning);
 }
@@ -560,7 +561,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(sent).toHaveLength(1);
     const text = String(sent[0]?.payload);
     hubLines(text);
-    expect(text.length).toBeLessThanOrEqual(650);
+    expect(text.length).toBeLessThanOrEqual(700);
     const links = text.match(/https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}/g) ?? [];
     expect(links).toHaveLength(3);
     const targets = await Promise.all(
@@ -621,14 +622,14 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await wrapped.handleWorkerReply({ email, intent: parseReplyIntent("START"), text: "START" });
     const emailed = providers.email.outbox.findLast((m) => m.to === email);
     hubLines(emailed?.text);
-    expect(emailed?.text.length).toBeLessThanOrEqual(650);
+    expect(emailed?.text.length).toBeLessThanOrEqual(700);
     expect(outbox.slice(before)).toHaveLength(1);
     for (const intent of ["start", "help"] as const) {
       const count = outbox.length;
       await wrapped.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
       expect(outbox.slice(count)).toHaveLength(1);
       hubLines(outbox.at(-1)?.payload);
-      expect(String(outbox.at(-1)?.payload).length).toBeLessThanOrEqual(650);
+      expect(String(outbox.at(-1)?.payload).length).toBeLessThanOrEqual(700);
     }
 
     // These engine-only commands bypass the parser but must actually reach emailByText.

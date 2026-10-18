@@ -375,7 +375,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       `${steps.length ? "You're in." : "You're all set."} Eyes texts you paid photo tasks near you.`,
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
-      "Stale location stops new offers until updated.",
+      "If your location stops updating and becomes stale, you will NOT receive new task offers.",
       `Your setup: ${meUrl(worker.id)}`,
       "",
       "YES — take task",

@@ -290,7 +290,7 @@ describe.skipIf(!url)("worker location on Postgres", () => {
     expect(await ask(service, a, at)).toMatchObject({ workers_notified: 1 });
     providers.clock.advance(25 * HOUR);
     await say(w.phone, "start", "START");
-    expect(welcome(w.phone)).toMatch(/stale.*location.*stop.*offers.*updat/i);
+    expect(welcome(w.phone)).toMatch(/stale.*\bNOT\b.*offers/);
     expect(await code(ask(service, a, at))).toBe("no_workers_nearby");
     await say(w.phone, "here");
     await service.updateWorkerLocation(hereToken(lastText(w.phone)), {
