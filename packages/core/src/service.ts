@@ -100,6 +100,7 @@ export interface EyesService {
   getTask(agent: Agent, input: ToolInput<"get_task">): Promise<ToolOutput<"get_task">>;
   listTasks(agent: Agent, input: ToolInput<"list_tasks">): Promise<ToolOutput<"list_tasks">>;
   cancelTask(agent: Agent, input: ToolInput<"cancel_task">): Promise<ToolOutput<"cancel_task">>;
+  acceptAnswer(agent: Agent, input: ToolInput<"accept_answer">): Promise<ToolOutput<"accept_answer">>;
   disputeAnswer(agent: Agent, input: ToolInput<"dispute_answer">): Promise<ToolOutput<"dispute_answer">>;
   getBalance(agent: Agent): Promise<ToolOutput<"get_balance">>;
   getSpendPolicy(agent: Agent): Promise<ToolOutput<"get_spend_policy">>;

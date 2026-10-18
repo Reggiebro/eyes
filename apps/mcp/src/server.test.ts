@@ -288,6 +288,10 @@ describe("auth", () => {
       arguments: { location: "Ferry Building, San Francisco", task_type: "line_length" },
     });
     expect(tool.structuredContent).toEqual(QUOTE);
+    const acceptance = await client.callTool({ name: "accept_answer", arguments: { task_id: TASK_ID } });
+    expect(acceptance.isError).toBe(true);
+    expect(JSON.stringify(acceptance.content)).toContain(ERRORS.unauthorized.message);
+    expect((await fetch(`http://eyes.test/v1/tasks/${TASK_ID}/accept`, { method: "POST" })).status).toBe(401);
     expect((await quote()).status).toBe(200);
     expect(signupAgent).toHaveBeenCalledTimes(1);
     const [token, policy] = updateSpendPolicy.mock.calls[0] ?? [];
@@ -1986,6 +1990,7 @@ describe("ChatGPT and Claude widget", () => {
       "get_task",
       "await_answer",
       "cancel_task",
+      "accept_answer",
       "dispute_answer",
       "get_balance",
       "report_classifier",

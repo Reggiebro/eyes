@@ -60,6 +60,11 @@ export const ERRORS = {
     message: "Only answered tasks (verified, paid or needs_review) can be disputed.",
     fix: "Call get_task to see the current status. Unanswered tasks can be cancelled instead.",
   },
+  task_not_acceptable: {
+    status: 409,
+    message: "Only answered tasks with status verified or paid can be accepted.",
+    fix: "Call get_task to see the answer and current status. Acceptance records feedback only; it does not verify a photo or pay a worker.",
+  },
   email_taken: {
     status: 409,
     message: "Another Eyes account already uses this email.",

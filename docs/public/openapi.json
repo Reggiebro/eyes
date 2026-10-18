@@ -31,7 +31,7 @@
         "operationId": "mcp",
         "tags": ["agent"],
         "summary": "MCP endpoint",
-        "description": "MCP Streamable HTTP endpoint (JSON-RPC 2.0). Connect an MCP client here with the header Authorization: Bearer <api_key>; do not hand-craft requests. Tools: quote_task, ask_eyes, report_classifier, get_classifier_report, await_answer, get_task, list_tasks, cancel_task, dispute_answer, get_balance, get_spend_policy, show_task (schemas in /llms-full.txt).",
+        "description": "MCP Streamable HTTP endpoint (JSON-RPC 2.0). Connect an MCP client here with the header Authorization: Bearer <api_key>; do not hand-craft requests. Tools: quote_task, ask_eyes, report_classifier, get_classifier_report, await_answer, get_task, list_tasks, cancel_task, accept_answer, dispute_answer, get_balance, get_spend_policy, show_task (schemas in /llms-full.txt).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -507,6 +507,18 @@
                               "refunded",
                               "disputed",
                               "needs_review"
+                            ]
+                          },
+                          "accepted_at": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "question": {
@@ -1001,6 +1013,19 @@
                         }
                       ]
                     },
+                    "accepted_at": {
+                      "description": "When your agent accepted this answer. Feedback only; not photo verification or payment.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "next_step": {
                       "type": "string"
                     }
@@ -1193,6 +1218,19 @@
                         }
                       ]
                     },
+                    "accepted_at": {
+                      "description": "When your agent accepted this answer. Feedback only; not photo verification or payment.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "dispute": {
                       "anyOf": [
                         {
@@ -1287,6 +1325,64 @@
                     }
                   },
                   "required": ["task_id", "status", "refunded_usd"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "4XX": {
+            "$ref": "#/components/responses/Error"
+          },
+          "5XX": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/tasks/{task_id}/accept": {
+      "post": {
+        "operationId": "accept_answer",
+        "tags": ["agent"],
+        "summary": "Accept an answer",
+        "description": "Record your user's positive feedback on an owned answered task with status verified or paid. Returns status accepted and the first accepted_at timestamp. Repeated calls are idempotent; get_task and await_answer retain accepted_at. This is not machine verification, never changes payment, and does not remove the right to dispute. Next: accept only after your user says the answer looks good. Same as the MCP tool accept_answer.",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "description": "The task_id returned by ask_eyes."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "task_id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "status": {
+                      "type": "string",
+                      "const": "accepted",
+                      "description": "Your agent's positive feedback, not machine verification."
+                    },
+                    "accepted_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    }
+                  },
+                  "required": ["task_id", "status", "accepted_at"],
                   "additionalProperties": false
                 }
               }
@@ -1617,6 +1713,7 @@
               "task_not_found",
               "task_not_cancellable",
               "task_not_disputable",
+              "task_not_acceptable",
               "email_taken",
               "idempotency_conflict",
               "offer_invalid",
@@ -1643,7 +1740,7 @@
     },
     "responses": {
       "Error": {
-        "description": "Error. Status by code: unauthorized 401, invalid_input 400, insufficient_balance 402, bounty_exceeds_max 403, daily_cap_exceeded 403, task_type_not_allowed 403, unsafe_task 422, location_not_found 422, no_workers_nearby 409, task_not_found 404, task_not_cancellable 409, task_not_disputable 409, email_taken 409, idempotency_conflict 409, offer_invalid 404, task_already_claimed 409, rate_limited 429, owner_link_invalid 404, not_implemented 501, internal_error 500.",
+        "description": "Error. Status by code: unauthorized 401, invalid_input 400, insufficient_balance 402, bounty_exceeds_max 403, daily_cap_exceeded 403, task_type_not_allowed 403, unsafe_task 422, location_not_found 422, no_workers_nearby 409, task_not_found 404, task_not_cancellable 409, task_not_disputable 409, task_not_acceptable 409, email_taken 409, idempotency_conflict 409, offer_invalid 404, task_already_claimed 409, rate_limited 429, owner_link_invalid 404, not_implemented 501, internal_error 500.",
         "content": {
           "application/json": {
             "schema": {
