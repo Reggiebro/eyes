@@ -46,15 +46,33 @@ const PASS: VerificationResult = {
   auto_approve: true,
 };
 
-const menuLines = [
-  "Commands (aliases in parentheses):",
-  expect.stringMatching(/^Tasks: YES .*; NO .*; TASK /),
-  expect.stringMatching(/^Setup: START .*; HELP .*; APP \/ INSTALL /),
-  expect.stringMatching(/^Location: HERE .*; SHORTCUT .*Inputs: /),
-  expect.stringMatching(/^Email \(text only\): EMAIL .*; EMAIL OFF .*Input: email address\.$/),
-  expect.stringMatching(/^Stop: STOP .*pause, delete spot\/email and disable location codes\.$/),
-  "You can also reply with details to an open review ticket.",
+const commands = [
+  "YES",
+  "NO",
+  "TASK",
+  "HERE",
+  "APP",
+  "INSTALL",
+  "SHORTCUT",
+  "EMAIL",
+  "EMAIL OFF",
+  "START",
+  "STOP",
+  "HELP",
 ];
+
+// Check the runtime message contract, not the wording of each short description.
+function hubLines(payload: unknown): string[] {
+  const text = String(payload);
+  const [setup, menu, inputs, ...rest] = text.split("\n\n");
+  expect(rest).toEqual([]);
+  const lines = menu?.split("\n") ?? [];
+  expect(lines.map((line) => line.split(" — ")[0])).toEqual(commands);
+  for (const line of lines) expect(line).toMatch(/^[A-Z]+(?: OFF)? — [^();\n]{1,55}$/);
+  expect(text).not.toMatch(/aliases|\bYEP\b|\bUNSTOP\b|\bSTOPALL\b|\bE-MAIL\b/);
+  expect(inputs).toMatch(/Maps link, coordinates or email address/);
+  return setup?.split("\n") ?? [];
+}
 
 describe.skipIf(!url)("engine on Postgres", () => {
   const sql = postgres(url ?? "", { onnotice: () => {} });
@@ -561,7 +579,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     // One text: STOP reset the app link (it deleted every code) and cleared the spot.
     const start = sent().slice(before + 1);
     expect(start).toHaveLength(1);
-    const lines = String(start[0]).split("\n");
+    const lines = hubLines(start[0]);
     expect(lines).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
       expect.stringMatching(
@@ -569,37 +587,34 @@ describe.skipIf(!url)("engine on Postgres", () => {
       ),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
-      ...menuLines,
     ]);
     const code = /#c=([\w-]{43})$/.exec(lines[1] ?? "")?.[1] ?? "";
     expect(await service.workerDevice(code)).toMatchObject({ registered: false });
     // START again within the hour mints no second code: the app step links to the setup page.
     await service.handleWorkerReply({ phone, intent: "start", text: "START" });
-    expect(String(sent().at(-1)).split("\n")).toEqual([
+    expect(hubLines(sent().at(-1))).toEqual([
       lines[0],
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: /),
       expect.stringMatching(/^Your setup: /),
-      ...menuLines,
     ]);
   });
 
   it("HELP is the shared hub text: open steps, setup page and the complete command menu", async () => {
     const { phone } = await worker(somewhere());
     await service.handleWorkerReply({ phone, intent: "help", text: "HELP" });
-    const help = String(outbox.findLast((m) => m.to === phone)?.payload).split("\n");
+    const help = hubLines(outbox.findLast((m) => m.to === phone)?.payload);
     // START sent the app link within the hour: the app step links to the setup page, no second code.
     expect(help).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
       expect.stringMatching(/^1\. Get the app \(keeps your spot fresh\): https:\/\/w\.eyes\.test\/me#c=\S+$/),
       expect.stringMatching(/^2\. Set up payouts: \S+\/w\/connect\/\S+$/),
       expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=[\w-]+\.[\w-]+$/),
-      ...menuLines,
     ]);
     expect(await service.workerSetup(meToken(help[3]))).toMatchObject({ opted_in: true });
   });
 
-  it("START emits every supported command and finite alias, plus inputs, through the live phone/email wrappers", async () => {
+  it("START and HELP send a readable canonical menu in one body through the live phone/email wrappers; aliases still work", async () => {
     const w = await worker(somewhere(), false);
     const email = `menu-${randomUUID()}@workers.test`;
     const rpc = createRpc(deps.db);
@@ -620,8 +635,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const sent = outbox.slice(before);
     expect(sent).toHaveLength(1);
     const text = String(sent[0]?.payload);
-    expect(text.split("\n").slice(4)).toEqual(menuLines);
-    expect(text.length).toBeLessThanOrEqual(1600);
+    hubLines(text);
+    expect(text.length).toBeLessThanOrEqual(650);
     const links = text.match(/https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}/g) ?? [];
     expect(links).toHaveLength(3);
     const targets = await Promise.all(
@@ -638,11 +653,6 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/\S+$/),
       expect.stringMatching(/^https:\/\/w\.eyes\.test\/me#c=\S+$/),
     ]);
-    const advertised = Object.fromEntries(
-      [...text.matchAll(/([A-Z][A-Z /]+) \(([^)]+)\)/g)].map(
-        (m) => [m[1] ?? "", (m[2] ?? "").split(", ")] as const,
-      ),
-    );
     const expected = {
       YES: ["Y", "YEP", "YUP", "YEAH", "YEA", "OK", "OKAY", "SURE", "CLAIM", "👍"],
       NO: ["N", "NOPE", "NAH", "PASS"],
@@ -668,8 +678,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
         "PLEASE STOP",
       ],
     };
-    expect(advertised).toEqual(expected);
-    for (const [canonical, aliases] of Object.entries(advertised)) {
+    for (const [canonical, aliases] of Object.entries(expected)) {
       for (const command of [...canonical.split(" / "), ...aliases]) {
         const intent =
           canonical === "APP / INSTALL"
@@ -682,16 +691,21 @@ describe.skipIf(!url)("engine on Postgres", () => {
         expect(parseReplyIntent(command), command).toBe(intent);
       }
     }
-    expect(text).toContain("Inputs: Apple/Google Maps link or lat,lng (3+ decimals)");
-    expect(text).toContain("iMessage share/short map links get an update link");
-    expect(text).toContain("Input: email address.");
 
     // Already-opted-in email replies use the same hub; no second phone message.
     await sql`update workers set email = ${email}, email_verified_at = now() where id = ${w.worker_id}`;
     await wrapped.handleWorkerReply({ email, intent: parseReplyIntent("START"), text: "START" });
     const emailed = providers.email.outbox.findLast((m) => m.to === email);
-    expect(emailed?.text.split("\n").slice(4)).toEqual(menuLines);
+    hubLines(emailed?.text);
+    expect(emailed?.text.length).toBeLessThanOrEqual(650);
     expect(outbox.slice(before)).toHaveLength(1);
+    for (const intent of ["start", "help"] as const) {
+      const count = outbox.length;
+      await wrapped.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
+      expect(outbox.slice(count)).toHaveLength(1);
+      hubLines(outbox.at(-1)?.payload);
+      expect(String(outbox.at(-1)?.payload).length).toBeLessThanOrEqual(650);
+    }
 
     // These engine-only commands bypass the parser but must actually reach emailByText.
     for (const command of ["EMAIL", "E-MAIL"]) {
@@ -805,10 +819,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
       const w = await worker(at); // its START sent the app link, so the next hour has no app step
       const hub = async (intent: "start" | "help") => {
         await service.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
-        return String(outbox.findLast((m) => m.to === w.phone)?.payload).split("\n");
+        return hubLines(outbox.findLast((m) => m.to === w.phone)?.payload);
       };
       const head = "Eyes texts you paid photo tasks near you.";
-      const tail = [expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/), ...menuLines];
+      const tail = [expect.stringMatching(/^Your setup: https:\/\/w\.eyes\.test\/me#c=\S+$/)];
       const hour = 3_600_000;
       const start = providers.clock.now();
       try {
@@ -1425,7 +1439,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await sim.handleWorkerReply({ phone, intent: "start", text: "START" });
     const texts = outbox.filter((m) => m.to === phone && m.kind === "text").map((m) => m.payload);
     // One text: no payout step on a test server, the simulated note instead; the app is the one step.
-    const lines = String(texts.at(-1)).split("\n");
+    const lines = hubLines(texts.at(-1));
     expect(lines.slice(0, 3)).toEqual([
       "You're in. Eyes texts you paid photo tasks near you.",
       expect.stringMatching(/^Get the app \(keeps your spot fresh\): /),
@@ -1436,7 +1450,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       payouts: { set_up: false, live: false, setup_url: null },
     });
     await sim.handleWorkerReply({ phone, intent: "help", text: "HELP" });
-    expect(String(last("text")).split("\n")[2]).toBe(simulated);
+    expect(hubLines(last("text"))[2]).toBe(simulated);
 
     const verified = await capture();
     expect(verified.result).toMatchObject({ status: "verified", message: `Verified. ${simulated}` });

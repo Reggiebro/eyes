@@ -14,7 +14,7 @@ When an agent asks Eyes a question about a place, Eyes texts the nearest free wo
 
 ## Worker commands
 
-START and HELP (when no held answer opens a review ticket) show the same full menu below the worker's open setup steps. Two or more steps are numbered; one is unnumbered; none says "You're all set." Live texts keep all links short and send the whole reply in one message.
+START and HELP (when no held answer opens a review ticket) show every canonical command, one per line with a short meaning and blank lines between setup, commands, and accepted inputs. Aliases below still work but are not listed in the message. Two or more open setup steps are numbered; one is unnumbered; none says "You're all set." Live texts keep all links short and send the whole reply in one message.
 
 - **Tasks:** YES (Y, YEP, YUP, YEAH, YEA, OK, OKAY, SURE, CLAIM, 👍) takes a task; NO (N, NOPE, NAH, PASS) declines or gives it back; TASK (LINK) resends the current capture link.
 - **Setup:** START (UNSTOP) joins/resumes; HELP (INFO, ?) shows setup or requests review of a held answer; APP / INSTALL (DOWNLOAD, TESTFLIGHT) gets the app.
