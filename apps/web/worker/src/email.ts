@@ -3,14 +3,12 @@ import { Problem } from "./api.ts";
 
 export type Send = (path: string, init: RequestInit) => Promise<unknown>;
 
-export type EmailAction = "add" | "resend" | "change" | "remove";
-
 /** The Email row on /me: the optional second channel, so it never counts toward "Finish setting up". */
 export type EmailRow = {
   status: WorkerSetup["email_status"];
   title: string;
   detail: string;
-  actions: EmailAction[];
+  removable: boolean;
 };
 
 export const validEmail = (s: string) => s.length <= 254 && /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(s);
@@ -37,67 +35,42 @@ export async function emailOn(send: Send): Promise<boolean> {
   }
 }
 
+const instruction = "Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email.";
+
 export function emailRow(s: WorkerSetup): EmailRow | null {
   const masked = s.email_masked ?? "your email";
   // An API that predates worker email sends neither field: show no row.
   switch (s.email_status) {
     case "none":
-      return s.opted_in
-        ? {
-            status: "none",
-            title: "Get tasks by email too",
-            detail: "Optional. Texts keep coming.",
-            actions: ["add"],
-          }
-        : {
-            status: "none",
-            title: "Get tasks by email too",
-            detail: "Text START first, then add an email.",
-            actions: [],
-          };
+      return {
+        status: "none",
+        title: "Get tasks by email too",
+        detail: instruction,
+        removable: false,
+      };
     case "pending":
-      return s.opted_in
-        ? {
-            status: "pending",
-            title: "Finish adding your email",
-            detail: `Tap Send again, then send the email we open from ${masked}.`,
-            actions: ["resend", "remove"],
-          }
-        : {
-            status: "pending",
-            title: "Email waiting for START",
-            detail: `We'll email you a link to confirm ${s.email_masked ?? "it"} after you text START.`,
-            actions: ["remove"],
-          };
+      return {
+        status: "pending",
+        title: "Finish adding your email",
+        detail: instruction,
+        removable: true,
+      };
     case "verified":
       return {
         status: "verified",
         title: "Email on",
-        detail: `Tasks also go to ${masked}.`,
-        actions: ["change", "remove"],
+        detail: `Tasks also go to ${masked}. ${instruction}`,
+        removable: true,
       };
     default:
       return null;
   }
 }
 
-/** With null, removes the email (an address would mail a confirmation link; /me adds by mailto instead). */
-export async function saveEmail(code: string, email: string | null, send: Send): Promise<WorkerSetup> {
+/** Removes the optional email channel without changing texts. */
+export async function removeEmail(code: string, send: Send): Promise<WorkerSetup> {
   try {
-    return (await send("/w/me/email", post({ email }, code))) as WorkerSetup;
-  } catch (err) {
-    throw worded(err);
-  }
-}
-
-/** Starts adding by email: answers a mailto to Eyes; once the worker sends it, the sender's address is on, verified. */
-export async function startEmail(code: string, send: Send): Promise<string> {
-  try {
-    const { mailto } = (await send("/w/me/email/start", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${code}` },
-    })) as { mailto: string };
-    return mailto;
+    return (await send("/w/me/email", post({ email: null }, code))) as WorkerSetup;
   } catch (err) {
     throw worded(err);
   }
@@ -119,58 +92,4 @@ export async function signIn(
 ): Promise<void> {
   const { token } = (await d.send("/w/login/code", post({ code }))) as { token: string };
   d.navigate(`me.html#c=${token}`);
-}
-
-/** The connect email, read out of the API's mailto so /me can show it and offer webmail. */
-export type Compose = { to: string; subject: string; body: string; mailto: string };
-
-export function parseMailto(mailto: string): Compose {
-  try {
-    if (typeof mailto !== "string" || /\s/.test(mailto) || mailto.includes("#")) throw new Error();
-    decodeURIComponent(mailto); // Reject malformed escapes rather than silently changing the connect code.
-    const url = new URL(mailto);
-    const to = decodeURIComponent(url.pathname);
-    if (
-      url.protocol !== "mailto:" ||
-      !validEmail(to) ||
-      !/^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9.-]+$/.test(to)
-    )
-      throw new Error();
-    const fields = new Map<string, string>();
-    for (const [key, value] of url.searchParams) {
-      const name = key.toLowerCase();
-      if (!["subject", "body"].includes(name) || fields.has(name) || value.includes("\0")) throw new Error();
-      fields.set(name, value);
-    }
-    const subject = fields.get("subject") ?? "";
-    if (/[\r\n]/.test(subject)) throw new Error();
-    return { to, subject, body: fields.get("body") ?? "", mailto };
-  } catch {
-    throw new Problem("Eyes returned an invalid connect email.", "Try Add email again.");
-  }
-}
-
-export type ComposeLink = { id: "gmail" | "outlook" | "mail"; label: string; href: string; newTab: boolean };
-
-/** True on a phone: narrow screen or iOS, where the Mail app is the likely sender. */
-export const onPhone = (userAgent: string, width: number) =>
-  width < 640 || /iPhone|iPad|iPod/.test(userAgent);
-
-/** Gmail, Outlook and the Mail app, so the email can go out with no mail app set up; the likeliest one first. */
-export function composeLinks(c: Compose, phone: boolean): ComposeLink[] {
-  const e = encodeURIComponent;
-  const gmail: ComposeLink = {
-    id: "gmail",
-    label: "Open Gmail",
-    href: `https://mail.google.com/mail/?view=cm&fs=1&to=${e(c.to)}&su=${e(c.subject)}&body=${e(c.body)}`,
-    newTab: true,
-  };
-  const outlook: ComposeLink = {
-    id: "outlook",
-    label: "Open Outlook",
-    href: `https://outlook.live.com/mail/0/deeplink/compose?to=${e(c.to)}&subject=${e(c.subject)}&body=${e(c.body)}`,
-    newTab: true,
-  };
-  const mail: ComposeLink = { id: "mail", label: "Open Mail app", href: c.mailto, newTab: false };
-  return phone ? [mail, gmail, outlook] : [gmail, outlook, mail];
 }

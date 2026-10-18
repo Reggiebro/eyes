@@ -6,6 +6,7 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 
 - Every worker needs a mobile number. Each account has one phone. You can't change it yourself; text HELP to ask.
 - Each account has at most one email.
+- After START, text EMAIL to Eyes in your existing iMessage thread. Eyes replies with a link to send your first email.
 - An email entered at join stays pending until your phone texts START.
 - After START, Eyes emails a verification link. It works once and expires after 24 hours.
 - A pending email that is not confirmed within 24 hours is dropped.
@@ -17,11 +18,13 @@ Workers can add one optional email address. Eyes uses it to send task offers, ca
 
 1. Join at https://app.eyes.pictures with your mobile number.
 2. From your phone, text START.
-3. Open your setup page at `/me` and tap Add email in the Email row. Your email app opens a message to Eyes; send it as is, from the address you want to use.
-4. Refresh `/me`. The Email row now shows your address (masked).
+3. Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email. Open it and send the prepared message from the address you want to use.
+4. Refresh your setup page at `/me`. The Email row shows your address (masked); it has text instructions, not an Add email button or provider chooser.
 5. Later, sign in at https://app.eyes.pictures/login: enter that email, tap "Email me a sign-in link", and open the link within 15 minutes.
 
-To change the email, tap Change on `/me` and send the message that opens from the new address. Remove stops email right away.
+Send from an address your mail provider verifies; custom aliases need SPF/DKIM.
+
+To change the email, text EMAIL in the same iMessage thread and send the prepared message from the new address. Remove on `/me` stops email right away; texts keep coming.
 
 ## Where in the code
 
