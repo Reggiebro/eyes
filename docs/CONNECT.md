@@ -3,6 +3,7 @@
 MCP server URL: `https://api.eyes.pictures/mcp`
 
 Instinct: see [connect/instinct.md](connect/instinct.md).
+Codex (CLI and IDE): see [connect/codex.md](connect/codex.md).
 
 There are two ways to sign in. Both use the same Eyes API key.
 
