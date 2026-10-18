@@ -1987,6 +1987,7 @@ describe("ChatGPT and Claude widget", () => {
       "get_task",
       "await_answer",
       "cancel_task",
+      "accept_answer",
       "dispute_answer",
       "get_balance",
       "report_classifier",

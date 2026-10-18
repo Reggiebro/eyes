@@ -765,6 +765,29 @@ Next: call get_balance to see the refund, or keep calling await_answer if the ta
 
   server.tool(
     {
+      name: "accept_answer",
+      title: "Accept an answer",
+      description: `Record your user's positive feedback on a delivered answer belonging to this API key. Only answered tasks with status verified or paid qualify. This is not photo verification, does not charge or pay anyone, and is never required for payment. Repeated calls preserve the first acceptance. The right to dispute is unchanged.
+Example: accept_answer({ "task_id": "3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b" })
+Next: get_task shows accepted_at on reload. Accept only after your user says the answer looks good.`,
+      inputSchema: TOOLS.accept_answer.input,
+      outputSchema: TOOLS.accept_answer.output,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: { "openai/widgetAccessible": true },
+    },
+    (input, ctx) => {
+      if (!ctx.req?.header("authorization")) throw new EyesError("unauthorized");
+      return run(() => service.acceptAnswer(ctx.get("agent"), input));
+    },
+  );
+
+  server.tool(
+    {
       name: "dispute_answer",
       title: "Dispute an answer",
       description: `Flag a delivered answer as wrong or fake. Eyes does not check whether answers are correct, so this is how a wrong answer gets reviewed. If the worker has not been paid yet, the payout is held, and a person reviews the dispute. If they confirm the answer was fake, the full bounty and fee are refunded to your balance. get_task shows dispute.status: open, upheld (refunded) or rejected (the answer stands). Works on tasks whose status is verified, paid or needs_review. Give a specific reason of at least 5 characters.
@@ -950,6 +973,12 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
   server.post("/v1/tasks/:task_id/cancel", async (c) =>
     c.json(await service.cancelTask(c.get("agent"), parse(CancelTaskInput, c.req.param()))),
   );
+  server.post("/v1/tasks/:task_id/accept", async (c) => {
+    if (!c.req.header("authorization")) throw new EyesError("unauthorized");
+    return c.json(
+      await service.acceptAnswer(c.get("agent"), parse(TOOLS.accept_answer.input, c.req.param())),
+    );
+  });
   server.post("/v1/tasks/:task_id/dispute", async (c) => {
     const input = parse(DisputeAnswerInput, { ...(await readJson(c)), ...c.req.param() });
     return c.json(await service.disputeAnswer(c.get("agent"), input));

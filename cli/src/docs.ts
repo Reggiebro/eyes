@@ -117,6 +117,13 @@ const TOOL_DOCS: Record<ToolName, { title: string; summary: string; tags: string
     tags: ["refund"],
     example: TASK_ID,
   },
+  accept_answer: {
+    title: "Accept an answer",
+    summary:
+      "Record your user's positive feedback on an owned answered task with status verified or paid. Returns status accepted and the first accepted_at timestamp. Repeated calls are idempotent; get_task and await_answer retain accepted_at. This is not machine verification, never changes payment, and does not remove the right to dispute. Next: accept only after your user says the answer looks good.",
+    tags: ["feedback"],
+    example: TASK_ID,
+  },
   dispute_answer: {
     title: "Dispute an answer",
     summary:
@@ -210,6 +217,7 @@ const OPS: Record<Documented, Op> = {
   get_task: toolOp("get_task", "get_task"),
   list_tasks: toolOp("list_tasks", "list_tasks"),
   cancel_task: toolOp("cancel_task", "cancel_task"),
+  accept_answer: toolOp("accept_answer", "accept_answer"),
   dispute_answer: toolOp("dispute_answer", "dispute_answer"),
   get_balance: toolOp("get_balance", "get_balance"),
   get_spend_policy: toolOp("get_spend_policy", "get_spend_policy"),

@@ -93,6 +93,7 @@ export const Task = z.object({
   idempotency_key: z.string().nullable(),
   dispute_reason: z.string().nullable(),
   created_at: Timestamp,
+  accepted_at: Timestamp.nullable().optional(),
 });
 export type Task = z.infer<typeof Task>;
 
@@ -295,6 +296,9 @@ export const AwaitAnswerOutput = z.object({
   status: TaskStatus,
   answered: z.boolean(),
   answer: Answer.nullable(),
+  accepted_at: Timestamp.nullable()
+    .optional()
+    .describe("When your agent accepted this answer. Feedback only; not photo verification or payment."),
   next_step: z.string(),
 });
 
@@ -319,6 +323,9 @@ export const GetTaskOutput = z.object({
   created_at: Timestamp,
   claimed_at: Timestamp.nullable(),
   answer: Answer.nullable(),
+  accepted_at: Timestamp.nullable()
+    .optional()
+    .describe("When your agent accepted this answer. Feedback only; not photo verification or payment."),
   dispute: z
     .object({
       status: z
@@ -344,6 +351,7 @@ export const ListTasksOutput = z.object({
       z.object({
         task_id: Id,
         status: TaskStatus,
+        accepted_at: Timestamp.nullable().optional(),
         question: z.string(),
         place_label: z.string(),
         bounty_usd: Usd,
@@ -363,6 +371,13 @@ export const CancelTaskOutput = z.object({
   task_id: Id,
   status: z.literal("refunded"),
   refunded_usd: Usd,
+});
+
+export const AcceptAnswerInput = z.object({ task_id: TaskId });
+export const AcceptAnswerOutput = z.object({
+  task_id: Id,
+  status: z.literal("accepted").describe("Your agent's positive feedback, not machine verification."),
+  accepted_at: Timestamp,
 });
 
 export const DisputeAnswerInput = z.object({
@@ -452,6 +467,7 @@ export const TOOLS = {
   get_task: { input: GetTaskInput, output: GetTaskOutput },
   list_tasks: { input: ListTasksInput, output: ListTasksOutput },
   cancel_task: { input: CancelTaskInput, output: CancelTaskOutput },
+  accept_answer: { input: AcceptAnswerInput, output: AcceptAnswerOutput },
   dispute_answer: { input: DisputeAnswerInput, output: DisputeAnswerOutput },
   get_balance: { input: GetBalanceInput, output: GetBalanceOutput },
   get_spend_policy: { input: GetSpendPolicyInput, output: GetSpendPolicyOutput },
@@ -588,6 +604,7 @@ export const HTTP_ROUTES = {
   list_tasks: "GET /v1/tasks",
   await_answer: "POST /v1/tasks/:task_id/await",
   cancel_task: "POST /v1/tasks/:task_id/cancel",
+  accept_answer: "POST /v1/tasks/:task_id/accept",
   dispute_answer: "POST /v1/tasks/:task_id/dispute",
   get_balance: "GET /v1/balance",
   get_spend_policy: "GET /v1/spend-policy",

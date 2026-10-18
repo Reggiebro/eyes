@@ -81,7 +81,7 @@ begin
   update tasks set status = 'disputed', dispute_reason = p_reason where id = p_task_id returning * into v_task;
   insert into tickets (worker_id, task_id, kind, dispute_status, message, created_at)
   values (v_task.claimed_by, p_task_id, 'dispute', 'open', p_reason, v_now)
-  on conflict (task_id, kind) where status = 'open'
+  on conflict (task_id, kind) where status = 'open' and kind in ('manual_review', 'dispute')
   do update set message = concat_ws(E'\n', nullif(tickets.message, ''), excluded.message);
   if v_first and not v_task.test then
     select count(*) into v_count from eyes_worker_dispute_history(v_task.claimed_by);
