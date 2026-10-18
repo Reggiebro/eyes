@@ -57,7 +57,14 @@ import { type Operator, opsAuth } from "./ops-auth.ts";
 import { opsHost, opsOriginFor } from "./ops-host.ts";
 import { opsLists } from "./ops-lists.ts";
 import { keylessAgents, SANDBOX, SANDBOX_NOTICE } from "./sandbox.ts";
-import { WIDGET_HTML, WIDGET_MIME, WIDGET_URI, widgetResourceMeta, widgetToolMeta } from "./widget.ts";
+import {
+  WIDGET_CALLABLE,
+  WIDGET_HTML,
+  WIDGET_MIME,
+  WIDGET_URI,
+  widgetResourceMeta,
+  widgetToolMeta,
+} from "./widget.ts";
 
 type Env = Record<string, string | undefined>;
 type AppEnv = { Variables: { agent: Agent; operator: Operator } };
@@ -770,14 +777,28 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
       return { contents: [{ uri: WIDGET_URI, mimeType: WIDGET_MIME, text: WIDGET_HTML, _meta }] };
     },
   );
-  // mcp-use strips `_meta.ui.resourceUri` from tools that have no mcp-use `view` (a React build), so
-  // put the MCP Apps link back on the tools that carry the ChatGPT template.
+  // mcp-use strips `_meta.ui` from tools that have no mcp-use `view` (a React build), so put the
+  // MCP Apps link back on the tools that carry the ChatGPT template, and let the card's buttons call
+  // WIDGET_CALLABLE (ChatGPT: openai/widgetAccessible; MCP Apps: ui.visibility includes "app").
   server.use("mcp:tools/list", async (_ctx, next) =>
-    (await next()).map((tool) =>
-      tool._meta?.["openai/outputTemplate"] === WIDGET_URI
-        ? { ...tool, _meta: { ...tool._meta, ui: { resourceUri: WIDGET_URI }, "ui/resourceUri": WIDGET_URI } }
-        : tool,
-    ),
+    (await next()).map((tool) => {
+      const card = tool._meta?.["openai/outputTemplate"] === WIDGET_URI;
+      const callable = WIDGET_CALLABLE.includes(tool.name);
+      if (!card && !callable) return tool;
+      const ui = {
+        ...(card && { resourceUri: WIDGET_URI }),
+        ...(callable && { visibility: ["model", "app"] }),
+      };
+      return {
+        ...tool,
+        _meta: {
+          ...tool._meta,
+          ui,
+          ...(card && { "ui/resourceUri": WIDGET_URI }),
+          ...(callable && { "openai/widgetAccessible": true }),
+        },
+      };
+    }),
   );
 
   const hits = new Map<string, number[]>();

@@ -1971,7 +1971,24 @@ describe("ChatGPT and Claude widget", () => {
           "openai/outputTemplate": "ui://eyes/card.html",
         });
       } else {
-        expect(meta?.ui, tool.name).toBeUndefined();
+        expect((meta?.ui as { resourceUri?: string } | undefined)?.resourceUri, tool.name).toBeUndefined();
+      }
+    }
+  });
+
+  it("lets the card's buttons call their tools in ChatGPT and MCP Apps hosts", async () => {
+    const client = await connect(setup().fetch);
+    const { tools } = await client.listTools();
+    const callable = ["ask_eyes", "get_task", "await_answer", "cancel_task", "dispute_answer", "get_balance"];
+    for (const tool of tools) {
+      const meta = tool._meta as Record<string, unknown> | undefined;
+      if (callable.includes(tool.name)) {
+        expect(meta, tool.name).toMatchObject({
+          ui: { visibility: ["model", "app"] },
+          "openai/widgetAccessible": true,
+        });
+      } else {
+        expect(meta?.["openai/widgetAccessible"], tool.name).toBeUndefined();
       }
     }
   });
