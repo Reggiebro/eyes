@@ -35,7 +35,8 @@ export async function emailOn(send: Send): Promise<boolean> {
   }
 }
 
-const instruction = "Text EMAIL to Eyes in iMessage. We’ll reply with a link to send your first email.";
+const instruction =
+  "Reply EMAIL in your existing Eyes iMessage conversation. We’ll reply with a link to send your first email.";
 
 export function emailRow(s: WorkerSetup): EmailRow | null {
   const masked = s.email_masked ?? "your email";
