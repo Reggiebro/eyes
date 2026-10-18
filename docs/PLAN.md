@@ -12,7 +12,9 @@ Hacking: Sat Oct 17 10:30 AM to Sun Oct 18 10:00 AM (submissions). Feature freez
 | Live-verified (STATUS) | safety rules and classifier refusals; Claude vision verdicts; face-photo deletion; real Claude over the MCP connector through quote, ask and await with a stand-in worker; worker sign-up page against the live API; owner console; smoke 13/13 |
 | Not yet live-verified | a real iMessage to a phone (G1), Stripe top-up and transfer (G2), Primitive email thread, Armature analytics |
 | CI and tests | lint, typecheck, unit, contract, integration, golden and demo e2e, safety rules, intent, secrets; `pnpm ax:eval` (Claude client passes locally); `safety-llm-eval` and the Claude PR reviewer run with the repo secret |
-| Agent experience | 10 MCP tools (9 plus the `show_task` card), REST mirror, llms.txt, openapi.json, agent card, `eyes` CLI, every error with a fix |
+| Agent experience | 12 MCP tools (11 plus the `show_task` card), REST mirror, llms.txt, openapi.json, agent card, `eyes` CLI, every error with a fix |
+
+Dedicated MCP-domain migration is [prepared, not active](CONNECT.md#dedicated-mcp-domain-prepared-not-active): target `https://mcp.eyes.pictures/mcp`, with matching OAuth and card origins. REST/uploads/webhooks remain at `https://api.eyes.pictures`; existing connectors stay unchanged until domain-owner verification.
 
 ## 2. Work in flight
 

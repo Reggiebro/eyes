@@ -51,6 +51,8 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 
 Prefer the Manufact CLI? `npx -y mcp-use@2.10.1 client connect eyes https://api.eyes.pictures/mcp --protocol legacy -H "Authorization: Bearer $EYES_API_KEY"`. To be a worker, open https://app.eyes.pictures on an iPhone. Until workers have opted in near a place, `ask_eyes` there returns `no_workers_nearby` and charges nothing. https://api.eyes.pictures/status says which parts are live.
 
+**MCP domain split: prepared, not active.** The target connector is `https://mcp.eyes.pictures/mcp` on Manufact; keep existing connectors unchanged until routing, OAuth and card origins are verified. REST, uploads and webhooks stay at `https://api.eyes.pictures`. See [migration status and expected metadata](docs/CONNECT.md#dedicated-mcp-domain-prepared-not-active).
+
 ## How it works
 
 The agent asks and pays; Eyes texts nearby workers, checks the photo and pays the worker. Every transport calls one `EyesService`, and each money move is one plpgsql function, so it runs in one transaction ([ADR-003](intent/decisions/ADR-003-seams-and-ownership.md)). The full flow is in [docs/SPEC.md](docs/SPEC.md).
@@ -125,7 +127,7 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 | OpenStreetMap Nominatim | Geocodes place names in `quote_task` and `ask_eyes` | [apps/mcp/src/geo.ts](apps/mcp/src/geo.ts) | live |
 | OpenStreetMap tiles + Leaflet (unpkg) | Maps on the ops dashboard and live map | [apps/web/dashboard](apps/web/dashboard) | live |
 | Apple Maps / Google Maps links | Reads coordinates from map links a worker texts in; the capture page links to Google Maps directions | [packages/core/src/util.ts](packages/core/src/util.ts), [apps/web/worker/src/capture.ts](apps/web/worker/src/capture.ts) | live |
-| mcp-use | MCP server framework for the 10 tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
+| mcp-use | MCP server framework for the 12 tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
 | OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with OAuth sign-in | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | live |
 | Expo / React Native + Apple | iPhone app that sends background location; TestFlight distribution paused by the user | [apps/mobile](apps/mobile) | TestFlight paused |
 | ClickHouse | Optional copy of the ops event log and Trends charts; Postgres stays the source of truth | [apps/web/dashboard/src/clickhouse.ts](apps/web/dashboard/src/clickhouse.ts) | optional, off on the host |
