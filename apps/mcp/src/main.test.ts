@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { start } from "./main.ts";
+import { DRAIN_MS, onSigterm, start } from "./main.ts";
 
 const MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
 const BASE_ENV = {
@@ -24,7 +24,7 @@ function boot(env: Record<string, string>) {
     let stderr = "";
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      if (stdout.includes("listening")) child.kill();
+      if (!child.killed && stdout.includes("listening")) child.kill();
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
@@ -65,6 +65,45 @@ describe("main.ts as a process", () => {
     expect(run.stdout).toContain("provider storage: live");
     expect(run.stdout).toMatch(/listening on http:\/\/127\.0\.0\.1:\d+\/mcp/);
   }, 15_000);
+
+  it("exits 0 soon after SIGTERM instead of ignoring it (rollouts wait 15 min for that)", async () => {
+    const started = Date.now();
+    const run = await boot({ EYES_SANDBOX: "1", EYES_PROVIDERS: "fake" });
+    expect(run.stdout).toContain("SIGTERM: draining for up to 10 s");
+    expect(run.code).toBe(0);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 15_000);
+});
+
+describe("onSigterm", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("stops the server and exits 0 once open connections close", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const http = new EventEmitter();
+    const stop = vi.fn(() => http.emit("close"));
+    const exit = vi.fn();
+
+    onSigterm(http, stop, exit)();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits 0 after DRAIN_MS when a request is still open", () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const exit = vi.fn();
+
+    onSigterm(new EventEmitter(), () => {}, exit)();
+    vi.advanceTimersByTime(DRAIN_MS - 1);
+    expect(exit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
 });
 
 describe("start", () => {
