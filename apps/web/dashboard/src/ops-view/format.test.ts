@@ -12,6 +12,8 @@ import {
   stamp,
   sum,
   tabFor,
+  taskHeadline,
+  taskSteps,
   ticketOpen,
   time,
   uptime,
@@ -81,10 +83,10 @@ describe("ops-view format", () => {
 
   it("moves between tabs with arrows, Home and End, wrapping around", () => {
     expect(nextTab("tab-overview", "ArrowRight")).toBe("review");
-    expect(nextTab("tab-overview", "ArrowLeft")).toBe("logs");
-    expect(nextTab("tab-logs", "ArrowRight")).toBe("overview");
+    expect(nextTab("tab-overview", "ArrowLeft")).toBe("access");
+    expect(nextTab("tab-access", "ArrowRight")).toBe("overview");
     expect(nextTab("tab-tasks", "Home")).toBe("overview");
-    expect(nextTab("tab-tasks", "End")).toBe("logs");
+    expect(nextTab("tab-tasks", "End")).toBe("access");
     expect(nextTab("tab-tasks", "Enter")).toBeNull();
     expect(nextTab("f-q", "ArrowRight")).toBeNull();
   });
@@ -167,5 +169,74 @@ describe("datedQuery", () => {
       ["from", ""],
       ["to", ""],
     ]);
+  });
+});
+
+describe("task timeline and headline", () => {
+  const base = {
+    created_at: "2026-10-17T12:00:00Z",
+    bounty_cents: 300,
+    fee_cents: 60,
+    place_label: "Mint Plaza, SF",
+  };
+  const labels = (t: Parameters<typeof taskSteps>[0]) =>
+    taskSteps(t).map((s) => `${s.label}${s.done ? "+" : ""}`);
+  it("tells each path: paid, needs review, answer without photo, refunded, expired, disputed", () => {
+    expect(labels({ ...base, status: "dispatched" })).toEqual([
+      "Asked+",
+      "0 notified+",
+      "Claimed",
+      "Photo",
+      "Verified",
+      "$3.00 paid",
+    ]);
+    expect(
+      labels({
+        ...base,
+        status: "needs_review",
+        workers_notified: 2,
+        claimed_at: "x",
+        submitted_at: "y",
+        photo_url: "p",
+      }),
+    ).toEqual(["Asked+", "2 notified+", "Claimed+", "Photo+", "Needs review+", "$3.00 paid"]);
+    expect(
+      labels({ ...base, status: "verified", claimed_at: "x", submitted_at: "y", money_at: { release: "z" } }),
+    ).toEqual(["Asked+", "0 notified+", "Claimed+", "Answer+", "Verified+", "$3.00 paid"]);
+    expect(labels({ ...base, status: "refunded", money_at: { refund: "z" } })).toEqual([
+      "Asked+",
+      "0 notified+",
+      "Cancelled+",
+      "$3.60 refunded+",
+    ]);
+    expect(labels({ ...base, status: "expired", claimed_at: "x", money_at: { refund: "z" } })).toEqual([
+      "Asked+",
+      "0 notified+",
+      "Claimed+",
+      "Expired+",
+      "$3.60 refunded+",
+    ]);
+    expect(labels({ ...base, status: "disputed", money_at: null }).at(-1)).toBe("Disputed+");
+    expect(taskSteps({ created_at: "x", status: "paid" }).at(-1)?.label).toBe("$0.00 paid");
+  });
+  it("says what a task is doing now, in words", () => {
+    const line = (status: string, extra = {}) => taskHeadline({ ...base, status, ...extra });
+    expect(line("dispatched", { workers_notified: 1 })).toBe("1 worker notified near Mint Plaza");
+    expect(line("dispatched", { workers_notified: 3, place_label: "37.761234, -122.38" })).toBe(
+      "3 workers notified near 37.761, -122.380",
+    );
+    expect(line("dispatched")).toBe("0 workers notified near Mint Plaza");
+    expect(line("claimed")).toBe("A worker is on the way to Mint Plaza");
+    expect(line("submitted")).toBe("Photo in from Mint Plaza, checking it");
+    expect(line("verified")).toBe("Verified at Mint Plaza, paying the worker");
+    expect(line("paid")).toBe("Answered at Mint Plaza, worker paid $3.00");
+    expect(line("needs_review")).toBe("Answer in from Mint Plaza, it needs a human look");
+    expect(line("expired")).toBe("Nobody reached Mint Plaza in time, $3.60 refunded");
+    expect(line("refunded")).toBe("Cancelled before anyone claimed it, $3.60 refunded");
+    expect(line("disputed")).toBe("The agent disputed the answer from Mint Plaza");
+    expect(line("odd_state")).toBe("odd state at Mint Plaza");
+    expect(taskHeadline({ created_at: "x", status: "expired" })).toBe(
+      "Nobody reached  in time, $0.00 refunded",
+    );
   });
 });

@@ -53,11 +53,13 @@ function get(path: string, host = `127.0.0.1:${port}`, method = "GET") {
 }
 
 describe("dashboard server", () => {
-  it("serves the page at /", async () => {
+  it("serves the page at /, with the shared @eyes/ui tokens inlined", async () => {
     const res = await get("/");
     expect(res.status).toBe(200);
     expect(res.type).toContain("text/html");
     expect(res.body).toContain("<title>Eyes live</title>");
+    expect(res.body).toContain("--eyes-surface:");
+    expect(res.body).not.toContain("/* @eyes/ui */");
   });
 
   it("serves the feed function's row at /feed, with worker positions at full precision", async () => {

@@ -26,7 +26,7 @@ import {
 } from "@eyes/core";
 import type { Rpc } from "@eyes/db";
 import { PAGE_HEADERS } from "@eyes/payments";
-import { createEventLog, type EventLog, OPS_PAGE, PAGE } from "@eyes/web-dashboard";
+import { createEventLog, type EventLog, OPS_PAGE } from "@eyes/web-dashboard";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, SMOKE_UA } from "./server.ts";
@@ -1679,10 +1679,9 @@ describe("ops dashboard", () => {
       },
     });
     expect(rpcCalls).toEqual([{ fn: "eyes_dashboard_feed", args: { p_limit: 500 } }]);
-    for (const [res, page] of [
-      [ops, OPS_PAGE],
-      [live, PAGE],
-    ] as const) {
+    // The old live map is the Workers tab now.
+    expect([live.status, live.headers.get("location")]).toEqual([301, "/ops#workers"]);
+    for (const [res, page] of [[ops, OPS_PAGE]] as const) {
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");
       const body = await res.text();
@@ -1697,7 +1696,7 @@ describe("ops dashboard", () => {
       // same-origin, not no-referrer: under no-referrer the page's own fetch POSTs carry `Origin: null`.
       expect(res.headers.get("referrer-policy")).toBe("same-origin");
     }
-    for (const res of [ops, live, feed]) expect(res.headers.get("cache-control")).toBe("no-store");
+    for (const res of [ops, feed]) expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("still serves health and the error log when the database read fails, with the failure redacted", async () => {
@@ -2291,6 +2290,40 @@ describe("ops data routes", () => {
     const bad = await get("/ops/tasks/nope");
     expect(bad.status).toBe(404);
     expect(await bad.json()).toMatchObject({ error: "task_not_found", message: "No task with this id." });
+    expect(calls.length).toBe(before);
+  });
+
+  it("shows one worker with a rounded position, their tasks and earnings, and 404s unknown or malformed ids", async () => {
+    const worker = {
+      id: TASK_ID,
+      available: true,
+      opted_in: true,
+      lat: 37.78249,
+      lng: -122.40812,
+      location_at: "2026-10-17T19:00:00Z",
+    };
+    let rows: unknown[] = [
+      { worker, tasks: [{ id: "t1", status: "paid" }], earnings: { paid_cents: 300, payouts: 1 } },
+    ];
+    const { get, calls } = opsServer(() => rows);
+    const res = await get(`/ops/workers/${TASK_ID}`);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({
+      worker: { ...worker, lat: 37.782, lng: -122.408 },
+      tasks: [{ id: "t1", status: "paid" }],
+      earnings: { paid_cents: 300, payouts: 1 },
+    });
+    expect(calls.at(-1)).toMatchObject({ fn: "eyes_ops_worker", args: { p_id: TASK_ID, p_limit: 10 } });
+    rows = [{ worker: { ...worker, lat: null, lng: null }, tasks: [], earnings: {} }];
+    expect((await (await get(`/ops/workers/${TASK_ID}`)).json()).worker).toMatchObject({
+      lat: null,
+      lng: null,
+    });
+    rows = [{ worker: null, tasks: [], earnings: {} }];
+    expect((await get(`/ops/workers/${TASK_ID}`)).status).toBe(404);
+    const before = calls.length;
+    const bad = await get("/ops/workers/nope");
+    expect([bad.status, ((await bad.json()) as { error: string }).error]).toEqual([404, "worker_not_found"]);
     expect(calls.length).toBe(before);
   });
 });

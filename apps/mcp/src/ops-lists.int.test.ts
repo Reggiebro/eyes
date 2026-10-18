@@ -70,9 +70,10 @@ describe.skipIf(!url)("ops lists on Postgres (keyset paging)", () => {
     }
   });
   afterAll(async () => {
+    await sql`delete from submissions where worker_id = ${worker}`;
     await sql`delete from events where summary like ${`%${marker}`}`;
     await sql`delete from tickets where worker_id = ${worker}`;
-    await sql`delete from ledger where agent_id = ${agent}`;
+    await sql`delete from ledger where agent_id = ${agent} or worker_id = ${worker}`;
     await sql`delete from tasks where agent_id = ${agent}`;
     await sql`delete from workers where id = ${worker}`;
     await sql`delete from agents where id = ${agent}`;
@@ -140,5 +141,40 @@ describe.skipIf(!url)("ops lists on Postgres (keyset paging)", () => {
     expect(
       (await all(`/ops/events?q=Oct%2017&tz=UTC&${AT_WINDOW}`, "events")).ids.length,
     ).toBeGreaterThanOrEqual(7);
+  });
+
+  it("reads one worker for the Workers panel: their tasks newest first, the latest photo checks, and earnings", async () => {
+    const rpc = createRpc({ kind: "postgres", url: url ?? "" });
+    const [a, b] = tasks as [string, string];
+    await sql`update tasks set claimed_by = ${worker}, claimed_at = ${AT} where id = ${a}`;
+    await sql`insert into submissions (task_id, worker_id, photo_url, lat, lng, captured_at, gps_ok, fresh_ok, vision_ok,
+      vision_reason, confidence, source, created_at)
+      values (${b}, ${worker}, 'https://storage.eyes.test/p.jpg', 37.78, -122.4, ${AT}, true, true, false, 'blurry', 0.7,
+        'capture', ${AT})`;
+    await sql`insert into ledger (agent_id, worker_id, task_id, type, amount_cents, created_at)
+      values (${agent}, ${worker}, ${b}, 'release', 300, ${AT}), (null, ${worker}, ${b}, 'payout', 300, ${AT})`;
+    const [row] = await rpc<{
+      worker: Record<string, unknown>;
+      tasks: Record<string, unknown>[];
+      earnings: Record<string, unknown>;
+    }>("eyes_ops_worker", { p_id: worker, p_limit: 10 });
+    expect(row?.worker).toMatchObject({ id: worker, available: true, opted_in: true, banned: false });
+    expect(row?.worker).not.toHaveProperty("phone");
+    expect(row?.worker).not.toHaveProperty("name");
+    expect(new Set(row?.tasks.map((t) => t.id))).toEqual(new Set([a, b]));
+    const shot = row?.tasks.find((t) => t.id === b);
+    expect(shot).toMatchObject({
+      photo_url: "https://storage.eyes.test/p.jpg",
+      gps_ok: true,
+      vision_ok: false,
+      confidence: 0.7,
+    });
+    expect(shot?.money_at).toHaveProperty("payout");
+    expect(row?.earnings).toMatchObject({ paid_cents: 300, payouts: 1, released_cents: 300 });
+    const [none] = await rpc<{ worker: unknown; tasks: unknown[] }>("eyes_ops_worker", {
+      p_id: randomUUID(),
+      p_limit: 10,
+    });
+    expect([none?.worker, none?.tasks]).toEqual([null, []]);
   });
 });

@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+// The page as the server sends it, with the shared @eyes/ui tokens inlined.
+import { PAGE } from "../src/server.ts";
 
-const PAGE = readFileSync(new URL("../src/index.html", import.meta.url), "utf8");
 const LEAFLET_TAG = /<script src="https:\/\/unpkg\.com\/leaflet[^"]*"[^>]*><\/script>/;
 const NO_LEAFLET = PAGE.replace(LEAFLET_TAG, "");
 const ORIGIN = "http://dashboard.test";

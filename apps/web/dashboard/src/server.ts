@@ -3,10 +3,14 @@ import { createServer } from "node:http";
 import type { DbConfig } from "@eyes/core";
 import { createRpc, type Rpc } from "@eyes/db";
 
-export const PAGE = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 export const UI_CSS = ["tokens.css", "components.css"]
   .map((file) => readFileSync(new URL(`../../../../packages/ui/${file}`, import.meta.url), "utf8"))
   .join("\n");
+// Both pages inline the shared tokens and components (ui-mark) in place of /* @eyes/ui */.
+export const PAGE = readFileSync(new URL("./index.html", import.meta.url), "utf8").replace(
+  "/* @eyes/ui */",
+  () => UI_CSS,
+);
 // The ops page script lives in ops-view/*.ts (unit-tested). scripts/build-ops-view.ts joins it into one IIFE
 // (the page CSP allows one hashed inline script); the server only reads the built file.
 const OPS_SCRIPT = readFileSync(new URL("./ops-view.gen.js", import.meta.url), "utf8");

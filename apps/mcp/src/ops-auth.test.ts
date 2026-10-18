@@ -410,23 +410,31 @@ describe("ops sign-in and allowlist from a browser form", () => {
     expect(ok.headers.get("location")).toBe("/");
     const cookie = (ok.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
 
+    // The allowlist is the dashboard's Access tab now: the old page address goes there.
     const page = await fetch("/ops/allowlist", { headers: { cookie, accept: "text/html" } });
-    const html = await page.text();
-    expect(html).toContain("***0100");
-    expect(html).toContain("***@example.com");
-    expect(html).not.toContain(PHONE);
-    expect(html.match(/<button[^>]* disabled>Remove/g)).toHaveLength(1);
-
+    expect([page.status, page.headers.get("location")]).toEqual([301, "/#access"]);
+    const list = await fetch("/ops/allowlist", { headers: { cookie, accept: "application/json" } });
+    const { entries } = (await list.json()) as { entries: { id: string; value: string; self: boolean }[] };
+    expect(JSON.stringify(entries)).not.toContain(PHONE);
+    expect(entries.map((e) => [e.value, e.self])).toEqual([
+      ["***0100", true],
+      ["***@example.com", false],
+    ]);
+    // Form posts get JSON answers; the dashboard posts JSON.
     const bad = await form(fetch, "/ops/allowlist", { identifier: "nope" }, { cookie });
     expect(bad.status).toBe(400);
-    expect(await bad.text()).toContain("Enter a phone number with its country code");
+    expect(((await bad.json()) as { message: string }).message).toContain(
+      "Enter a phone number with its country code",
+    );
     const added = await form(fetch, "/ops/allowlist", { identifier: "+14155550123" }, { cookie });
-    expect([added.status, added.headers.get("location")]).toEqual([303, "/allowlist"]);
+    expect(added.status).toBe(200);
     const gone = await form(fetch, "/ops/allowlist/remove", { id: "missing" }, { cookie });
     expect(gone.status).toBe(400);
-    expect(await gone.text()).toContain("No allowlist entry with this id.");
+    expect(((await gone.json()) as { message: string }).message).toContain(
+      "No allowlist entry with this id.",
+    );
     const removed = await form(fetch, "/ops/allowlist/remove", { id: "entry-2" }, { cookie });
-    expect([removed.status, removed.headers.get("location")]).toEqual([303, "/allowlist"]);
+    expect([removed.status, await removed.json()]).toEqual([200, { ok: true }]);
     expect(allowlist.map((e) => e.value)).toEqual([PHONE, EMAIL]);
 
     const out = await form(fetch, "/ops/logout", {}, { cookie });
