@@ -21,6 +21,8 @@ https://api.eyes.pictures/mcp
 
 Then ask for a quote. Full steps are in [CONNECT.md](../CONNECT.md).
 
+The dedicated `https://mcp.eyes.pictures/mcp` connector is [prepared, not active](../CONNECT.md#dedicated-mcp-domain-prepared-not-active). Keep existing connectors unchanged until its OAuth and card origins are verified; REST, uploads and webhooks remain on `https://api.eyes.pictures`.
+
 ## Where in the code
 
 - [`apps/mcp/src/oauth.ts`](../../apps/mcp/src/oauth.ts): OAuth metadata, registration, sign-in page and token

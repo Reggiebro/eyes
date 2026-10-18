@@ -14,6 +14,8 @@ Hacking: Sat Oct 17 10:30 AM to Sun Oct 18 10:00 AM (submissions). Feature freez
 | CI and tests | lint, typecheck, unit, contract, integration, golden and demo e2e, safety rules, intent, secrets; `pnpm ax:eval` (Claude client passes locally); `safety-llm-eval` and the Claude PR reviewer run with the repo secret |
 | Agent experience | 10 MCP tools (9 plus the `show_task` card), REST mirror, llms.txt, openapi.json, agent card, `eyes` CLI, every error with a fix |
 
+Dedicated MCP-domain migration is [prepared, not active](CONNECT.md#dedicated-mcp-domain-prepared-not-active): target `https://mcp.eyes.pictures/mcp`, with matching OAuth and card origins. REST/uploads/webhooks remain at `https://api.eyes.pictures`; existing connectors stay unchanged until domain-owner verification.
+
 ## 2. Work in flight
 
 | Task | What | Status |

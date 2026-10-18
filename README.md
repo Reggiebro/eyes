@@ -51,6 +51,8 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 
 Prefer the Manufact CLI? `npx -y mcp-use@2.10.1 client connect eyes https://api.eyes.pictures/mcp --protocol legacy -H "Authorization: Bearer $EYES_API_KEY"`. To be a worker, open https://app.eyes.pictures on an iPhone. Until workers have opted in near a place, `ask_eyes` there returns `no_workers_nearby` and charges nothing. https://api.eyes.pictures/status says which parts are live.
 
+**MCP domain split: prepared, not active.** The target connector is `https://mcp.eyes.pictures/mcp` on Manufact; keep existing connectors unchanged until routing, OAuth and card origins are verified. REST, uploads and webhooks stay at `https://api.eyes.pictures`. See [migration status and expected metadata](docs/CONNECT.md#dedicated-mcp-domain-prepared-not-active).
+
 ## How it works
 
 The agent asks and pays; Eyes texts nearby workers, checks the photo and pays the worker. Every transport calls one `EyesService`, and each money move is one plpgsql function, so it runs in one transaction ([ADR-003](intent/decisions/ADR-003-seams-and-ownership.md)). The full flow is in [docs/SPEC.md](docs/SPEC.md).
