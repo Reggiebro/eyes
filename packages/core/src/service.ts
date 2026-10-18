@@ -104,9 +104,22 @@ export interface EyesService {
   joinWorker(input: JoinWorkerInput): Promise<JoinWorkerOutput>;
   workerConnectUrl(token: string): Promise<string>;
   markWorkerOnboarded(account_id: string): Promise<void>;
-  handleWorkerReply(input: { phone: string; intent: ReplyIntent; text: string }): Promise<void>;
+  /** `phone` for iMessage, `email` for an authenticated (DMARC-passing) email. */
+  handleWorkerReply(
+    input: ({ phone: string } | { email: string }) & { intent: ReplyIntent; text: string },
+  ): Promise<void>;
   /** token: the worker's "e:" token, the /me page's code (ADR-028). Throws unauthorized. */
   workerSetup(token: string): Promise<WorkerSetup>;
+  /** Adds, changes (pending, link emailed) or with null removes the worker's email. */
+  workerSetEmail(token: string, email: string | null): Promise<WorkerSetup>;
+  /** token: as workerSetup. A 24-hour one-time mailto to work@ that connects the sender's email, verified (the worker emails first). Throws unauthorized, or invalid_input before the phone texted START. */
+  workerEmailStart(token: string): Promise<{ mailto: string }>;
+  /** An authenticated email carrying a connect code: sets the sender as that worker's email, verified. Returns the in-thread reply. */
+  workerConnectEmail(email: string, code: string): Promise<string>;
+  /** Emails a 15-minute sign-in link to a verified email of an opted-in worker; silent otherwise. */
+  workerEmailLogin(email: string): Promise<void>;
+  /** Trades a one-time email link code for the setup page token. */
+  workerLoginCode(code: string): Promise<{ token: string }>;
   /** token: as workerSetup. One page of the worker's tasks, newest first, and the totals. Throws unauthorized. */
   workerTasks(token: string, query: WorkerTasksQuery): Promise<WorkerTasks>;
   /** token: as workerSetup. Mints a location code; returns the app install link carrying it. Throws unauthorized. */

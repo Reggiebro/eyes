@@ -28,14 +28,23 @@ import {
   usdToCents,
   verifyToken,
   type Worker,
+  WorkerEmail,
   WorkerLocationInput,
+  type WorkerSetup,
   type WorkerTasks,
 } from "@eyes/core";
 import { createRpc, type RpcArgs } from "@eyes/db";
 import { z } from "zod";
 
 type Detail = { task: Task; submission: Submission | null; worker_rating: number | null };
-type Nearby = { worker_id: string; phone: string; distance_m: number };
+type Nearby = { worker_id: string; phone: string; email: string | null; distance_m: number };
+
+// Every channel a worker has: the phone, and the email once verified.
+const contacts = (w: { phone: string; email: string | null }) => (w.email ? [w.phone, w.email] : [w.phone]);
+const verified = (w: Worker) => ({ phone: w.phone, email: (w.email_verified_at && w.email) || null });
+// One message per channel; fulfilled when at least one send worked, else rejects with the first error.
+const toAll = (to: string[], send: (to: string) => Promise<unknown>) =>
+  Promise.any(to.map(send)).catch((err: AggregateError) => Promise.reject(err.errors[0]));
 type Posted = { task: Task; created: boolean; workers_notified: number };
 type Payee = Worker & { stripe_account_id: string };
 type Summary = {
@@ -105,6 +114,27 @@ const SETUP_LINK_INVALID = {
   fix: "Text HELP to the Eyes number for a fresh link.",
 };
 const HOUR_MS = 3_600_000;
+const PENDING_EMAIL_MS = 24 * HOUR_MS; // a join-form email waits this long for the phone's START
+const LOGIN_LINK_MS = 15 * 60_000;
+// j…@example.com: enough for the worker to recognise, never the full address in a text.
+const maskEmail = (email: string) => `${email[0]}…${email.slice(email.indexOf("@"))}`;
+// A text that is just one email address: "my email is …", mailto: and wrapping punctuation are fine.
+function textedEmail(text: string): boolean {
+  const words = text.trim().split(/\s+/);
+  const [word, ...more] = words.filter((w) => w.includes("@"));
+  const rest = words
+    .filter((w) => !w.includes("@"))
+    .join(" ")
+    .toLowerCase();
+  if (!word || more.length || !/^(?:my )?(?:e-?mail(?: address)?(?: is)?:?)?$/.test(rest)) return false;
+  return WorkerEmail.safeParse(word.replace(/^[<("']*(?:mailto:)?|[>)"'.,;:!?]+$/gi, "")).success;
+}
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+// Only a phone that has texted START may add an email (the /me link itself comes by text).
+const START_FIRST = {
+  message: "Text START to the Eyes number first.",
+  fix: "Text START from your phone, then add the email again.",
+};
 const APP_SENDING_MS = 24 * HOUR_MS; // the app sent a fix this recently: no "Get the app" step
 const PING_MAX = 5;
 const PING_WAIT_MS = 30_000;
@@ -222,7 +252,21 @@ function answerOf({ task, submission, worker_rating }: Detail): Answer | null {
   };
 }
 
-export function createEyesService(deps: EngineDeps): EyesService {
+/**
+ * The denied gate names when an email provider refused a recipient on its sending scope (Primitive's
+ * 403 recipient_not_allowed), else null. Names only: a gate's subject can carry the address.
+ */
+export function recipientGateDenial(err: unknown): string[] | null {
+  if (!(err instanceof Error) || !("status" in err) || err.status !== 403 || !/recipient/i.test(err.message))
+    return null;
+  const gates = "gates" in err && Array.isArray(err.gates) ? err.gates : [];
+  return gates.map((g) => (typeof g?.name === "string" ? g.name : "")).filter(Boolean);
+}
+
+/** Info lines for the ops event log (never the Errors tab): expected limits such as a gated recipient. */
+export type Notice = (e: { kind: string; summary: string }) => void;
+
+export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): EyesService {
   const { providers, config } = deps;
   const { messaging, payments } = providers;
   const rpc = createRpc(deps.db);
@@ -231,14 +275,18 @@ export function createEyesService(deps: EngineDeps): EyesService {
   const maybe = async <T>(fn: string, args: RpcArgs) => (await rpc<T>(fn, args))[0];
   const one = async <T>(fn: string, args: RpcArgs) => (await rpc<T>(fn, args))[0] as T;
   const simulatedPay = config.live_payouts ? "" : ` ${SIMULATED_PAY}`;
+  // Agents whose owner email was refused by the provider's recipient gate: noticed once each, per process.
+  const gated = new Set<string>();
 
   const topUpUrl = (agentId: string) =>
     `${config.public_api_url}/topup/${signToken(config.link_secret, `t:${agentId}`)}`;
   const connectUrl = (workerId: string) =>
     `${config.public_api_url}/w/connect/${signToken(config.link_secret, `c:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
   // The setup page (ADR-028) takes the worker's "e:" token, in the fragment so no server logs it.
-  const meUrl = (workerId: string) =>
-    `${config.worker_web_url}/me#c=${signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS))}`;
+  // The setup page's code (ADR-028); /w/login/code returns the same token after an email link.
+  const meToken = (workerId: string) =>
+    signToken(config.link_secret, `e:${workerId}`, new Date(now().getTime() + WORKER_LINK_MS));
+  const meUrl = (workerId: string) => `${config.worker_web_url}/me#c=${meToken(workerId)}`;
   const captureUrl = (task: Task, workerId: string) =>
     `${config.worker_web_url}/capture.html?t=${signToken(config.link_secret, `o:${task.id}:${workerId}`, new Date(task.deadline_at))}`;
   const hereUrl = (workerId: string) =>
@@ -254,10 +302,14 @@ export function createEyesService(deps: EngineDeps): EyesService {
   // The code rides in the URL fragment, so no server (ours or a CDN) ever logs it. /app opens or
   // connects the app and falls back to TestFlight; without TestFlight, /install (ad hoc, T6.31).
   const installUrl = (code: string) => `${config.worker_web_url}/install#c=${code}`;
+  // Workers email this address (Primitive inbound); outbound worker email sets it as Reply-To.
+  const workerInbox = `work@${config.email_domain}`;
   const appUrl = (code: string) =>
     config.testflight_url ? `${config.worker_web_url}/app#c=${code}` : installUrl(code);
   // ponytail: in memory (one server instance); a restart allows one extra code on the next START.
   const appLinkSentAt = new Map<string, number>();
+  // ponytail: in memory like appLinkSentAt; email links texted per worker in the last hour (5 allowed).
+  const emailTextsAt = new Map<string, number[]>();
   // The hub text (START, HELP): links for everything, so YES and STOP are the only words to remember.
   // Only open steps are listed, numbered when there are two or more; none left: "You're all set".
   async function hubReply(worker: Worker & { location_source: string | null }): Promise<string> {
@@ -283,6 +335,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
       `Your setup: ${meUrl(worker.id)}`,
+      ...(worker.email ? [] : ["Text EMAIL to also get tasks by email."]),
       "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
     ].join("\n");
   }
@@ -311,6 +364,105 @@ export function createEyesService(deps: EngineDeps): EyesService {
     return `${err.name}${status}: ${err.message.replace(/https?:\/\/\S+|\S+@\S+/g, "<redacted>").slice(0, 200)}`;
   }
 
+  // One-time link to /me that verifies the email (or, once verified, just signs in). Only an HMAC of
+  // the code is stored, keyed by the email; the code rides in the URL fragment like every other code.
+  async function sendEmailLink(workerId: string, email: string, verify: boolean): Promise<boolean> {
+    const code = randomBytes(32).toString("base64url");
+    await one("eyes_issue_worker_code", {
+      p_email: email,
+      p_code_hash: sha256(code),
+      p_expires_at: new Date(now().getTime() + (verify ? PENDING_EMAIL_MS : LOGIN_LINK_MS)).toISOString(),
+    });
+    const link = `${config.worker_web_url}/login#c=${code}`;
+    try {
+      await providers.email.send({
+        to: email,
+        reply_to: workerInbox,
+        subject: verify ? "Confirm your email for Eyes tasks" : "Your Eyes sign-in link",
+        text: verify
+          ? `Open this link to get Eyes photo tasks by email too (it works for 24 hours):\n${link}\n\nDidn't ask for this? Ignore this email and nothing changes.`
+          : `Open this link to sign in to your Eyes setup page (it works for 15 minutes, once):\n${link}\n\nDidn't ask for this? Ignore this email.`,
+      });
+      return true;
+    } catch (err) {
+      const gates = recipientGateDenial(err);
+      if (gates)
+        notice({
+          kind: "email",
+          summary: `worker email for ${workerId} not sent: the provider refused the recipient (403)`,
+        });
+      else console.error(`worker email for ${workerId} failed: ${describeSendError(err)}`);
+      return false;
+    }
+  }
+
+  // A 24-hour one-time mailto to work@ (the worker emails first, so Primitive may answer). Only the
+  // code's SHA-256 is stored; the email that carries it connects the sender (workerConnectEmail).
+  async function connectMailto(workerId: string): Promise<string> {
+    const code = randomBytes(32).toString("base64url");
+    await one("eyes_issue_connect_code", {
+      p_worker_id: workerId,
+      p_code_hash: sha256(code),
+      p_expires_at: new Date(now().getTime() + PENDING_EMAIL_MS).toISOString(),
+    });
+    return `mailto:${workerInbox}?subject=Eyes%20${code}&body=Send%20this%20email%20to%20connect`;
+  }
+
+  // EMAIL (or an email address) texted from the phone gets the mailto behind a short link; EMAIL OFF
+  // removes the email.
+  async function emailByText(worker: Worker, phone: string, off: boolean): Promise<void> {
+    const say = async (text: string) => void (await messaging.sendText(phone, text));
+    if (off) {
+      await rpc("eyes_set_worker_email", { p_worker_id: worker.id, p_email: null });
+      return say("Email removed. Eyes won't email you tasks. Text EMAIL anytime to add one again.");
+    }
+    if (!worker.opted_in) return say("Text START first, then send your email.");
+    const t = now().getTime();
+    const recent = (emailTextsAt.get(worker.id) ?? []).filter((at) => t - at < HOUR_MS);
+    if (recent.length >= 5) return say("Too many email links this hour. Text EMAIL again in an hour.");
+    emailTextsAt.set(worker.id, [...recent, t]);
+    // ponytail: same 8 base62 symbols as apps/mcp short-links; that wrapper leaves /s/ links alone.
+    const id = Array.from(randomBytes(8), (b) => BASE62[b % 62]).join("");
+    await one("eyes_add_short_link", {
+      p_id: id,
+      p_target: await connectMailto(worker.id),
+      p_worker_id: worker.id,
+      p_expires_at: new Date(t + PENDING_EMAIL_MS).toISOString(),
+    });
+    await say(`To get tasks by email, tap this and press Send: ${config.public_api_url}/s/${id}`);
+  }
+
+  async function workerSetup(token: string): Promise<WorkerSetup> {
+    const workerId = tokenPayload(token, "e");
+    const [w, e] = workerId
+      ? await Promise.all([
+          maybe<Worker & { location_source: string | null }>("eyes_worker", {
+            p_worker_id: workerId,
+            p_phone: null,
+          }),
+          maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }),
+        ])
+      : [];
+    if (!w || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+    // Same spot rule as START: a fix, or the sign-up location until the first fix.
+    const at = w.lat === null ? null : iso(w.location_at ?? w.created_at);
+    const fresh = at !== null && now().getTime() - Date.parse(at) <= config.location_max_age_h * 3_600_000;
+    const app = w.location_source === "app";
+    return {
+      opted_in: w.opted_in,
+      spot: { at, fresh, max_age_h: config.location_max_age_h },
+      app: { last_at: app ? at : null, sending: app && fresh },
+      payouts: {
+        set_up: e.payouts_set_up,
+        live: config.live_payouts,
+        setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
+      },
+      here_url: hereUrl(w.id),
+      email_masked: w.email ? maskEmail(w.email) : null,
+      email_status: !w.email ? "none" : w.email_verified_at ? "verified" : "pending",
+    };
+  }
+
   async function emailOwner(to: string, agentId: string, subject: string, intro: string): Promise<boolean> {
     // RFC 2606/6761 names never reach a mailbox (smoke and test agents sign up with them): don't try.
     if (RESERVED_EMAIL_DOMAIN.test(to.split("@").pop() ?? "")) {
@@ -331,10 +483,16 @@ export function createEyesService(deps: EngineDeps): EyesService {
       });
       return true;
     } catch (err) {
-      if (err instanceof Error && "status" in err && err.status === 403 && /recipient/i.test(err.message)) {
-        console.warn(
-          `owner email for agent ${agentId} not sent: the email provider refused the recipient domain (403, outside the sending account's allowed recipients)`,
-        );
+      const gates = recipientGateDenial(err);
+      if (gates) {
+        // An expected limit until any-domain sending is on: an info event, never the Errors tab.
+        if (!gated.has(agentId)) {
+          gated.add(agentId);
+          notice({
+            kind: "email",
+            summary: `owner email for agent ${agentId} not sent: the email provider refused the recipient (403${gates.length ? `, gates denied: ${gates.join(", ")}` : ""}); it sends replies only until any-domain sending is enabled`,
+          });
+        }
       } else {
         console.error(`owner email for agent ${agentId} failed: ${describeSendError(err)}`);
       }
@@ -342,10 +500,14 @@ export function createEyesService(deps: EngineDeps): EyesService {
     }
   }
 
+  // 0,0 ("Null Island") is a missing location written as numbers, never a public place.
   async function resolve(location: LatLng | string): Promise<ResolvedLocation> {
-    if (typeof location !== "string") return { ...location, label: `${location.lat},${location.lng}` };
-    const place = await providers.geo.geocode(location);
-    if (!place) throw new EyesError("location_not_found", { location });
+    const place =
+      typeof location === "string"
+        ? await providers.geo.geocode(location)
+        : { ...location, label: `${location.lat},${location.lng}` };
+    if (!place || (place.lat === 0 && place.lng === 0))
+      throw new EyesError("location_not_found", { location });
     return place;
   }
 
@@ -362,16 +524,18 @@ export function createEyesService(deps: EngineDeps): EyesService {
   async function sendOffers(task: Task, workers: Nearby[]): Promise<number> {
     const sent = await Promise.allSettled(
       workers.map((w) =>
-        messaging.sendOffer(w.phone, {
-          task_id: task.id,
-          task_type: task.task_type,
-          question: task.question,
-          place_label: task.place_label,
-          bounty_cents: task.bounty_cents,
-          distance_m: Math.round(w.distance_m),
-          deadline_at: iso(task.deadline_at),
-          live_payouts: config.live_payouts,
-        }),
+        toAll(contacts(w), (to) =>
+          messaging.sendOffer(to, {
+            task_id: task.id,
+            task_type: task.task_type,
+            question: task.question,
+            place_label: task.place_label,
+            bounty_cents: task.bounty_cents,
+            distance_m: Math.round(w.distance_m),
+            deadline_at: iso(task.deadline_at),
+            live_payouts: config.live_payouts,
+          }),
+        ),
       ),
     );
     logFailedOffers(task.id, sent);
@@ -398,9 +562,11 @@ export function createEyesService(deps: EngineDeps): EyesService {
     await rpc("eyes_record_pings", { p_pings: pings, p_now: nowIso() });
     const sent = await Promise.allSettled(
       stale.map((w, i) =>
-        messaging.sendText(
-          w.phone,
-          `Eyes ping ${pings[i]?.nonce}: a paid task may be near you. Tap to update your spot: ${hereUrl(w.worker_id)}`,
+        toAll(contacts(w), (to) =>
+          messaging.sendText(
+            to,
+            `Eyes ping ${pings[i]?.nonce}: a paid task may be near you. Tap to update your spot: ${hereUrl(w.worker_id)}`,
+          ),
         ),
       ),
     );
@@ -475,24 +641,25 @@ export function createEyesService(deps: EngineDeps): EyesService {
     return err;
   }
 
-  async function claim(worker: Worker) {
+  // Answers on the channel the YES came from.
+  async function claim(worker: Worker, from: string) {
     const result = await maybe<{ outcome: "won" | "lost" | "already_yours"; task: Task }>("eyes_claim", {
       p_worker_id: worker.id,
       p_now: nowIso(),
     });
     if (!result) {
       await messaging.sendText(
-        worker.phone,
-        "There is no open task for you right now. We will text you when one comes up nearby.",
+        from,
+        "There is no open task for you right now. We will message you when one comes up nearby.",
       );
       return;
     }
     const { outcome, task } = result;
     if (outcome === "lost") {
-      await messaging.sendAlreadyClaimed(worker.phone, { place_label: task.place_label });
+      await messaging.sendAlreadyClaimed(from, { place_label: task.place_label });
       return;
     }
-    await messaging.sendCaptureLink(worker.phone, {
+    await messaging.sendCaptureLink(from, {
       task_id: task.id,
       place_label: task.place_label,
       capture_url: captureUrl(task, worker.id),
@@ -500,16 +667,16 @@ export function createEyesService(deps: EngineDeps): EyesService {
     });
   }
 
-  async function textWorker(worker: Worker, taskId: string, send: () => Promise<unknown>) {
+  async function textWorker(worker: Worker, taskId: string, send: (to: string) => Promise<unknown>) {
     if (!worker.opted_in) return;
-    await send().catch((err) =>
+    await toAll(contacts(verified(worker)), send).catch((err) =>
       console.error(`text to the worker for task ${taskId} failed: ${errorName(err)}`),
     );
   }
 
   const notifyPaid = (task: Task, worker: Worker) =>
-    textWorker(worker, task.id, () =>
-      messaging.sendPaid(worker.phone, {
+    textWorker(worker, task.id, (to) =>
+      messaging.sendPaid(to, {
         task_id: task.id,
         place_label: task.place_label,
         amount_cents: task.bounty_cents,
@@ -557,9 +724,9 @@ export function createEyesService(deps: EngineDeps): EyesService {
       await notifyPaid(task, worker);
       return task;
     }
-    await textWorker(worker, task.id, () =>
+    await textWorker(worker, task.id, (to) =>
       messaging.sendText(
-        worker.phone,
+        to,
         `Your ${dollars(task.bounty_cents)} for this task is waiting. Set up payouts here: ${connectUrl(worker.id)}`,
       ),
     );
@@ -984,9 +1151,14 @@ export function createEyesService(deps: EngineDeps): EyesService {
         p_lat: join.lat,
         p_lng: join.lng,
         p_now: nowIso(),
+        p_email: join.email ?? null,
       });
+      const byEmail =
+        join.email && config.email_domain
+          ? ` To get tasks by email too, send one email saying START from ${join.email} to ${workerInbox}.`
+          : "";
       return {
-        opt_in_instructions: `Text START to the Eyes number to start getting paid tasks near you${config.live_payouts ? "; we reply with your payout setup link" : ""}. When a task text arrives, reply YES to claim it. Text STOP any time to pause.${simulatedPay}`,
+        opt_in_instructions: `Text START to the Eyes number to start getting paid tasks near you${config.live_payouts ? "; we reply with your payout setup link" : ""}. When a task text arrives, reply YES to claim it. Text STOP any time to pause.${byEmail}${simulatedPay}`,
         inkbox_number: null,
         connect_url: null,
       };
@@ -1009,6 +1181,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
         const created = await payments.createWorkerAccount({
           worker_id: worker.id,
           phone: worker.phone,
+          email: verified(worker).email,
           name: worker.name,
         });
         const stored = await one<Worker>("eyes_set_worker_stripe_account", {
@@ -1029,16 +1202,22 @@ export function createEyesService(deps: EngineDeps): EyesService {
       for (const { task, worker } of await payoutsDue(account_id, null)) await payOut(task, worker);
     },
 
-    async handleWorkerReply({ phone, intent, text }) {
-      const worker = await maybe<Worker & { location_source: string | null }>("eyes_worker", {
-        p_worker_id: null,
-        p_phone: phone,
-      });
+    async handleWorkerReply(input) {
+      const { intent, text } = input;
+      const phone = "phone" in input ? input.phone : input.email;
+      // An email reaches here only DMARC-authenticated, which proves the address: verify it.
+      type Row = Worker & { location_source: string | null };
+      const worker =
+        "email" in input
+          ? await maybe<Row>("eyes_verify_worker_email", { p_email: phone, p_now: nowIso() })
+          : await maybe<Row>("eyes_worker", { p_worker_id: null, p_phone: phone });
       if (!worker) {
         if (intent === "stop") return;
         await messaging.sendText(
           phone,
-          `You are not signed up for Eyes yet. Join at ${config.worker_web_url} to get paid tasks near you.${simulatedPay}`,
+          "email" in input
+            ? `Eyes: join with your phone number at ${config.worker_web_url} first, then add this email on your setup page.`
+            : `You are not signed up for Eyes yet. Join at ${config.worker_web_url} to get paid tasks near you.${simulatedPay}`,
         );
         return;
       }
@@ -1047,11 +1226,33 @@ export function createEyesService(deps: EngineDeps): EyesService {
         if (intent === "start") await messaging.sendText(phone, "This number can't take Eyes tasks.");
         return;
       }
+      // Texts only: EMAIL, an email address or EMAIL OFF (parseReplyIntent has no word for these).
+      if ("phone" in input && intent === "unknown") {
+        const off = /^\s*e-?mail\s+off\W*$/i.test(text);
+        if (off || /^\s*e-?mail\W*$/i.test(text) || textedEmail(text)) return emailByText(worker, phone, off);
+      }
       if (!worker.opted_in && intent !== "start") return;
+      // The phone is the account (one account per number), so only a text from it turns tasks on.
+      if (!worker.opted_in && "email" in input) {
+        await messaging.sendText(
+          phone,
+          "Eyes: text START to the Eyes number from your phone first, then reply here.",
+        );
+        return;
+      }
       const reply: Record<ReplyIntent, () => Promise<unknown>> = {
         start: async () => {
           await rpc("eyes_set_worker_opt_in", { p_phone: phone, p_opted_in: true });
-          await messaging.sendText(phone, await hubReply(worker));
+          let note = "";
+          // The join-form email: this START proves the phone, so now (within 24 h) it gets its link.
+          if (!worker.opted_in && worker.email && !worker.email_verified_at) {
+            if (now().getTime() - Date.parse(worker.created_at) >= PENDING_EMAIL_MS) {
+              await rpc("eyes_set_worker_email", { p_worker_id: worker.id, p_email: null });
+            } else if (await sendEmailLink(worker.id, worker.email, true)) {
+              note = `\nWe emailed a confirmation link to ${maskEmail(worker.email)}. Not yours? Remove it on your setup page.`;
+            }
+          }
+          await messaging.sendText(phone, (await hubReply(worker)) + note);
         },
         stop: async () => {
           await rpc("eyes_set_worker_opt_in", { p_phone: phone, p_opted_in: false });
@@ -1061,7 +1262,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
             "Eyes: you're opted out and won't get task texts. Text START to rejoin.",
           );
         },
-        yes: () => claim(worker),
+        yes: () => claim(worker, phone),
         no: async () => {
           const released = await maybe<Task>("eyes_release_claim", {
             p_worker_id: worker.id,
@@ -1077,7 +1278,11 @@ export function createEyesService(deps: EngineDeps): EyesService {
           });
           await sendOffers(
             released,
-            idle.map((w) => ({ worker_id: w.id, phone: w.phone, distance_m: distanceMeters(released, w) })),
+            idle.map((w) => ({
+              worker_id: w.id,
+              ...verified(w),
+              distance_m: distanceMeters(released, w),
+            })),
           );
         },
         here: () =>
@@ -1209,33 +1414,69 @@ export function createEyesService(deps: EngineDeps): EyesService {
       } satisfies WorkerTasks;
     },
 
-    async workerSetup(token) {
+    workerSetup,
+
+    async workerSetEmail(token, email) {
       const workerId = tokenPayload(token, "e");
-      const [w, e] = workerId
-        ? await Promise.all([
-            maybe<Worker & { location_source: string | null }>("eyes_worker", {
-              p_worker_id: workerId,
-              p_phone: null,
-            }),
-            maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: workerId }),
-          ])
-        : [];
-      if (!w || !e) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
-      // Same spot rule as START: a fix, or the sign-up location until the first fix.
-      const at = w.lat === null ? null : iso(w.location_at ?? w.created_at);
-      const fresh = at !== null && now().getTime() - Date.parse(at) <= config.location_max_age_h * 3_600_000;
-      const app = w.location_source === "app";
-      return {
-        opted_in: w.opted_in,
-        spot: { at, fresh, max_age_h: config.location_max_age_h },
-        app: { last_at: app ? at : null, sending: app && fresh },
-        payouts: {
-          set_up: e.payouts_set_up,
-          live: config.live_payouts,
-          setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
-        },
-        here_url: hereUrl(w.id),
-      };
+      const w = workerId
+        ? await maybe<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      const next = email === null ? null : parse(WorkerEmail, email);
+      if (next !== null && !w.opted_in) throw new EyesError("invalid_input", {}, START_FIRST);
+      await rpc("eyes_set_worker_email", { p_worker_id: w.id, p_email: next }).catch((err: unknown) => {
+        throw (err as { code?: string }).code === "23505" ? new EyesError("email_taken") : err;
+      });
+      // Same address again re-sends the link, unless it is already verified.
+      if (next !== null && !(next === w.email && w.email_verified_at)) await sendEmailLink(w.id, next, true);
+      return workerSetup(token);
+    },
+
+    async workerEmailStart(token) {
+      const workerId = tokenPayload(token, "e");
+      const w = workerId
+        ? await maybe<Worker>("eyes_worker", { p_worker_id: workerId, p_phone: null })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      if (!w.opted_in) throw new EyesError("invalid_input", {}, START_FIRST);
+      return { mailto: await connectMailto(w.id) };
+    },
+
+    async workerConnectEmail(email, code) {
+      const w = await maybe<Worker>("eyes_connect_worker_email", {
+        p_code_hash: sha256(code),
+        p_email: email,
+        p_now: nowIso(),
+      }).catch((err: unknown) => {
+        if (err instanceof Object && "code" in err && err.code === "23505") return "taken" as const;
+        throw err;
+      });
+      if (w === "taken")
+        return "This email is already on another Eyes account, so it wasn't connected. Send the email from a different address, or text EMAIL OFF from that account's phone first.";
+      return w
+        ? "Connected. Eyes will also send you tasks here. Reply STOP to stop."
+        : "This link has expired or was already used, so nothing changed. Text EMAIL to the Eyes number for a fresh one.";
+    },
+
+    async workerEmailLogin(email) {
+      const address = parse(WorkerEmail, email);
+      const w = await maybe<Worker>("eyes_worker", { p_worker_id: null, p_phone: address });
+      // Silent for anyone else, so the answer never tells which emails have accounts.
+      if (w?.opted_in && w.email === address && w.email_verified_at)
+        await sendEmailLink(w.id, address, false);
+    },
+
+    async workerLoginCode(code) {
+      const used = await maybe<{ email: string }>("eyes_consume_worker_code", {
+        p_code_hash: sha256(code),
+        p_now: nowIso(),
+      });
+      // A confirmation link verifies the email (only for an opted-in worker); any link signs in.
+      const w = used
+        ? await maybe<Worker>("eyes_verify_worker_email", { p_email: used.email, p_now: nowIso() })
+        : undefined;
+      if (!w) throw new EyesError("unauthorized", {}, SETUP_LINK_INVALID);
+      return { token: meToken(w.id) };
     },
 
     async workerInstallLink(token) {
@@ -1436,6 +1677,7 @@ export function createEyesService(deps: EngineDeps): EyesService {
     },
 
     async expireOverdue() {
+      await rpc("eyes_drop_pending_emails", { p_now: nowIso() });
       return { expired: (await rpc("eyes_expire_overdue", { p_now: nowIso() })).length };
     },
 
@@ -1460,8 +1702,8 @@ export function createEyesService(deps: EngineDeps): EyesService {
       });
       const worker = await one<Worker>("eyes_worker", { p_worker_id: ticket.worker_id, p_phone: null });
       const body = [`Eyes: ticket #${ticket.id} is resolved.`, TICKET_OUTCOME[outcome], `Note: ${note}`];
-      await textWorker(worker, ticket.task_id, () =>
-        messaging.sendText(worker.phone, body.filter(Boolean).join(" ")),
+      await textWorker(worker, ticket.task_id, (to) =>
+        messaging.sendText(to, body.filter(Boolean).join(" ")),
       );
       return { ticket_id: Number(ticket.id), task_id: ticket.task_id, status: "resolved" };
     },

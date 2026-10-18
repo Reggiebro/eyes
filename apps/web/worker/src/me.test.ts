@@ -31,6 +31,8 @@ function setup(over: Partial<WorkerSetup> = {}): WorkerSetup {
     app: { last_at: minAgo(5), sending: true },
     payouts: { set_up: true, live: true, setup_url: null },
     here_url: HERE,
+    email_masked: null,
+    email_status: "none",
     ...over,
   };
 }
@@ -57,6 +59,14 @@ describe("takeCode", () => {
     const { code, replaceUrl } = read(`#c=${CODE}`);
     expect(code).toBe(CODE);
     expect(replaceUrl).toHaveBeenCalledWith("/me?x=1");
+  });
+
+  it("takes the shape a page expects: /login reads 43 base64url characters", () => {
+    const login = `#c=${"A1_-".repeat(10)}abc`;
+    expect(
+      takeCode({ hash: login, pathname: "/login", search: "", replaceUrl: vi.fn() }, /^[\w-]{43}$/),
+    ).toBe(login.slice(3));
+    expect(read(login).code).toBeNull();
   });
 
   it("finds c among other fragment parameters", () => {
@@ -249,7 +259,7 @@ describe("taskLine", () => {
   });
 
   it.each([
-    [{ status: "paid", payout: "paid", bounty_usd: 2.5 }, "Paid", "success", null],
+    [{ status: "paid", payout: "paid", bounty_usd: 3 }, "Paid", "success", null],
     [{ status: "disputed", payout: "paid" }, "Disputed", "warning", "Paid out"],
     [{ payout: "waiting_for_payout_setup" }, "Verified", "success", "Waiting for payout setup"],
     [{ status: "expired", payout: null }, "Expired", "", null],
@@ -407,7 +417,13 @@ describe("taskList", () => {
 describe("meView", () => {
   it("titles the page You're set up when nothing is left to do (simulated payouts count as done)", () => {
     const view = meView(setup({ payouts: { set_up: false, live: false, setup_url: null } }), NOW);
-    expect(view).toEqual({ step: "loaded", title: "You're set up", rows: expect.any(Array), live: false });
+    expect(view).toEqual({
+      step: "loaded",
+      title: "You're set up",
+      rows: expect.any(Array),
+      live: false,
+      email: expect.objectContaining({ status: "none" }),
+    });
   });
 
   it("titles the page Finish setting up when a row is to do", () => {

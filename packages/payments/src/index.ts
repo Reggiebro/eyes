@@ -64,7 +64,7 @@ export function createStripePayments(env: Env): Payments {
       return { url: session.url, session_id: session.id };
     },
 
-    async createWorkerAccount({ worker_id, phone }) {
+    async createWorkerAccount({ worker_id, phone, email }) {
       const account = await stripe.accounts.create(
         {
           controller: {
@@ -75,7 +75,7 @@ export function createStripePayments(env: Env): Payments {
           country: "US",
           business_type: "individual",
           capabilities: { transfers: { requested: true } },
-          individual: { phone },
+          individual: { phone, email: email ?? undefined },
           business_profile: {
             product_description: "Paid by Eyes for on-the-spot photo checks of public places.",
           },

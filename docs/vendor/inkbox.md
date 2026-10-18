@@ -21,7 +21,7 @@ Note: the WebFetch tool summarizes pages with a small model, so payload samples 
 ## What Eyes uses it for
 Inkbox is the dispatcher identity: one agent identity with one US local phone number. Eyes uses it to (1) text nearby workers a task offer with a capture link, (2) receive worker replies ("YES") via webhook, (3) send confirmations, payout and expiry texts. iMessage is an optional upgrade, not required. Vendor: Inkbox (YC S26), docs at https://inkbox.ai/docs, TS SDK `@inkbox/sdk`.
 
-Inkbox also has email (mailboxes per identity), calls, Slack, A2A, tunnels, contacts, vault. Email overlaps Primitive; we ignore Inkbox email and keep Primitive for agent email (source: llms.txt).
+Inkbox also has email (mailboxes per identity), calls, Slack, A2A, tunnels, contacts, vault. Email overlaps Primitive; Primitive stays the agent-email inbox and reply path, and the dispatcher identity's mailbox sends first-contact email Primitive's recipient gate refuses (T6.45): REST `POST /api/v1/mail/mailboxes/{email}/messages` with `X-API-Key`, body `recipients.to`, `subject`, `body_text`, `body_html`, `in_reply_to_message_id`, `reply_to`. Limits: 50 recipients per 10 min, 80 per hour, 100 per 24 h per org (429 `mail_rate_limited` with `retry_after_seconds`); a "Sent via Inkbox" footer on the free plan. Sends to any domain; a test to a custom domain on 2026-10-18 came back `delivered` (SES, SPF pass) (sources: llms.txt, https://inkbox.ai/docs/api/mail/messages.md).
 
 ## Auth & setup
 - Package: `npm install @inkbox/sdk` (https://inkbox.ai/docs/get-started/quickstart.md). Node >= 22 per the skill page (https://inkbox.ai/docs/skills/typescript.md); a search snippet said >= 18, so use Node 22.

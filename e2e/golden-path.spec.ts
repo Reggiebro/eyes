@@ -120,7 +120,7 @@ test.beforeAll(async () => {
   http = createHttpServer(toNodeListener(server.fetch));
   await new Promise<void>((resolve) => http?.listen(3399, "127.0.0.1", resolve));
 
-  const signup = (await post("/v1/signup", { name: "g1-golden-agent" })) as SignupOutput;
+  const signup = (await post("/v1/signup", { name: "e2e-golden-agent" })) as SignupOutput;
   client = new Client({ name: "g1-golden-path", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(`${API}/mcp`), {

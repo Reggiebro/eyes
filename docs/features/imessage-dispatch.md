@@ -10,6 +10,7 @@ When an agent asks Eyes a question about a place, Eyes texts the nearest free wo
 - Claims are taken under a row lock, so only one YES can win. Ten workers replying at the same moment still produce one claim.
 - The winner's capture link expires at the task deadline. A late YES gets "no open task" and the agent is refunded once.
 - Workers can reply NO to give the task back, HELP for instructions, or STOP to opt out.
+- Workers who add an email can also get offers by email. See [email channel](email-channel.md).
 
 ## How to try it
 

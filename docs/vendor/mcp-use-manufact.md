@@ -1,5 +1,7 @@
 # Manufact (mcp-use SDK + Manufact Cloud) - vendor note
 
+Not current hosting: Eyes left Manufact Cloud (T6.11). Production is Cloudflare Containers behind the `eyes-api` Worker at https://api.eyes.pictures, and the Eyes connect commands below use that URL. The rest of this note is Manufact-era research, kept as history.
+
 Fetched: 2026-10-16. Sources read:
 - https://manufact.com/llms.txt (mcp-use.com/llms.txt 301s here)
 - https://docs.manufact.com/llms.txt
@@ -163,8 +165,8 @@ npx mcp-use servers env set <srv> KEY=VAL --secret       # (local CLI ref)  docs
 
 ## Connecting clients (live demo)
 - Dashboard: click gateway URL chip, "Add to client" gives one-click installs/copy-paste for Claude Desktop and Claude Code (connect-clients page).
-- Generic JSON: `{ "mcpServers": { "eyes": { "url": "https://<slug>.run.mcp-use.com/mcp" } } }`.
-- Claude Code with our bearer key: `claude mcp add --transport http eyes https://<slug>.run.mcp-use.com/mcp --header "Authorization: Bearer $EYES_KEY"`; `.mcp.json`: `{"mcpServers":{"eyes":{"type":"http","url":"…/mcp","headers":{"Authorization":"Bearer ${EYES_KEY}"}}}}` (code.claude.com/docs/en/mcp). Do not name the env var like `ANTHROPIC_*`; those expand to empty.
+- Generic JSON: `{ "mcpServers": { "eyes": { "url": "https://api.eyes.pictures/mcp" } } }`.
+- Claude Code with our bearer key: `claude mcp add --transport http eyes https://api.eyes.pictures/mcp --header "Authorization: Bearer $EYES_KEY"`; `.mcp.json`: `{"mcpServers":{"eyes":{"type":"http","url":"…/mcp","headers":{"Authorization":"Bearer ${EYES_KEY}"}}}}` (code.claude.com/docs/en/mcp). Do not name the env var like `ANTHROPIC_*`; those expand to empty.
 - Claude Desktop / ChatGPT remote connectors generally expect OAuth or no auth, not static bearer headers (unverified, see Open questions). For the demo, use Claude Code or the mcp-use client with the header, or make a demo key optional.
 
 ## Limits, test-mode quirks, gotchas

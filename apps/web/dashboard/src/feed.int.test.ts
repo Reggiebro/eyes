@@ -172,7 +172,7 @@ describe.skipIf(!url)("eyes_dashboard_feed on Postgres", () => {
     });
 
     for (const w of paid.workers)
-      expect(Object.keys(w).sort()).toEqual(["available", "id", "lat", "lng", "opted_in"]);
+      expect(Object.keys(w).sort()).toEqual(["available", "id", "lat", "lng", "opted_in", "test"]);
     const json = JSON.stringify(paid);
     for (const secret of [
       ...phones,
