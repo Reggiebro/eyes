@@ -53,7 +53,7 @@ Agents can read the internet but cannot see the street. Eyes is an MCP server th
 
 Prefer the Manufact CLI? `npx -y mcp-use@2.10.1 client connect eyes https://mcp.eyes.pictures/mcp --protocol legacy -H "Authorization: Bearer $EYES_API_KEY"`. To be a worker, open https://app.eyes.pictures on an iPhone. Until workers have opted in near a place, `ask_eyes` there returns `no_workers_nearby` and charges nothing. https://api.eyes.pictures/status says which parts are live.
 
-**MCP is ready at `https://mcp.eyes.pictures/mcp`.** OAuth issuer and card origins match each host. REST signup, balance, uploads and webhooks stay at `https://api.eyes.pictures`; existing `api.eyes.pictures/mcp` connectors remain supported. Migration is manual: change the connector URL and reconnect. The new ChatGPT and Claude connections still need the existing key entered; they are not yet connected. DNS negative caches can linger; see [verified readiness and migration](docs/CONNECT.md#dedicated-mcp-domain-ready-for-connector-migration).
+**MCP is ready at `https://mcp.eyes.pictures/mcp`.** OAuth issuer and card origins match each host. REST signup, balance, uploads and webhooks stay at `https://api.eyes.pictures`; existing `api.eyes.pictures/mcp` connectors remain supported. Migration is manual: change the connector URL and reconnect. For ChatGPT and Claude, follow the [OAuth setup](docs/CONNECT.md). DNS negative caches can linger; see [verified readiness and migration](docs/CONNECT.md#dedicated-mcp-domain-ready-for-connector-migration).
 
 ## How it works
 
@@ -104,7 +104,7 @@ sequenceDiagram
 - [Agent docs: llms.txt](docs/public/llms.txt)
 - [Report a bug](../../issues/new)
 
-To develop locally you need Node 24, pnpm and Docker: `pnpm install && pnpm verify:fast` runs lint, typecheck, unit, contract, safety fixtures and the intent check without a database (941 tests on 2026-10-17). `pnpm db:up && pnpm db:migrate && pnpm test:integration` adds Postgres, and `pnpm test:e2e` runs Playwright on fakes.
+To develop locally you need Node 24, pnpm and Docker: `pnpm install && pnpm verify:fast` runs lint, typecheck, unit, contract, safety fixtures and the intent check without a database. `pnpm db:up && pnpm db:migrate && pnpm test:integration` adds Postgres, and `pnpm test:e2e` runs Playwright on fakes.
 
 ## Built with
 
@@ -127,12 +127,12 @@ Every outside provider and service Eyes uses, and how. "Live" means the deployed
 | Inkbox | Shared iMessage line: inbound webhook, offer and paid texts, START/STOP/HELP/HERE replies, texts with location codes and the app link; uptime alerts; first-contact owner/ops email fallback when Primitive refuses delivery | [packages/comms/src/inkbox.ts](packages/comms/src/inkbox.ts) | live |
 | Inkbox (limitation) | An iMessage "Share My Location" arrives as a lone U+FFFD, so Eyes replies with a HERE link instead ([ADR-024](intent/decisions/ADR-024-worker-location.md)) | [packages/comms](packages/comms) | live |
 | Primitive | Each agent's private email inbox ([ADR-007](intent/decisions/ADR-007-agent-email-identity.md)), inbound webhooks, normal email replies and worker mail; first-contact owner/ops delivery falls back to Inkbox | [packages/comms/src/primitive.ts](packages/comms/src/primitive.ts) | live |
-| Anthropic Claude | Fallback for task-safety uncertainty or provider failures; photo fallback on provider failure only; used alone without Cloudflare | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
+| Anthropic Claude | Fallback for task-safety or photo provider failures only; used alone without Cloudflare | [packages/safety](packages/safety), [packages/verify](packages/verify) | live |
 | OpenStreetMap Nominatim | Geocodes place names in `quote_task` and `ask_eyes` | [apps/mcp/src/geo.ts](apps/mcp/src/geo.ts) | live |
 | OpenStreetMap tiles + Leaflet (unpkg) | Maps on the ops dashboard and live map | [apps/web/dashboard](apps/web/dashboard) | live |
 | Apple Maps / Google Maps links | Reads coordinates from map links a worker texts in; the capture page links to Google Maps directions | [packages/core/src/util.ts](packages/core/src/util.ts), [apps/web/worker/src/capture.ts](apps/web/worker/src/capture.ts) | live |
 | mcp-use | MCP server framework for tools and widgets; Manufact CLI connect path on the landing page | [apps/mcp](apps/mcp), [apps/web/landing](apps/web/landing) | live |
-| OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with host-matched OAuth and card origins; new connections still require manual key entry | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | supported; manual connection |
+| OpenAI Apps SDK / MCP Apps | ChatGPT app and Claude connector cards (quote, task, balance) with host-matched OAuth and card origins | [apps/mcp](apps/mcp), [docs/CONNECT.md](docs/CONNECT.md) | supported |
 | Expo / React Native + Apple | iPhone app that sends background location; TestFlight distribution paused, not removed; [ad-hoc installation](docs/DEPLOY.md#ad-hoc-releases-iphone-app) still works | [apps/mobile](apps/mobile) | TestFlight paused; ad hoc available |
 | ClickHouse | Optional copy of the ops event log and Trends charts; Postgres stays the source of truth | [apps/web/dashboard/src/clickhouse.ts](apps/web/dashboard/src/clickhouse.ts) | optional, off on the host |
 | Astro, Tailwind, GSAP | Landing and worker web; Better-T-Stack conventions | [apps/web](apps/web) | live |
