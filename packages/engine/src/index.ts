@@ -352,7 +352,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
   const appLinkSentAt = new Map<string, number>();
   // ponytail: in memory like appLinkSentAt; email links texted per worker in the last hour (5 allowed).
   const emailTextsAt = new Map<string, number[]>();
-  // The hub text (START, HELP): links for everything, so YES and STOP are the only words to remember.
+  // START and HELP share the setup steps and the complete worker command menu.
   // Only open steps are listed, numbered when there are two or more; none left: "You're all set".
   async function hubReply(worker: Worker & { location_source: string | null }): Promise<string> {
     const t = now().getTime();
@@ -377,8 +377,13 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       ...(steps.length > 1 ? steps.map((s, i) => `${i + 1}. ${s}`) : steps),
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
       `Your setup: ${meUrl(worker.id)}`,
-      ...(worker.email ? [] : ["Text EMAIL to also get tasks by email."]),
-      "When a task comes, reply YES to take it. Reply STOP anytime to pause.",
+      "Commands (aliases in parentheses):",
+      "Tasks: YES (Y, YEP, YUP, YEAH, YEA, OK, OKAY, SURE, CLAIM, 👍) take; NO (N, NOPE, NAH, PASS) decline/give back; TASK (LINK) reopen capture.",
+      "Setup: START (UNSTOP) join/resume; HELP (INFO, ?) setup/review a held answer; APP / INSTALL (DOWNLOAD, TESTFLIGHT) get app.",
+      "Location: HERE (LOCATION, I'M HERE, IM HERE, I AM HERE) update spot; SHORTCUT (AUTO, AUTOMATION) auto-location. Inputs: Apple/Google Maps link or lat,lng (3+ decimals); iMessage share/short map links get an update link.",
+      "Email (text only): EMAIL (E-MAIL) add; EMAIL OFF (E-MAIL OFF) remove. Input: email address.",
+      "Stop: STOP (STOPALL, STOP ALL, UNSUBSCRIBE, CANCEL, END, QUIT, REVOKE, OPTOUT, OPT OUT, STOP TEXTING ME, PLEASE STOP) pause, delete spot/email and disable location codes.",
+      "You can also reply with details to an open review ticket.",
     ].join("\n");
   }
 
