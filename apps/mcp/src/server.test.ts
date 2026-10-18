@@ -92,7 +92,6 @@ const PAID_TASK: ToolOutput<"get_task"> = {
     cost_usd: 3.5,
   },
 };
-const CARD_URI = "ui://views/task-card.html";
 
 const OPS_KEY = "ops-5f2c9a1e7b3d4c8a9e0f1a2b3c4d5e6f";
 const FEED = {
@@ -994,67 +993,13 @@ describe("MCP tools", () => {
     expect(parseText(result)).toEqual(QUOTE);
   });
 
-  it("answers show_task with the same JSON as get_task, and no card when no view is built", async () => {
-    const env = { EYES_VIEWS_MANIFEST: join(tmpdir(), "eyes-no-views", "manifest.json") };
-    const client = await connect(setup({ getTask: async () => PAID_TASK }, env).fetch);
+  it("answers show_task with the same JSON and current card as get_task without a view build", async () => {
+    const client = await connect(setup({ getTask: async () => PAID_TASK }).fetch);
     const show = await client.callTool({ name: "show_task", arguments: { task_id: TASK_ID } });
     expect(show.structuredContent).toEqual(PAID_TASK);
     expect(show).toEqual(await client.callTool({ name: "get_task", arguments: { task_id: TASK_ID } }));
-    const { tools } = await client.listTools();
-    expect(tools.find((t) => t.name === "show_task")?._meta).toBeUndefined();
-  });
-
-  it("serves show_task without a card when the views manifest is unreadable, instead of failing to start", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "eyes-bad-views-"));
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      for (const body of ['{"views":{"task-card":{"kind"', "{}"]) {
-        const manifest = join(dir, "manifest.json");
-        await writeFile(manifest, body);
-        const client = await connect(
-          setup({ getTask: async () => PAID_TASK }, { EYES_VIEWS_MANIFEST: manifest }).fetch,
-        );
-        const { tools } = await client.listTools();
-        expect(tools.find((t) => t.name === "show_task")?._meta).toBeUndefined();
-      }
-      expect(error).toHaveBeenCalledOnce();
-    } finally {
-      error.mockRestore();
-    }
-  });
-
-  it("binds only show_task to the built task-card view with ChatGPT's progress labels, allowing the photo host", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "eyes-views-"));
-    const manifest = join(dir, "manifest.json");
-    const js = "document.body.dataset.card = 'eyes'";
-    await writeFile(manifest, JSON.stringify({ views: { "task-card": { kind: "inline", js, css: "" } } }));
-    const env = { EYES_VIEWS_MANIFEST: manifest, INSFORGE_BASE_URL: "https://eyes.us-west.insforge.app" };
-    const client = await connect(setup({ getTask: async () => PAID_TASK }, env).fetch);
-    const { tools } = await client.listTools();
-    expect(tools.find((t) => t.name === "show_task")?._meta).toMatchObject({
-      ui: { resourceUri: CARD_URI },
-      "openai/toolInvocation": { invoking: "Loading the Eyes task card", invoked: "Eyes task card ready" },
-      "openai/toolInvocation/invoking": "Loading the Eyes task card",
-      "openai/toolInvocation/invoked": "Eyes task card ready",
-    });
-    const bound = tools.filter(
-      (t) => (t._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri === CARD_URI,
-    );
-    expect(bound.map((t) => t.name)).toEqual(["show_task"]);
-    const [card] = (await client.readResource({ uri: CARD_URI })).contents;
-    expect(card).toMatchObject({
-      mimeType: "text/html;profile=mcp-app",
-      text: expect.stringContaining(js),
-      _meta: {
-        ui: { csp: { resourceDomains: expect.arrayContaining(["https://eyes.us-west.insforge.app"]) } },
-      },
-    });
-    const show = await client.callTool({ name: "show_task", arguments: { task_id: TASK_ID } });
-    expect(show.structuredContent).toEqual(PAID_TASK);
-    expect(show._meta).toMatchObject({ ui: { resourceUri: CARD_URI } });
-    const get = await client.callTool({ name: "get_task", arguments: { task_id: TASK_ID } });
-    expect(get._meta).toBeUndefined();
-    await rm(dir, { recursive: true, force: true });
+    const { resources } = await client.listResources();
+    expect(resources.map((resource) => resource.uri)).toEqual(["ui://eyes/card.html"]);
   });
 
   it("turns an EyesError into isError with the catalog body and fix", async () => {
@@ -1971,9 +1916,9 @@ describe("ops dashboard", () => {
 });
 
 describe("ChatGPT and Claude widget", () => {
-  const WIDGET_TOOLS = ["quote_task", "ask_eyes", "await_answer", "get_task", "get_balance"];
+  const WIDGET_TOOLS = ["quote_task", "ask_eyes", "await_answer", "get_task", "show_task", "get_balance"];
 
-  it("binds the five card tools to ui://eyes/card.html in both MCP Apps and ChatGPT metadata", async () => {
+  it("binds every card tool to the current resource in both MCP Apps and ChatGPT metadata", async () => {
     const client = await connect(setup().fetch);
     const { tools } = await client.listTools();
     for (const tool of tools) {
