@@ -484,9 +484,10 @@ textarea.ui-input {
 
 .ui-check {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: var(--eyes-space-3);
+  column-gap: var(--eyes-space-3);
+  row-gap: var(--eyes-space-1);
   font-size: var(--eyes-text-sm);
 }
 
@@ -518,6 +519,15 @@ textarea.ui-input {
 .ui-check__detail {
   color: var(--eyes-text-secondary);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ui-check > .ui-check__detail {
+  grid-column: 2;
+}
+
+.ui-check > .ui-check__detail:empty {
+  display: none;
 }
 
 /* Place: the pin and the place name, the anchor of every task. */
