@@ -1098,7 +1098,14 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         const { status } = found.task;
         const answered = ANSWERED.includes(status);
         if (answered || FINAL.includes(status) || Date.now() >= until || signal?.aborted) {
-          return { task_id, status, answered, answer: answerOf(found), next_step: AWAIT_NEXT_STEP[status] };
+          return {
+            task_id,
+            status,
+            answered,
+            answer: answerOf(found),
+            accepted_at: found.task.accepted_at ? iso(found.task.accepted_at) : null,
+            next_step: AWAIT_NEXT_STEP[status],
+          };
         }
         await sleep(Math.min(POLL_MS, until - Date.now()), undefined, { signal }).catch(() => {});
       }
@@ -1120,6 +1127,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         created_at: iso(task.created_at),
         claimed_at: task.claimed_at && iso(task.claimed_at),
         answer: answerOf(found),
+        accepted_at: task.accepted_at ? iso(task.accepted_at) : null,
         dispute: await disputeOf(task),
       };
     },
@@ -1135,6 +1143,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         tasks: rows.map((t) => ({
           task_id: t.id,
           status: t.status,
+          accepted_at: t.accepted_at ? iso(t.accepted_at) : null,
           question: t.question,
           place_label: t.place_label,
           bounty_usd: centsToUsd(t.bounty_cents),
@@ -1158,6 +1167,16 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         p_now: nowIso(),
       });
       return { task_id, status: "refunded", refunded_usd: centsToUsd(task.bounty_cents + task.fee_cents) };
+    },
+
+    async acceptAnswer(agent, input) {
+      const { task_id } = parse(TOOLS.accept_answer.input, input);
+      const task = await one<{ accepted_at: string }>("eyes_accept_answer", {
+        p_agent_id: agent.id,
+        p_task_id: task_id,
+        p_now: nowIso(),
+      });
+      return { task_id, status: "accepted", accepted_at: iso(task.accepted_at) };
     },
 
     async disputeAnswer(agent, input) {
