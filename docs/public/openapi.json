@@ -245,10 +245,16 @@
                       "type": "object",
                       "properties": {
                         "lat": {
-                          "type": "number"
+                          "type": "number",
+                          "minimum": -90,
+                          "maximum": 90,
+                          "description": "Latitude in decimal degrees, e.g. 37.7825"
                         },
                         "lng": {
-                          "type": "number"
+                          "type": "number",
+                          "minimum": -180,
+                          "maximum": 180,
+                          "description": "Longitude in decimal degrees, e.g. -122.4078"
                         },
                         "label": {
                           "type": "string"
@@ -285,7 +291,7 @@
         "operationId": "ask_eyes",
         "tags": ["agent"],
         "summary": "Ask a human to check",
-        "description": "For REST and non-UI MCP dispatch, pay a nearby human to look at a public place and answer your question, usually with a live photo. bounty_usd (default 3) plus a 0.50 USD fee is escrowed on dispatch, paid to the worker only after a verified answer, and refunded in full if nobody answers before deadline_minutes or you cancel before a worker claims it. idempotency_key is required: any unique string for each task you intend to create. Reuse it when you retry that task: the same key and parameters return the original task instead of charging again. Only public, commercial or civic places. After dispatch, call await_answer with the returned task_id immediately. Interactive MCP instead prepares the read-only draft documented below; payment requires a later card confirmation. Same as non-UI MCP tool ask_eyes.",
+        "description": "For REST and non-UI MCP dispatch, pay a nearby human to look at a public place and answer your question, usually with a live photo. bounty_usd (default 3) plus a 0.50 USD fee is escrowed on dispatch, paid to the worker only after a verified answer, and refunded in full if nobody answers before deadline_minutes or you cancel before a worker claims it. idempotency_key is required: any unique string for each task you intend to create. Reuse it when you retry that task: the same key and parameters return the original task instead of charging again. Only public, commercial or civic places. resolved_location gives the stored task's label, latitude and longitude, including on retries. A place name can resolve to another city or country; Eyes does not reject a result for that mismatch. Check resolved_location before relying on the answer. Out-of-range coordinates are refused, including coordinate strings. NUL characters and lone Unicode surrogates are invalid input; remove them from the named field instead of retrying unchanged. REST returns 400 invalid_input with issues; MCP returns an input validation error with the field path. After dispatch, call await_answer with the returned task_id immediately. Interactive MCP instead prepares the read-only draft documented below; payment requires a later card confirmation. Same as non-UI MCP tool ask_eyes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -397,6 +403,28 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "resolved_location": {
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "type": "number",
+                          "minimum": -90,
+                          "maximum": 90,
+                          "description": "Latitude in decimal degrees, e.g. 37.7825"
+                        },
+                        "lng": {
+                          "type": "number",
+                          "minimum": -180,
+                          "maximum": 180,
+                          "description": "Longitude in decimal degrees, e.g. -122.4078"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["lat", "lng", "label"],
+                      "additionalProperties": false
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -431,6 +459,7 @@
                   },
                   "required": [
                     "task_id",
+                    "resolved_location",
                     "status",
                     "workers_notified",
                     "escrowed_usd",

@@ -172,6 +172,30 @@ exports[`tool schemas > match the committed snapshot 1`] = `
         "next_step": {
           "type": "string",
         },
+        "resolved_location": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "type": "string",
+            },
+            "lat": {
+              "maximum": 90,
+              "minimum": -90,
+              "type": "number",
+            },
+            "lng": {
+              "maximum": 180,
+              "minimum": -180,
+              "type": "number",
+            },
+          },
+          "required": [
+            "lat",
+            "lng",
+            "label",
+          ],
+          "type": "object",
+        },
         "status": {
           "enum": [
             "dispatched",
@@ -199,6 +223,7 @@ exports[`tool schemas > match the committed snapshot 1`] = `
       },
       "required": [
         "task_id",
+        "resolved_location",
         "status",
         "workers_notified",
         "escrowed_usd",
@@ -1134,9 +1159,13 @@ exports[`tool schemas > match the committed snapshot 1`] = `
               "type": "string",
             },
             "lat": {
+              "maximum": 90,
+              "minimum": -90,
               "type": "number",
             },
             "lng": {
+              "maximum": 180,
+              "minimum": -180,
               "type": "number",
             },
           },
