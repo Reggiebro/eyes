@@ -1247,14 +1247,18 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     },
 
     async listTasks(agent, input) {
-      const { status, limit } = parse(TOOLS.list_tasks.input, input);
+      const { status, limit, before } = parse(TOOLS.list_tasks.input, input);
       const rows = await rpc<Task>("eyes_list_tasks", {
         p_agent_id: agent.id,
         p_status: status ?? null,
-        p_limit: limit,
+        p_limit: limit + 1,
+        p_before: before ?? null,
       });
+      const page = rows.slice(0, limit);
+      const nextCursor = rows.length > limit ? (page.at(-1)?.id ?? null) : null;
       return {
-        tasks: rows.map((t) => ({
+        next_cursor: nextCursor,
+        tasks: page.map((t) => ({
           task_id: t.id,
           status: t.status,
           accepted_at: t.accepted_at ? iso(t.accepted_at) : null,
@@ -1265,11 +1269,15 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           deadline_at: iso(t.deadline_at),
           answered: ANSWERED.includes(t.status),
         })),
-        next_step: rows.length
-          ? "Resume instead of asking again: for a task with status dispatched, claimed or submitted, call await_answer with its task_id; for a task where answered is true, call get_task to read the answer and photo_url. Call ask_eyes only if no task here covers your question."
-          : status
-            ? `You have no tasks with status ${status}. Call list_tasks without status to see all your tasks.`
-            : "You have no tasks yet. Call quote_task, then ask_eyes to create one.",
+        next_step: nextCursor
+          ? "Resume a listed task with await_answer or get_task. More tasks exist: call list_tasks with next_cursor as before and the same status filter before asking again."
+          : before && !rows.length
+            ? "No older tasks match this cursor, or the cursor is unknown to this API key. Call list_tasks without before to start again."
+            : rows.length
+              ? "Resume instead of asking again: for a task with status dispatched, claimed or submitted, call await_answer with its task_id; for a task where answered is true, call get_task to read the answer and photo_url. Call ask_eyes only if no task here covers your question."
+              : status
+                ? `You have no tasks with status ${status}. Call list_tasks without status to see all your tasks.`
+                : "You have no tasks yet. Call quote_task, then ask_eyes to create one.",
       };
     },
 
