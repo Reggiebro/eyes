@@ -60,7 +60,6 @@ import { type Operator, opsAuth } from "./ops-auth.ts";
 import { opsHost, opsOriginFor } from "./ops-host.ts";
 import { opsLists } from "./ops-lists.ts";
 import { createOpsSettings, type OpsSettingsStore, opsSettingsRoutes } from "./ops-settings.ts";
-import { keylessAgents, SANDBOX, SANDBOX_NOTICE } from "./sandbox.ts";
 import {
   WIDGET_CALLABLE,
   WIDGET_HTML,
@@ -208,23 +207,22 @@ const layout = (
 
 type Live = ReturnType<typeof liveProviders>;
 
-const simulatedNotice = (live: Live, sandbox: boolean) => {
-  const fake = (Object.keys(SIMULATED) as (keyof typeof SIMULATED)[])
-    .filter((name) => !live[name] && !(sandbox && (name === "messaging" || name === "geo")))
+const simulatedNotice = (live: Live) => {
+  const lines = (Object.keys(SIMULATED) as (keyof typeof SIMULATED)[])
+    .filter((name) => !live[name])
     .map((name) => SIMULATED[name]);
-  const lines = sandbox ? [SANDBOX_NOTICE, ...fake] : fake;
   return lines.length
     ? html`<section class="box"><h2>This is a simulated deploy</h2><ul>${lines.map((line) => html`<li>${line}</li>`)}</ul></section>`
     : "";
 };
 
-const homePage = (joinUrl: string, live: Live, classifier: boolean, sandbox: boolean) =>
+const homePage = (joinUrl: string, live: Live, classifier: boolean) =>
   layout(
     "Eyes API",
     html`<p class="eyebrow">api.eyes.pictures</p>
 <h1>AI agents pay people nearby about $3 to check public places.</h1>
 <p>Is the cafe open? How long is the line? An AI agent asks, Eyes texts people close by, and the first to reply YES walks over, takes a photo and gets paid.</p>
-${simulatedNotice(live, sandbox)}
+${simulatedNotice(live)}
 <h2>For AI agents</h2>
 <p>Connect over MCP: <code>POST /mcp</code> with <code>Authorization: Bearer &lt;api_key&gt;</code>. No key yet? <code>POST /v1/signup</code>.</p>
 <ul class="docs">
@@ -258,14 +256,13 @@ const statusPage = (
   classifier: boolean,
   db: string,
   commit: string | undefined,
-  sandbox: boolean,
   emailNote: string | null,
 ) =>
   layout(
     "Eyes status",
     html`<h1>Service status</h1>
 <p>Eyes is up. A live part uses the real service. A simulated part is a test stand-in: nothing real is sent, charged or stored through it.</p>
-${simulatedNotice(live, sandbox)}
+${simulatedNotice(live)}
 <ul class="rows">
 ${Object.entries(PROVIDER_LINES).map(([name, [label, meaning]]) => {
   const on = live[name as keyof typeof live];
@@ -409,7 +406,6 @@ export function createServer(
 ) {
   const { service, config, env } = deps;
   const log = deps.events?.log ?? (() => {});
-  const sandbox = env.EYES_SANDBOX === "1";
   const publicBase = new URL(config.public_api_url).origin;
   const mcpUrl = new URL(env.EYES_PUBLIC_MCP_URL || `${publicBase}/mcp`);
   if (mcpUrl.pathname !== "/mcp" || mcpUrl.search || mcpUrl.hash || mcpUrl.username || mcpUrl.password)
@@ -420,12 +416,11 @@ export function createServer(
     c?.req && (c.req.header("x-forwarded-host") ?? new URL(c.req.url).host) === mcpUrl.host
       ? mcpUrl.origin
       : publicBase;
-  const note = (text: string) => (sandbox ? `${SANDBOX_NOTICE}\n${text}` : text);
   const server = new MCPServer<never, AppEnv>({
     name: "eyes",
     title: "Eyes",
     version: "0.1.0",
-    description: `${sandbox ? `${SANDBOX} ` : ""}Pay a nearby human a few dollars to check something in the physical world right now.`,
+    description: "Pay a nearby human a few dollars to check something in the physical world right now.",
     logging: { enabled: false },
   });
 
@@ -544,7 +539,6 @@ export function createServer(
     c.res = c.json(unknown.toBody(), 404);
   });
 
-  const keyless = sandbox ? keylessAgents(deps) : null;
   const oauthBox = env.EYES_OAUTH_SECRET ? sealer(env.EYES_OAUTH_SECRET) : null;
   const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (c.req.method === "POST" && (c.req.path === "/v1/signup" || c.req.path === "/v1/worker/location"))
@@ -557,9 +551,7 @@ export function createServer(
         ? null
         : key
           ? await service.authenticate(token?.k ?? key)
-          : keyless && header === undefined
-            ? await keyless(clientKey(c.req.header("x-forwarded-for")))
-            : null;
+          : null;
     if (!agent)
       return c.json(new EyesError("unauthorized").toBody(), 401, {
         "WWW-Authenticate": `Bearer resource_metadata="${mcpBase(c)}/.well-known/oauth-protected-resource"${header === undefined ? "" : ', error="invalid_token"'}`,
@@ -590,13 +582,12 @@ export function createServer(
     {
       name: "quote_task",
       title: "Quote a task",
-      description:
-        note(`Check whether Eyes can answer a question at a place before you spend anything. Free and read-only.
+      description: `Check whether Eyes can answer a question at a place before you spend anything. Free and read-only.
 Returns workers_nearby, est_minutes_to_answer, suggested_bounty_usd, allowed, reason_if_not and resolved_location (where Eyes thinks you mean).
 suggested_bounty_usd already fits this API key's max_bounty_usd, the daily cap left and your balance, so ask_eyes accepts it. allowed is false only when you cannot post this task right now: the safety rules refuse this task_type at this place, the task_type is not allowed for this key, or even the 1 USD minimum bounty plus the 0.50 USD fee does not fit your limits or balance; reason_if_not says what to do. quote_task never sees your question, so ask_eyes checks the question itself and can still refuse it with unsafe_task.
 location is the public place to check: {lat, lng} or a string such as "Blue Bottle Coffee, Mint Plaza, San Francisco", never your user's location. task_type is one of: is_open, line_length, in_stock, photo_of_place, price_check, crowd_level, other_public.
 Example: quote_task({ "location": "Ferry Building, San Francisco", "task_type": "line_length" })
-Next: in ChatGPT, Claude or MCP Apps, show the card and let the user review and confirm; neither quoting nor preparing a draft sends a task. Non-UI automation may call ask_eyes with the same location, task_type and suggested_bounty_usd. If resolved_location is not the place you meant, retry with a more specific string or {lat, lng}. If workers_nearby is 0, try a nearby busier place or later.`),
+Next: in ChatGPT, Claude or MCP Apps, show the card and let the user review and confirm; neither quoting nor preparing a draft sends a task. Non-UI automation may call ask_eyes with the same location, task_type and suggested_bounty_usd. If resolved_location is not the place you meant, retry with a more specific string or {lat, lng}. If workers_nearby is 0, try a nearby busier place or later.`,
       inputSchema: TOOLS.quote_task.input,
       outputSchema: TOOLS.quote_task.output,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
@@ -609,8 +600,7 @@ Next: in ChatGPT, Claude or MCP Apps, show the card and let the user review and 
     {
       name: "ask_eyes",
       title: "Ask a human to check",
-      description:
-        note(`Pay a nearby human to look at a public place right now and answer your question, usually with a live photo. Eyes texts nearby workers; the first to accept walks over and captures the answer on site. Eyes checks location (GPS within about 150 m), freshness (photo taken live before the deadline) and that the photo is safe to share; it does not judge whether the answer is correct. Look at the photo, and call dispute_answer if it is wrong.
+      description: `Pay a nearby human to look at a public place right now and answer your question, usually with a live photo. Eyes texts nearby workers; the first to accept walks over and captures the answer on site. Eyes checks location (GPS within about 150 m), freshness (photo taken live before the deadline) and that the photo is safe to share; it does not judge whether the answer is correct. Look at the photo, and call dispute_answer if it is wrong.
 Money: bounty_usd (default 3) plus a 0.50 USD fee is escrowed from your balance now. The worker is paid only after a verified answer. If nobody answers before deadline_minutes (default 30), or you cancel_task before a worker claims it, everything is refunded. Photo requests targeting identifiable people are refused before dispatch.
 Only public, commercial or civic places (stores, cafes, parks, transit stops, venues), never your user's location. Never specific private people, homes, vehicles or private property; those are refused with an unsafe_task error.
 idempotency_key is required: any unique string for each task you intend to create, for example a UUID. Reuse the same key when you retry that task: the same key and parameters return the original task instead of charging again, so retries after a timeout or network error are safe. Use a new key for a new question.
@@ -619,7 +609,7 @@ In ChatGPT, Claude and MCP Apps, this returns status "confirmation_required" and
 Errors include error, message and fix, or an "Input validation error" naming invalid fields. Use them to repair the original authorized request, not to change its goal, raise spending or bypass confirmation. After an unknown dispatch outcome, retry only the same parameters and idempotency_key.
 For non-UI automation, this dispatches directly. If no worker is nearby, nothing is created or charged: status "not_sent", reason "no_workers_nearby", charged_usd 0, message and fix, and no task_id.
 Successful dispatch includes resolved_location with the stored task's label, latitude and longitude. A string can resolve to another city or country; this does not block dispatch. Check that place before relying on the answer. Out-of-range coordinates, NUL characters and lone Unicode surrogates are invalid input; correct the named field instead of retrying unchanged.
-Next: if status is "dispatched", call await_answer with the returned task_id. For "confirmation_required", wait for the card confirmation. For "not_sent", show the explanation. A retry returns the stored task status and money held; follow next_step without creating another paid task.`),
+Next: if status is "dispatched", call await_answer with the returned task_id. For "confirmation_required", wait for the card confirmation. For "not_sent", show the explanation. A retry returns the stored task status and money held; follow next_step without creating another paid task.`,
       inputSchema: TOOLS.ask_eyes.input,
       outputSchema: AskEyesToolOutput,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -694,11 +684,7 @@ Next: if status is "dispatched", call await_answer with the returned task_id. Fo
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: { "openai/widgetAccessible": true },
     },
-    (input, ctx) =>
-      run(() => {
-        if (!ctx.req?.header("authorization")) throw new EyesError("unauthorized");
-        return service.getClassifierReport(ctx.get("agent"), input);
-      }),
+    (input, ctx) => run(() => service.getClassifierReport(ctx.get("agent"), input)),
   );
 
   server.tool(
@@ -822,10 +808,7 @@ Next: get_task shows accepted_at on reload. Accept only after your user says the
       },
       _meta: { "openai/widgetAccessible": true },
     },
-    (input, ctx) => {
-      if (!ctx.req?.header("authorization")) throw new EyesError("unauthorized");
-      return run(() => service.acceptAnswer(ctx.get("agent"), input));
-    },
+    (input, ctx) => run(() => service.acceptAnswer(ctx.get("agent"), input)),
   );
 
   server.tool(
@@ -911,9 +894,8 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
           ? {
               ...listed,
               title: "Prepare a task for confirmation",
-              description: note(
+              description:
                 "Prepare a read-only Eyes card with the question, place, price and intent key. No task, payment or worker notification occurs. The user must press Ask in the card to confirm; never dispatch a second task after that confirmation. Errors include error, message and fix, or an Input validation error naming invalid fields. Use them to repair the original authorized request, not to change its goal, raise spending or bypass confirmation. After an unknown dispatch outcome, retry only the same parameters and idempotency_key.",
-              ),
               inputSchema: draftInputSchema,
               outputSchema: draftOutputSchema,
               annotations: {
@@ -1008,13 +990,11 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     c.json(await service.askEyes(c.get("agent"), parse(AskEyesInput, await readJson(c)))),
   );
   server.post("/v1/classifier-reports", async (c) => {
-    if (!c.req.header("authorization")) throw new EyesError("unauthorized");
     const input = parse(TOOLS.report_classifier.input, await readJson(c));
     throttle(c, "/v1/classifier-reports", c.get("agent").id);
     return c.json(await service.reportClassifier(c.get("agent"), input));
   });
   server.get("/v1/classifier-reports/:ticket_id", async (c) => {
-    if (!c.req.header("authorization")) throw new EyesError("unauthorized");
     return c.json(
       await service.getClassifierReport(
         c.get("agent"),
@@ -1042,7 +1022,6 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     c.json(await service.cancelTask(c.get("agent"), parse(CancelTaskInput, c.req.param()))),
   );
   server.post("/v1/tasks/:task_id/accept", async (c) => {
-    if (!c.req.header("authorization")) throw new EyesError("unauthorized");
     return c.json(
       await service.acceptAnswer(c.get("agent"), parse(TOOLS.accept_answer.input, c.req.param())),
     );
@@ -1259,7 +1238,7 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
   const classifier = Boolean(
     (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) || env.ANTHROPIC_API_KEY,
   );
-  const home = homePage(config.worker_web_url, live, classifier, sandbox);
+  const home = homePage(config.worker_web_url, live, classifier);
   server.get("/", (c) => c.html(home, 200, { link: LINK, ...PAGE_HEADERS }));
   for (const [path, contentType] of Object.entries(DOCS)) {
     server.get(path, async (c) => {
@@ -1310,7 +1289,7 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     env.PRIMITIVE_SEND_ANY_DOMAIN === "1"
       ? null
       : `${live.messaging ? "first contact via Inkbox" : "replies only"} until Primitive enables any-domain sending`;
-  const status = statusPage(live, classifier, db, env.EYES_COMMIT, sandbox, emailNote);
+  const status = statusPage(live, classifier, db, env.EYES_COMMIT, emailNote);
   server.get("/status", (c) => c.html(status, 200, PAGE_HEADERS));
   // The Eyes viewfinder (apps/web/worker/public/favicon.svg); browsers asking for .ico get the SVG.
   server.get("/favicon.svg", (c) =>
