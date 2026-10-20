@@ -6,5 +6,3 @@ packages:
   - "!apps/mobile"
 allowBuilds:
   esbuild: true
-overrides:
-  "@mcp-use/cli>vite": 8.3.4
