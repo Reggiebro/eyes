@@ -39,8 +39,6 @@ export function createStripePayments(env: Env): Payments {
 
   return {
     async createTopupCheckout({ agent_id, amount_cents, success_url, cancel_url }) {
-      const done = new URL(success_url);
-      done.searchParams.set("amount_cents", String(amount_cents));
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
         line_items: [
@@ -57,7 +55,7 @@ export function createStripePayments(env: Env): Payments {
         client_reference_id: agent_id,
         metadata: { agent_id, topup_cents: String(amount_cents) },
         payment_intent_data: { metadata: { agent_id }, transfer_group: `topup_${agent_id}` },
-        success_url: done.href,
+        success_url,
         cancel_url,
       });
       if (!session.url) throw new Error(`Stripe returned Checkout Session ${session.id} without a url`);
@@ -390,12 +388,11 @@ export function stripeRoutes(deps: RouteDeps, _env: Env): Hono {
         ),
       );
     }
-    const cents = c.req.query("amount_cents") ?? "";
-    const added = /^\d{1,6}$/.test(cents)
-      ? `${usd(centsToUsd(Number(cents)))} added to your agent's balance.`
-      : "Your payment was added to your agent's balance.";
     return c.html(
-      page("Payment received", `${added} It can take a few seconds to show. You can close this page.`),
+      page(
+        "Payment received",
+        "Your payment was added to your agent's balance. It can take a few seconds to show. You can close this page.",
+      ),
     );
   });
   app.get("/topup/cancel", (c) =>
