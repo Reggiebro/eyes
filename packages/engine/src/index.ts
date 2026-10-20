@@ -18,7 +18,7 @@ import {
   OwnerPolicyInput,
   parseMapLink,
   type ReplyIntent,
-  type ResolvedLocation,
+  ResolvedLocation,
   type SafetyInput,
   SignupInput,
   type Submission,
@@ -262,6 +262,7 @@ const iso = (s: string) => new Date(s).toISOString();
 function askResult({ task, workers_notified, escrowed_cents }: Replay): ToolOutput<"ask_eyes"> {
   return {
     task_id: task.id,
+    resolved_location: { lat: task.lat, lng: task.lng, label: task.place_label },
     status: task.status,
     workers_notified,
     escrowed_usd: centsToUsd(escrowed_cents),
@@ -582,9 +583,10 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       typeof location === "string"
         ? await providers.geo.geocode(location)
         : { ...location, label: `${location.lat},${location.lng}` };
-    if (!place || (place.lat === 0 && place.lng === 0))
+    const resolved = ResolvedLocation.safeParse(place);
+    if (!resolved.success || (resolved.data.lat === 0 && resolved.data.lng === 0))
       throw new EyesError("location_not_found", { location });
-    return place;
+    return resolved.data;
   }
 
   async function assessTask(input: SafetyInput, location: LatLng | string) {
