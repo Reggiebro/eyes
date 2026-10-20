@@ -111,7 +111,6 @@ Live verification order once keys land: Inkbox (G1; set up in person at the even
 | Released claims: re-offer; orphaned photo on NO-vs-capture race | PR #61 | [#62](https://github.com/ayaangazali/eyes/issues/62) (fixed by #66) |
 | POST /w/join timing side channel | PR #70 | [#71](https://github.com/ayaangazali/eyes/issues/71) |
 | Money/dispatch failures only in console logs | coverage ledger | [#30](https://github.com/ayaangazali/eyes/issues/30) |
-| Expiry runs in-process only | coverage ledger | [#31](https://github.com/ayaangazali/eyes/issues/31) |
 | Dashboard loopback-only | coverage ledger | [#32](https://github.com/ayaangazali/eyes/issues/32) (shipped in #67; current dashboard at https://internal.eyes.pictures) |
 | No worker earnings page | coverage ledger | [#33](https://github.com/ayaangazali/eyes/issues/33) (fixed by #65; T4.17 shipped) |
 | Worker task report (SPEC §12 stretch) | coverage ledger | [#34](https://github.com/ayaangazali/eyes/issues/34) |

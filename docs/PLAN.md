@@ -30,7 +30,7 @@ Every PR: spec + test + intent verifiers, security on money/auth/webhooks/safety
 1. **Client visuals:** record a fresh in-chat ChatGPT/Claude visual result only after account quotas permit it; current API/card-protocol verification is not that result.
 2. **Marketplace:** retain draft status until the legal owner completes attestations and explicitly submits/publishes; keep test-payment limits visible.
 3. **Email:** preserve iMessage-only onboarding and first-contact Inkbox fallback; do not claim unrestricted Primitive delivery or resolved external-alias SPF.
-4. Deferred issues, by demo impact: #28 (link revocation), #29 (withdraw to card), #30 (per-task event trail), #31 (durable expiry), #34 (worker report), #38 (owner link address), #54 (masked owner email), #71.
+4. Deferred issues, by demo impact: #28 (link revocation), #29 (withdraw to card), #30 (per-task event trail), #34 (worker report), #38 (owner link address), #54 (masked owner email), #71.
 5. **Phase 4**: remaining SUBMISSION TODOs from STATUS, the 90 s video from docs/DEMO.md, backup video, final README pass.
 
 ## 4. Historical key-onboarding sequence
