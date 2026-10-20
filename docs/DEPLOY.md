@@ -127,6 +127,8 @@ While both run, the container's expiry/payout loop also runs; that is safe (expi
 Uptime alerts run from a separate Worker, `eyes-monitor` (`apps/edge/monitor`), so they still fire when the API server moves or dies.
 
 1. Every minute it checks `https://api.eyes.pictures/healthz`. Healthy = HTTP 200, `ok` true, every provider `live`, `db` `insforge`.
+   HTTP 503 with `{"ok":false}` means the database read failed or exceeded two seconds.
+   Concurrent probes share one unfinished read to avoid filling the database connection pool.
 2. Two failed checks in a row send "Eyes API is down: <reason>". The next healthy check sends "Eyes API is back up (down N min)".
 3. Channel: Inkbox iMessage to `ALERT_PHONE`. `ALERT_PHONE`, `INKBOX_API_KEY` and `INKBOX_AGENT_HANDLE` are Worker secrets, set with `printf %s '<number>' | npx -y wrangler@4 secret put <NAME>` in `apps/edge/monitor`, and never written to files.
 4. Deploy: `cd apps/edge/monitor && CLOUDFLARE_ACCOUNT_ID=2c040ec5bc2efe34e60ab5b1b4fd2e99 npx -y wrangler@4 deploy`. The output must show `schedule: * * * * *`.

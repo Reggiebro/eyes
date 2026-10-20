@@ -1243,7 +1243,27 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
   const providers = Object.fromEntries(
     Object.entries(live).map(([name, on]) => [name, on ? "live" : "fake"]),
   );
-  server.get("/healthz", (c) => c.json({ ok: true, providers, db }));
+  let healthRead: Promise<Agent | null> | undefined;
+  server.get("/healthz", async (c) => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      // Share an unfinished read so repeated probes cannot fill the database connection pool.
+      healthRead ??= service.authenticate("eyes-health-check").finally(() => {
+        healthRead = undefined;
+      });
+      await Promise.race([
+        healthRead,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Health check timed out")), 2000);
+        }),
+      ]);
+      return c.json({ ok: true, providers, db });
+    } catch {
+      return c.json({ ok: false }, 503);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
   // Primitive gates outbound mail per org: until it grants send_to_any_domain, first contact (owner links,
   // sign-in codes, worker email) goes out through Inkbox when it is configured, or not at all.
   const emailNote =

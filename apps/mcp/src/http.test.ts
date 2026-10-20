@@ -63,7 +63,7 @@ async function listenOnSecret(seen: Request[], secret: string | undefined) {
 
 function start(service: Partial<EyesService>, seen: Request[] = []) {
   const server = createServer({
-    service: service as EyesService,
+    service: { authenticate: async () => null, ...service } as EyesService,
     providers: fakeProviders(),
     config,
     env: {},
