@@ -926,6 +926,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         },
         location,
       );
+      if (verdict.unavailable) throw new EyesError("service_unavailable");
       const workers = await nearby(place, null);
       const nearest = workers[0];
       const s = await one<Summary>("eyes_agent_summary", { p_agent_id: agent.id, p_now: nowIso() });
@@ -1083,6 +1084,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           (!verdict.category || verdict.category === "other")
         )
           throw resolutionError;
+        if (verdict.unavailable) throw new EyesError("service_unavailable");
         if (!verdict.allowed && !(approved && verdict.layer === "classifier")) {
           throw new EyesError(
             "unsafe_task",
