@@ -61,7 +61,9 @@ export function fullScope(reason: string): Scope {
 }
 
 export function scope(changed: string[]): Scope {
-  const files = [...new Set(changed.map((file) => file.trim()).filter(Boolean))].sort();
+  const files = [...new Set(changed.map((file) => file.trim()).filter(Boolean))]
+    .filter((file) => file !== "CHANGELOG.md" && file !== ".release-please-manifest.json")
+    .sort();
   const shared = files.find((file) => anyMatch(file, FULL_RUN_GLOBS));
   if (shared) return fullScope(`shared file changed: ${shared}`);
   const sources = files.filter(
