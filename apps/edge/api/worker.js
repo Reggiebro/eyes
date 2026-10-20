@@ -170,6 +170,10 @@ async function fromOrigin(response, url, origin) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.protocol === "http:") {
+      url.protocol = "https:";
+      return Response.redirect(url.href, 308);
+    }
     const headers = new Headers(request.headers);
     headers.delete("host");
     headers.set("x-forwarded-host", url.host);
@@ -183,9 +187,20 @@ export default {
     headers.set("x-eyes-host", url.host);
     headers.set("x-eyes-edge-secret", env.EDGE_SECRET ?? "");
     const init = { method: request.method, headers, body: request.body, redirect: "manual" };
-    if (env.ORIGIN)
-      return fromOrigin(await fetch(new URL(url.pathname + url.search, env.ORIGIN), init), url, env.ORIGIN);
-    return server(env).fetch(new Request(`http://eyes${url.pathname}${url.search}`, init));
+    const upstream = env.ORIGIN
+      ? await fromOrigin(await fetch(new URL(url.pathname + url.search, env.ORIGIN), init), url, env.ORIGIN)
+      : await server(env).fetch(new Request(`http://eyes${url.pathname}${url.search}`, init));
+    const response = new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: upstream.headers,
+      encodeBody: "manual",
+    });
+    response.headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+    response.headers.set("x-content-type-options", "nosniff");
+    response.headers.set("x-frame-options", "DENY");
+    response.headers.set("permissions-policy", "camera=(self), geolocation=(self), microphone=()");
+    return response;
   },
 
   async scheduled(_event, env) {

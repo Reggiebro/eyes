@@ -1,2 +1,8 @@
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(self), geolocation=(self), microphone=()
+
 /.well-known/openai-apps-challenge
   Content-Type: text/plain; charset=utf-8

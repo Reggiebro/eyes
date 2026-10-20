@@ -3,7 +3,7 @@ task: S1
 title: Safe retries of a paid ask
 status: done
 files:
-  - packages/db/migrations/039_task_by_key.sql
+  - packages/db/migrations/040_task_by_key.sql
   - packages/engine/src/index.ts
   - packages/engine/src/engine.int.test.ts
   - packages/engine/src/engine.adversarial.int.test.ts

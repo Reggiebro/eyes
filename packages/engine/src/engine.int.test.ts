@@ -800,7 +800,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
       });
       await service.workerConnectUrl(connectToken(w.phone));
       expect(await service.workerSetup(token)).toMatchObject({
-        payouts: { set_up: true, live: true, setup_url: null },
+        payouts: { set_up: true, live: true, setup_url: expect.stringContaining("/w/connect/") },
       });
       expect((await list()).tasks).toEqual(rows("pending"));
 
@@ -1729,9 +1729,26 @@ describe.skipIf(!url)("engine on Postgres", () => {
     });
 
     await service.workerConnectUrl(connect);
+    const setupToken = await helpEarnings(w.phone);
+    for (const intent of ["start", "help"] as const) {
+      await service.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
+      expect(String(outbox.findLast((m) => m.to === w.phone && m.kind === "text")?.payload)).toContain(
+        "/w/connect/",
+      );
+    }
+    const setup = await service.workerSetup(setupToken);
+    expect(setup.payouts.setup_url).toMatch(/^https:\/\/api\.eyes\.test\/w\/connect\//);
+    await expect(
+      service.workerConnectUrl(new URL(setup.payouts.setup_url ?? "").pathname.split("/").at(-1) ?? ""),
+    ).resolves.toContain(`acct_fake_${w.worker_id}`);
     await service.markWorkerOnboarded(`acct_fake_${w.worker_id}`);
     const paid = outbox.findLast((m) => m.to === w.phone && m.kind === "paid");
     expect(paid?.payload).toMatchObject({ task_id: first, amount_cents: 300 });
+    expect((await service.workerSetup(setupToken)).payouts.setup_url).toBeNull();
+    await service.handleWorkerReply({ phone: w.phone, intent: "start", text: "START" });
+    expect(String(outbox.findLast((m) => m.to === w.phone && m.kind === "text")?.payload)).not.toContain(
+      "/w/connect/",
+    );
 
     const payoutWorker = providers.payments.payoutWorker;
     providers.payments.payoutWorker = async () => {

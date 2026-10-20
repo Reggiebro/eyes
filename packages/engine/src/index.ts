@@ -382,7 +382,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     }
     if (config.live_payouts) {
       const e = await maybe<EarningsRow>("eyes_worker_earnings", { p_worker_id: worker.id });
-      if (!e?.payouts_set_up) steps.push(`Set up payouts: ${connectUrl(worker.id)}`);
+      if (!e?.payouts_set_up || e.pending_cents > 0) steps.push(`Set up payouts: ${connectUrl(worker.id)}`);
     }
     return [
       `${steps.length ? "You're in." : "You're all set."} Eyes texts you paid photo tasks near you.`,
@@ -522,7 +522,8 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       payouts: {
         set_up: e.payouts_set_up,
         live: config.live_payouts,
-        setup_url: config.live_payouts && !e.payouts_set_up ? connectUrl(w.id) : null,
+        setup_url:
+          config.live_payouts && (!e.payouts_set_up || e.pending_cents > 0) ? connectUrl(w.id) : null,
       },
       here_url: hereUrl(w.id),
       email_masked: w.email ? maskEmail(w.email) : null,
