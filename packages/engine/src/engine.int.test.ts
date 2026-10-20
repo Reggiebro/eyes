@@ -2238,6 +2238,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
     it("confirm fraud refunds bounty + fee, reverses the transfer once, bans the worker; a double click moves nothing", async () => {
       const { a, w, task_id, at } = await paidTask();
+      const other = await worker(somewhere(), false);
+      const devices = [
+        { udid: "00000000-0000000000000001", worker_id: w.worker_id },
+        { udid: "00000000-0000000000000002", worker_id: w.worker_id },
+        { udid: "00000000-0000000000000003", worker_id: other.worker_id },
+      ];
+      await sql`insert into worker_devices ${sql(devices)}`;
       await service.disputeAnswer(a, { task_id, reason: "Fake: the cafe was closed." });
       const before = await balance(a);
       const ticket_id = await disputeTicket(task_id);
@@ -2276,6 +2283,10 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect(await sql`select 1 from worker_location_tokens where worker_id = ${w.worker_id}`).toHaveLength(
         0,
       );
+      expect(
+        await sql`select udid, worker_id from worker_devices
+          where worker_id in (${w.worker_id}, ${other.worker_id})`,
+      ).toEqual([devices[2]]);
       await service.handleWorkerReply({ phone: w.phone, intent: "start", text: "START" });
       expect(outbox.findLast((m) => m.to === w.phone)?.payload).toBe("This number can't take Eyes tasks.");
       expect((await sql`select opted_in from workers where id = ${w.worker_id}`)[0]?.opted_in).toBe(false);
