@@ -109,7 +109,7 @@ const TOOL_DOCS: Record<ToolName, { title: string; summary: string; tags: string
   list_tasks: {
     title: "List your tasks",
     summary:
-      "Instant, read-only list of the tasks this API key created, newest first: task_id, status, question, place_label, bounty_usd, created_at, deadline_at and answered. Call it when you lost a task_id (context reset, crash) and before asking a question again, so you resume an open task instead of paying twice. status filters to one status; limit is 1 to 50 (default 20). Next: await_answer any task still dispatched, claimed or submitted; get_task any task where answered is true.",
+      "Instant, read-only list of the tasks this API key created, newest first: task_id, status, question, place_label, bounty_usd, created_at, deadline_at and answered. Call it when you lost a task_id (context reset, crash) and before asking a question again, so you resume an open task instead of paying twice. status filters to one status; limit is 1 to 50 (default 20). Pass next_cursor as before for older tasks with the same status filter; null means no more tasks. Cursors refer to a task owned by this API key; an unknown cursor returns an empty page. Next: await_answer any task still dispatched, claimed or submitted; get_task any task where answered is true.",
     tags: ["status", "recovery"],
     example: { status: "dispatched", limit: 5 },
   },

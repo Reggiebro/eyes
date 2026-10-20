@@ -402,6 +402,9 @@ export const ListTasksInput = z.object({
     'Only return tasks in this status, e.g. "dispatched" for tasks no worker has claimed yet. Omit for every status.',
   ),
   limit: z.int().min(1).max(50).default(20).describe("How many tasks to return, newest first. 1 to 50."),
+  before: Id.optional().describe(
+    "Cursor from next_cursor for the next page. Keep the same status filter. Omit for the newest tasks.",
+  ),
 });
 export const ListTasksOutput = z.object({
   tasks: z
@@ -421,6 +424,7 @@ export const ListTasksOutput = z.object({
       }),
     )
     .max(50),
+  next_cursor: Id.nullable().describe("Pass as before for older tasks; null means no more tasks."),
   next_step: z.string(),
 });
 
