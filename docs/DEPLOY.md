@@ -94,7 +94,7 @@ For this section, `<public>` remains `https://api.eyes.pictures`; the MCP-domain
 3. Agent: connect to `https://mcp.eyes.pictures/mcp` with an existing key or the web OAuth flow; signup and all REST calls remain under `https://api.eyes.pictures`.
 4. Ask about the demo cafe; a nearby phone gets the offer text, replies YES, gets the capture link, takes the photo; Claude's `await_answer` returns the verified answer with `photo_url`.
 5. G2: the Stripe dashboard shows the top-up, then the transfer to the worker's connected account; `get_balance` drops by 3.50; "Photograph the house at 123 Oak St" is refused with `unsafe_task`.
-6. Record each result in STATUS.md "Live verification" with the time and what was seen.
+6. Record each result in docs/archive/hackathon/STATUS.md "Live verification" with the time and what was seen.
 
 ## Ad hoc releases (iPhone app)
 

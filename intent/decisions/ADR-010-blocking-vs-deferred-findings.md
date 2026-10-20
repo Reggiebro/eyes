@@ -15,7 +15,7 @@ Blocking (must be fixed before merge), whatever severity a verifier assigns:
 
 Non-blocking (merge, then a follow-up PR): defense-in-depth edges such as log formatting, performance on authenticated input, and hardening of already-guarded paths.
 
-For every deferred finding, right away: open a follow-up PR or GitHub issue, list it in STATUS.md under "Deferred", and add it to the task's intent file under Known gaps. All deferred items are triaged at feature freeze (6:00 AM Sunday).
+For every deferred finding, right away: open a follow-up PR or GitHub issue, list it in docs/archive/hackathon/STATUS.md under "Deferred", and add it to the task's intent file under Known gaps. All deferred items are triaged at feature freeze (6:00 AM Sunday).
 
 ## Consequences
 Verifier prompts classify each finding as blocking or deferrable under this rule. The orchestrator records the classification in intent/verdicts/.

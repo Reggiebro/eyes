@@ -5,9 +5,9 @@ files:
   - apps/edge/monitor/worker.test.ts
   - apps/edge/monitor/worker.int.test.ts
   - docs/DEPLOY.md
-  - docs/PLAN.md
-  - STATUS.md
-  - docs/SUBMISSION.md
+  - docs/archive/hackathon/PLAN.md
+  - docs/archive/hackathon/STATUS.md
+  - docs/archive/hackathon/SUBMISSION.md
 ---
 
 # Refunds during API outages

@@ -1,6 +1,6 @@
 # Submission draft
 
-Draft text for the hackathon submission form. Lines marked **TODO** need facts that only exist once the vendor keys land and the live demo has run; fill them from [STATUS.md](../STATUS.md) "Live verification" and never ahead of it. Anything not live-verified there must say "on fakes in CI".
+Draft text for the hackathon submission form. Lines marked **TODO** need facts that only exist once the vendor keys land and the live demo has run; fill them from [STATUS.md](STATUS.md) "Live verification" and never ahead of it. Anything not live-verified there must say "on fakes in CI".
 
 Current publication status: Marketplace 1.0.3 is a configured draft with preflight complete, **not submitted or published**. Legal owner attestations and test-mode limits remain. ChatGPT and Claude are configured at the dedicated MCP host; follow-up visual checks on the operator's test accounts were quota-blocked on 2026-10-18, not a general client limitation.
 
