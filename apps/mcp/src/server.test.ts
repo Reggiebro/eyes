@@ -2940,4 +2940,19 @@ describe("await_answer progress and startup checks", () => {
       "EYES_OAUTH_SECRET must be at least 32 characters.",
     );
   });
+
+  it("refuses OAuth startup without persistent redemption storage", () => {
+    expect(() =>
+      createServer({
+        service: {} as EyesService,
+        providers: fakeProviders(),
+        config: AppConfig.parse({
+          public_api_url: "http://api.eyes.test",
+          worker_web_url: "http://worker.eyes.test",
+          link_secret: SECRET,
+        }),
+        env: { EYES_OAUTH_SECRET: "s".repeat(64) },
+      }),
+    ).toThrow("OAuth requires a database RPC connection.");
+  });
 });

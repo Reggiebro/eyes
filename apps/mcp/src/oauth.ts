@@ -1,11 +1,7 @@
-// OAuth 2.1 for ChatGPT and claude.ai connectors, in front of the existing API keys. Stateless: the
-// DCR client_id and the authorization code are AES-GCM sealed blobs, so nothing is stored. The
-// login page takes an existing Eyes key or creates one through the signup service, and the token
-// endpoint hands that key back as the access token, so the /mcp bearer check stays unchanged.
-// ponytail: the access token is the API key (no expiry, no refresh, revoke = rotate the key); an
-// authorization code can be redeemed again within its 5 minutes by the same client with the same
-// PKCE verifier. Short-lived tokens plus refresh need storage; add them if a host demands expiry.
+// Store only redeemed code hashes.
+// ponytail: API-key tokens have no expiry or refresh; revoke by rotating the key. Add expiry if a host requires it.
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { Rpc } from "@eyes/db";
 import type { Context, Env, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { html, raw } from "hono/html";
@@ -39,6 +35,7 @@ export interface OAuthDeps {
   base: string | ((c: Context) => string);
   /** EYES_OAUTH_SECRET, at least 32 characters. */
   secret: string;
+  rpc: Rpc;
   /** True when the key belongs to an agent. */
   validKey: (key: string) => Promise<boolean>;
   /** Creates an agent through the signup service (rate limit included). */
@@ -323,6 +320,11 @@ ${hidden}<input type="hidden" name="action" value="create">
       !same(b64url(createHash("sha256").update(verifier).digest()), code.ch)
     )
       return fail("invalid_grant", "code_verifier does not match the code_challenge.");
+    const hash = createHash("sha256")
+      .update(Buffer.from(form.code as string, "base64url"))
+      .digest("hex");
+    if (!(await deps.rpc("eyes_redeem_oauth_code", { p_code_hash: hash })).length)
+      return fail("invalid_grant", "The code has already been redeemed.");
     return c.json({ access_token: code.k, token_type: "Bearer" }, 200, {
       "Cache-Control": "no-store",
       Pragma: "no-cache",

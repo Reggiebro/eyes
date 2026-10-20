@@ -949,9 +949,11 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
   if (env.EYES_OAUTH_SECRET) {
     if (env.EYES_OAUTH_SECRET.length < 32)
       throw new Error("EYES_OAUTH_SECRET must be at least 32 characters.");
+    if (!deps.rpc) throw new Error("OAuth requires a database RPC connection.");
     oauthRoutes(server.app, {
       base: mcpBase,
       secret: env.EYES_OAUTH_SECRET,
+      rpc: deps.rpc,
       validKey: async (key) => (await service.authenticate(key)) !== null,
       signup: async (c, name) => {
         throttle(c, "/v1/signup");
