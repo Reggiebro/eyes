@@ -1968,6 +1968,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ["uncertain content", true, 0.1, false],
     ["graphic gore", false, 0.95, false],
     ["explicit sexual content", false, 0.95, false],
+    ["Safety check unavailable; the photo needs manual review.", false, 0.95, false],
     ["provider unavailable", false, 0, true],
   ])("moderates %s without deleting photos or paying twice", async (reason, allowed, confidence, fails) => {
     const verify = vi.spyOn(deps, "verifySubmission").mockImplementation(verifySubmission);
@@ -1996,6 +1997,23 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect(released).toHaveLength(allowed ? 1 : 0);
       const paid = providers.payments.transfers.filter((p) => p.task_id === task_id);
       expect(paid).toHaveLength(allowed ? 1 : 0);
+      if (!allowed) {
+        expect(await service.resolveTask(task_id, "release", "Manual photo review")).toMatchObject({
+          status: "paid",
+        });
+        await expect(service.resolveTask(task_id, "release", "Repeated release")).rejects.toMatchObject({
+          code: "invalid_input",
+        });
+        await service.retryPayouts();
+        const delivered = (await service.awaitAnswer(a, { task_id, timeout_seconds: 1 })).answer;
+        expect(delivered?.photo_url).toBe(fails ? `https://storage.fake.test/photos/${key}` : null);
+        expect((await service.getTask(a, { task_id })).answer?.photo_url).toBe(delivered?.photo_url);
+        expect(delivered?.verification.vision_ok).toBe(false);
+        expect(await sql`select id from ledger where task_id = ${task_id} and type = 'release'`).toHaveLength(
+          1,
+        );
+        expect(providers.payments.transfers.filter((p) => p.task_id === task_id)).toHaveLength(1);
+      }
     } finally {
       verify.mockRestore();
       judge.mockRestore();
