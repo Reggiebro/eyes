@@ -34,6 +34,7 @@ export default defineConfig({
         "**/node_modules/**",
         "**/.wrangler/**",
         "**/.astro/**",
+        "**/.mcp-use/**",
         "**/*.gen.js",
         "scripts/**",
         // Widget dev harness: a browser preview page and a Playwright screenshot script.
