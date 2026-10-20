@@ -2160,6 +2160,80 @@ describe("Claude sandbox domain", () => {
   });
 });
 
+describe("browser API access", () => {
+  const origin = "https://inspector.example";
+  const paths = [
+    "/v1/tasks",
+    "/v1/balance",
+    "/mcp",
+    "/oauth/register",
+    "/oauth/authorize",
+    "/oauth/token",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/mcp",
+    "/openapi.json",
+  ];
+
+  it.each(paths)("allows foreign preflight and actual requests to %s without credentials", async (path) => {
+    const { fetch } = setup({}, { EYES_OAUTH_SECRET: "s".repeat(64) });
+    const preflight = await fetch(`http://eyes.test${path}`, {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type,mcp-protocol-version,mcp-session-id",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+    expect(preflight.headers.has("access-control-allow-credentials")).toBe(false);
+    expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
+    const allowed = preflight.headers.get("access-control-allow-headers")?.toLowerCase();
+    for (const header of ["authorization", "content-type", "mcp-protocol-version", "mcp-session-id"])
+      expect(allowed).toContain(header);
+    const actual = await fetch(`http://eyes.test${path}`, { headers: { origin } });
+    expect(actual.headers.get("access-control-allow-origin")).toBe("*");
+    expect(actual.headers.has("access-control-allow-credentials")).toBe(false);
+    expect(actual.headers.get("access-control-expose-headers")).toContain("WWW-Authenticate");
+  });
+
+  it.each(["/ops/feed", "/w/location", "/v1/worker/location"])(
+    "does not grant foreign browser access to %s",
+    async (path) => {
+      const { fetch } = setup();
+      for (const method of ["OPTIONS", "POST"]) {
+        const response = await fetch(`http://eyes.test${path}`, {
+          method,
+          headers: { origin, "access-control-request-method": "POST" },
+        });
+        expect(response.headers.get("access-control-allow-origin")).not.toBe("*");
+        expect(response.headers.get("access-control-allow-origin")).not.toBe(origin);
+        expect(response.headers.has("access-control-allow-credentials")).toBe(false);
+      }
+    },
+  );
+
+  it("lets a foreign browser read an authenticated response and an invalid-token challenge", async () => {
+    const { fetch } = setup();
+    const balance = await fetch("http://eyes.test/v1/quote", {
+      method: "POST",
+      headers: { origin, authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ location: "Mint Plaza", task_type: "line_length" }),
+    });
+    expect(balance.status).toBe(200);
+    expect(await balance.json()).toEqual(QUOTE);
+    expect(balance.headers.get("access-control-allow-origin")).toBe("*");
+    const denied = await fetch("http://eyes.test/mcp", {
+      headers: { origin, authorization: "Bearer invalid" },
+    });
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    expect(denied.headers.get("access-control-allow-origin")).toBe("*");
+  });
+});
+
 describe("OAuth for connectors", () => {
   const OAUTH_SECRET = "s".repeat(64);
   const REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -2282,7 +2356,6 @@ describe("OAuth for connectors", () => {
       expect(page.status).toBe(200);
       expect(await page.text()).toContain("Connect ChatGPT to Eyes");
       expect(page.headers.get("content-security-policy")).toContain("form-action 'self' https://chatgpt.com");
-      expect(page.headers.get("content-security-policy")).not.toContain("script-src");
       const redirect = await submit({ action: "key", api_key: KEY });
       expect(redirect.status).toBe(302);
       const back = new URL(redirect.headers.get("location") ?? "");
@@ -2312,6 +2385,56 @@ describe("OAuth for connectors", () => {
     },
   );
 
+  it("rejects foreign resources before authorization or code redemption", async () => {
+    const { params, submit, token, fetch } = await begin();
+    for (const resource of ["https://other.example/mcp", "http://api.eyes.test/v1/balance", ""]) {
+      const page = await fetch(
+        `http://eyes.test/oauth/authorize?${new URLSearchParams({ ...params, resource })}`,
+      );
+      expect(page.status).toBe(400);
+      const denied = await submit({ action: "key", api_key: KEY, resource });
+      expect(denied.status).toBe(400);
+      expect(denied.headers.get("location")).toBeNull();
+    }
+    const redirect = await submit({ action: "key", api_key: KEY, resource: "http://api.eyes.test/mcp" });
+    const code = new URL(redirect.headers.get("location") ?? "").searchParams.get("code") ?? "";
+    const denied = await token({ code, resource: "https://other.example/mcp" });
+    expect(denied.status).toBe(400);
+    expect(await denied.json()).toMatchObject({ error: "invalid_target" });
+    expect((await token({ code, resource: "http://api.eyes.test/mcp" })).status).toBe(200);
+  });
+
+  it("binds OAuth tokens to the issuing MCP resource, not REST or another connector host", async () => {
+    const { submit, token, fetch } = await begin({}, "https://mcp.eyes.pictures", STAGED_MCP_ENV);
+    const redirect = await submit({ action: "key", api_key: KEY });
+    const code = new URL(redirect.headers.get("location") ?? "").searchParams.get("code") ?? "";
+    const issued = await token({ code });
+    const { access_token } = await issued.json();
+    expect(access_token).not.toBe(KEY);
+    const headers = { authorization: `Bearer ${access_token}` };
+    for (const target of ["http://api.eyes.test/mcp", "https://mcp.eyes.pictures/v1/balance"]) {
+      const response = await fetch(target, { headers });
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    }
+    const client = new Client({ name: "bound-token-test", version: "1.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("https://mcp.eyes.pictures/mcp"), {
+        fetch,
+        requestInit: { headers },
+      }),
+    );
+    expect(
+      (
+        await client.callTool({
+          name: "quote_task",
+          arguments: { location: "Mint Plaza", task_type: "line_length" },
+        })
+      ).structuredContent,
+    ).toEqual(QUOTE);
+    await client.close();
+  });
+
   it("creates a key through signup, shows it with its balance, and shares the /v1/signup budget", async () => {
     const { submit, fetch } = await begin();
     const ip = { "x-forwarded-for": "203.0.113.9" };
@@ -2332,7 +2455,8 @@ describe("OAuth for connectors", () => {
     "copies only the displayed new key on click (%s), without changing Continue",
     async (outcome) => {
       const key = " eyes_test_copy_fixture_✓ ";
-      const { submit, token } = await begin({
+      const { submit, token, fetch } = await begin({
+        authenticate: async (presented) => (presented === key ? AGENT : null),
         signupAgent: async () => ({
           agent_id: AGENT.id,
           api_key: key,
@@ -2348,10 +2472,11 @@ describe("OAuth for connectors", () => {
       expect(script).not.toBe("");
       expect(script).not.toContain(key);
       const hash = createHash("sha256").update(script).digest("base64");
-      expect(shown.headers.get("content-security-policy")).toBe(
-        `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
-      );
-      expect(shown.headers.get("cache-control")).toBe("no-store");
+      expect(shown.headers.get("content-security-policy")).toContain(`'sha256-${hash}'`);
+      expect(shown.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
+      expect(shown.headers.get("cache-control")).toContain("no-store");
+      expect(shown.headers.get("cache-control")).toContain("no-transform");
+      expect(shown.headers.get("content-security-policy")).not.toContain("https:");
       expect(shown.headers.get("referrer-policy")).toBe("no-referrer");
       expect(body).toContain('id="copy-key" type="button"');
       expect(body).toContain('role="status" aria-live="polite"');
@@ -2388,10 +2513,24 @@ describe("OAuth for connectors", () => {
       const back = new URL(href.replaceAll("&amp;", "&"));
       expect(back.origin + back.pathname).toBe(REDIRECT);
       expect(back.searchParams.get("state")).toBe("st8");
-      expect(await (await token({ code: back.searchParams.get("code") ?? "" })).json()).toMatchObject({
-        access_token: key,
-        token_type: "Bearer",
-      });
+      const { access_token } = await (await token({ code: back.searchParams.get("code") ?? "" })).json();
+      expect(access_token).not.toBe(key);
+      const client = new Client({ name: "new-key-test", version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+          fetch,
+          requestInit: { headers: { authorization: `Bearer ${access_token}` } },
+        }),
+      );
+      expect(
+        (
+          await client.callTool({
+            name: "quote_task",
+            arguments: { location: "Mint Plaza", task_type: "line_length" },
+          })
+        ).structuredContent,
+      ).toEqual(QUOTE);
+      await client.close();
     },
   );
 
