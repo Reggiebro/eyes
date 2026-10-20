@@ -216,6 +216,13 @@ describe("checklist", () => {
     });
   });
 
+  it("keeps payout recovery available when an account exists but earnings remain unpaid", () => {
+    expect(row({ payouts: { set_up: true, live: true, setup_url: CONNECT } }, "payouts")).toMatchObject({
+      state: "todo",
+      action: { href: CONNECT },
+    });
+  });
+
   it("shows simulated payouts as neutral, with nothing to do, on a test server", () => {
     expect(row({ payouts: { set_up: false, live: false, setup_url: null } }, "payouts")).toEqual({
       id: "payouts",
