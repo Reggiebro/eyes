@@ -218,7 +218,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       layout(
         "Connect Eyes",
         html`<h1>Connect ${name} to Eyes</h1>
-<p class="muted">${name} will ask nearby people to check places for you, paid from this key's balance. You can change limits or revoke the key at any time.</p>
+<p class="muted">${name} will ask nearby people to check places for you, paid from this key's balance.</p>
 ${error ? html`<p class="note error" role="alert">${error}</p>` : ""}
 <form method="post" action="/oauth/authorize" class="box">
 <h2>Use your Eyes API key</h2>
