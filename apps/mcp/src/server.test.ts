@@ -194,6 +194,81 @@ function setup(overrides: Partial<EyesService> = {}, env: Record<string, string>
   return { server, fetch, captures, awaitSignals, rpcCalls, clock: providers.clock };
 }
 
+describe("/healthz database readiness", () => {
+  it("keeps the healthy response when the database lookup finds no agent", async () => {
+    const authenticate = vi.fn(async () => null);
+    const response = await setup({ authenticate }).fetch("http://eyes.test/healthz");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      providers: {
+        messaging: "fake",
+        email: "fake",
+        payments: "fake",
+        storage: "fake",
+        vision: "fake",
+        geo: "fake",
+      },
+      db: "insforge",
+    });
+    expect(authenticate).toHaveBeenCalledOnce();
+  });
+
+  it("returns 503 without database error details", async () => {
+    const authenticate = async () => {
+      throw new Error("connect ECONNREFUSED postgres://admin:secret@db.internal");
+    };
+    const response = await setup({ authenticate }).fetch("http://eyes.test/healthz");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ ok: false });
+  });
+
+  it("returns 503 after two seconds even if the database never responds", async () => {
+    vi.useFakeTimers();
+    try {
+      const authenticate = () => new Promise<null>(() => {});
+      const pending = setup({ authenticate }).fetch("http://eyes.test/healthz");
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ ok: false });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("shares a blocked read and starts a fresh read after recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      let unblock!: (value: null) => void;
+      const blocked = new Promise<null>((resolve) => {
+        unblock = resolve;
+      });
+      const authenticate = vi.fn().mockReturnValueOnce(blocked).mockResolvedValue(null);
+      const { fetch } = setup({ authenticate });
+      const first = fetch("http://eyes.test/healthz");
+      const second = fetch("http://eyes.test/healthz");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect((await first).status).toBe(503);
+      expect((await second).status).toBe(503);
+      expect(authenticate).toHaveBeenCalledOnce();
+      unblock(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await fetch("http://eyes.test/healthz")).status).toBe(200);
+      expect(authenticate).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 async function connect(fetch: ReturnType<typeof setup>["fetch"]) {
   const client = new Client({ name: "eyes-test", version: "1.0.0" });
   await client.connect(
