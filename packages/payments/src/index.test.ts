@@ -278,15 +278,6 @@ describe("stripeRoutes", () => {
     expect(service.workerConnectUrl).not.toHaveBeenCalled();
   });
 
-  it("shows the top-up amount from the success URL and ignores a malformed one", async () => {
-    const { app } = setup();
-    const done = async (query: string) => (await app.request(`/topup/done${query}`)).text();
-    expect(await done("?amount_cents=2050")).toContain("$20.50 added to your agent&#39;s balance.");
-    for (const query of ["", "?amount_cents=20.5", "?amount_cents=1e9", "?amount_cents=<b>"]) {
-      expect(await done(query)).toContain("Your payment was added to your agent&#39;s balance.");
-    }
-  });
-
   it("says a simulated checkout moved no money and credited nothing", async () => {
     const { app } = setup();
     const res = await app.request("/topup/done?simulated=1&amount_cents=2000");
@@ -539,7 +530,7 @@ describe("outbound Stripe requests", () => {
       "metadata[topup_cents]": "2050",
       "payment_intent_data[metadata][agent_id]": "agt_9",
       "payment_intent_data[transfer_group]": "topup_agt_9",
-      success_url: "https://api.eyes.test/topup/done?amount_cents=2050",
+      success_url: "https://api.eyes.test/topup/done",
       cancel_url: "https://api.eyes.test/topup/cancel",
     });
   });

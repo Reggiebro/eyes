@@ -183,7 +183,7 @@ export function checklist(s: WorkerSetup, now: number, startSms = smsHref("START
             detail: "Text START first, then open the app.",
             action: null,
           },
-    payouts.set_up
+    payouts.set_up && !payouts.setup_url
       ? {
           id: "payouts",
           state: "done",
