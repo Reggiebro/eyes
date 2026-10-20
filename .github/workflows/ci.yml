@@ -203,9 +203,9 @@ jobs:
       - name: e2e (everything)
         if: needs.scope.outputs.full == 'true'
         run: pnpm test:e2e
-      - name: e2e worker suite
+      - name: e2e web suites
         if: needs.scope.outputs.full != 'true' && needs.scope.outputs.e2e_worker == 'true'
-        run: pnpm exec playwright test --project worker
+        run: pnpm exec playwright test --project worker --project dashboard --project landing
       - name: e2e golden-path suite
         if: needs.scope.outputs.full != 'true' && needs.scope.outputs.e2e_golden == 'true'
         run: pnpm exec playwright test --project golden
@@ -234,7 +234,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 26
       - run: node scripts/check-intent.ts
         env:
           INTENT_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}

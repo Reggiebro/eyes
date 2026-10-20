@@ -22,10 +22,11 @@ const COVERAGE_EXCLUDE = [
   "**/node_modules/**",
   "**/.wrangler/**",
   "**/.astro/**",
+  "**/.mcp-use/**",
   "scripts/**",
   "apps/mobile/ios/**",
 ];
-// Worker e2e covers the web app and the UI kit it renders.
+// Web e2e covers worker, dashboard, landing, and their shared UI kit.
 const WORKER_E2E_GLOBS = ["apps/web/**", "packages/ui/**", "playwright.config.ts"];
 // Golden-path e2e (e2e/) exercises the whole stack, so any package or the MCP server runs it.
 const GOLDEN_E2E_GLOBS = ["e2e/**", "apps/mcp/**", "packages/**", "playwright.config.ts"];

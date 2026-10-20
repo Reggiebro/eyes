@@ -1251,6 +1251,9 @@ function actionArea(doc          , opts                   ) {
   async function run(action        , yes                   , no                   ) {
     if (busy) return;
     busy = true;
+    const dialog = root.closest("dialog");
+    const preventCancel = (event       ) => event.preventDefault();
+    dialog?.addEventListener("cancel", preventCancel);
     yes.disabled = true;
     no.disabled = true;
     yes.textContent = `${action.verb}…`;
@@ -1260,6 +1263,7 @@ function actionArea(doc          , opts                   ) {
         message: `Failed: ${err instanceof Error ? err.message : err}`,
       }),
     );
+    dialog?.removeEventListener("cancel", preventCancel);
     row.classList.remove("is-confirming");
     row.onkeydown = null;
     if (!outcome.ok) {

@@ -67,6 +67,7 @@ describe("scope", () => {
         "apps/web/worker/dist/app.js",
         "apps/web/worker/.wrangler/x.js",
         "apps/web/worker/.astro/x.ts",
+        "apps/mcp/.mcp-use/build/index.js",
         "apps/web/worker/src/pages/index.astro",
         "cli/README.md",
       ]),
@@ -92,6 +93,17 @@ describe("scope", () => {
     expect(scope(["packages/ui/src/page.ts"])).toMatchObject({ e2eWorker: true, e2eGolden: true, web: true });
     expect(scope(["e2e/demo.spec.ts"])).toMatchObject({ e2eWorker: false, e2eGolden: true, web: false });
     expect(scope(["playwright.config.ts"])).toMatchObject({ e2eWorker: true, e2eGolden: true, web: false });
+  });
+
+  it("selects the web suites for dashboard and landing changes", () => {
+    for (const file of [
+      "apps/web/dashboard/src/server.ts",
+      "apps/web/dashboard/e2e/index.spec.ts",
+      "apps/web/landing/src/pages/index.astro",
+      "apps/web/landing/e2e/connect.spec.ts",
+    ]) {
+      expect(scope([file])).toMatchObject({ e2eWorker: true, web: true });
+    }
   });
 
   it("runs no e2e or web build for docs and root notes", () => {
