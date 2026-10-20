@@ -572,7 +572,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ).rejects.toMatchObject({
       code: "invalid_input",
     });
-    // STOP deleted the location (ADR-024); the repeat join did not write its own.
+    // STOP deleted the location (ADR-037); the repeat join did not write its own.
     expect(await sql`select name, lat from workers where phone = ${phone}`).toEqual([
       { name: "Real Worker", lat: null },
     ]);
