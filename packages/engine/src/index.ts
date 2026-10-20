@@ -227,7 +227,7 @@ const AWAIT_NEXT_STEP: Record<TaskStatus, string> = {
     "Answered and verified. Use answer.answer_text and answer.photo_url. If the answer is wrong, call dispute_answer with a reason.",
   paid: "Answered, verified and the worker is paid. Use answer.answer_text and answer.photo_url. If the answer is wrong, call dispute_answer with a reason.",
   needs_review:
-    "A worker answered but automatic verification did not pass (see answer.verification). Use the answer with care; your escrow is held until review. Call dispute_answer if it is wrong.",
+    "A worker answered but automatic verification did not pass (see answer.verification). Use the answer with care; your escrow is held until review. If photo_url is empty, call get_task after review to check for a released photo. Call dispute_answer if it is wrong.",
   expired:
     "No worker answered before the deadline, so the full cost was refunded to your balance. Call ask_eyes again, perhaps with a higher bounty_usd or a longer deadline_minutes.",
   refunded: "This task was cancelled and refunded. Call ask_eyes to ask again.",
@@ -291,14 +291,17 @@ function answerOf({ task, submission, worker_rating }: Detail): Answer | null {
     task_id: task.id,
     answer_text: submission.answer_text ?? fallback,
     answer_bool: submission.answer_bool,
-    // A photo that failed moderation (vision_ok false) is never delivered; ops still sees it.
-    photo_url: submission.vision_ok ? submission.photo_url : null,
+    photo_url:
+      submission.vision_ok ||
+      (submission.vision_ok === null && (task.status === "verified" || task.status === "paid"))
+        ? submission.photo_url
+        : null,
     captured_at: iso(submission.captured_at),
     worker_distance_m: Math.round(distanceMeters(task, submission)),
     verification: {
       gps_ok: submission.gps_ok,
       fresh_ok: submission.fresh_ok,
-      vision_ok: submission.vision_ok,
+      vision_ok: submission.vision_ok === true,
       vision_reason: submission.vision_reason,
     },
     confidence: submission.confidence,
@@ -1847,7 +1850,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         verification: {
           gps_ok: v.gps_ok,
           fresh_ok: v.fresh_ok,
-          vision_ok: v.vision_ok,
+          vision_ok: v.vision_ok === true,
           vision_reason: v.vision_reason,
         },
         message,
