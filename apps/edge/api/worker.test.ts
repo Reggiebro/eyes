@@ -93,6 +93,42 @@ afterEach(() => {
 });
 
 describe("api worker routing", () => {
+  it("redirects HTTP to HTTPS before forwarding a POST", async () => {
+    const stub = fakeStub();
+    const upstream = vi.fn(async () => new Response("insecure"));
+    vi.stubGlobal("fetch", upstream);
+    const res = await worker.fetch(
+      new Request("http://api.eyes.pictures/v1/tasks?limit=2", { method: "POST", body: "private" }),
+      fakeEnv(stub, { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("https://api.eyes.pictures/v1/tasks?limit=2");
+    expect(upstream).not.toHaveBeenCalled();
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "https://eyes.run.mcp-use.com"])(
+    "adds security headers to an error response through %s",
+    async (origin) => {
+      const stub = fakeStub();
+      stub.fetch.mockImplementation(async () => new Response("denied", { status: 403 }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("denied", { status: 403 })),
+      );
+      const res = await worker.fetch(
+        new Request("https://api.eyes.pictures/v1/tasks"),
+        fakeEnv(stub, { ORIGIN: origin }),
+      );
+      expect(res.status).toBe(403);
+      expect(await res.text()).toBe("denied");
+      expect(res.headers.get("strict-transport-security")).toBe("max-age=31536000; includeSubDomains");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+      expect(res.headers.get("permissions-policy")).toBe("camera=(self), geolocation=(self), microphone=()");
+    },
+  );
+
   it("forwards every host and path to ORIGIN with method, body, and edge headers, redirect manual", async () => {
     const stub = fakeStub();
     const upstream = vi.fn(async (_input: URL | string, _init?: RequestInit) => new Response("from origin"));
@@ -141,7 +177,8 @@ describe("api worker routing", () => {
       fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
     );
 
-    expect(res).toBe(upstream);
+    expect(res.body).toBe(body);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
   it("undoes the gateway's host rewrite in protected-resource metadata and WWW-Authenticate", async () => {
@@ -275,7 +312,6 @@ describe("api worker routing", () => {
       new Request(`https://api.eyes.pictures${path}`),
       fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
     );
-    expect(res).toBe(upstream);
     expect(await res.text()).toBe(body);
   });
 
@@ -293,12 +329,11 @@ describe("api worker routing", () => {
       "fetch",
       vi.fn(async () => upstream),
     );
-    expect(
-      await worker.fetch(
-        new Request("https://api.eyes.pictures/mcp"),
-        fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
-      ),
-    ).toBe(upstream);
+    const response = await worker.fetch(
+      new Request("https://api.eyes.pictures/mcp"),
+      fakeEnv(fakeStub(), { ORIGIN: "https://eyes.run.mcp-use.com" }),
+    );
+    expect(response.headers.get("www-authenticate")).toBe(`Bearer resource_metadata="${value}"`);
   });
 
   it("preserves body and encoding when rewriting only an authentication header", async () => {
