@@ -41,7 +41,9 @@ Intent, secret scanning, and the four quality gates below still run.
 
 Each quality gate has its own job: `audit`, `sentrux`, `actionlint`, and `docker-build`.
 The audit runs `pnpm audit --prod` without installing the workspace.
-Mobile remains outside CI: its isolated `npm ci` and `npm run typecheck` fail because its tests import root-only `vitest`.
+The `mobile-typecheck` job runs `npm ci` and `npm run typecheck` in `apps/mobile`, without installing the root workspace.
+The mobile app tsconfig excludes test files.
+The root Vitest unit suite runs them without typechecking.
 The Docker job runs `docker build .` without a registry login, push, or deployment.
 
 The Sentrux job requires the committed `.sentrux/baseline.json` from the first run.
