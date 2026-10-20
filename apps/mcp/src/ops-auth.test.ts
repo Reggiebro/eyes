@@ -179,6 +179,20 @@ describe("ops sign-in", () => {
     expect(calls.filter((fn) => fn === "eyes_ops_code_put")).toHaveLength(1);
   });
 
+  it("signs in with an explicit trunk zero using the canonical phone's code", async () => {
+    const phone = "+447700900123";
+    const identifier = "+44 (0)7700 900123";
+    const { post, fetch, codeFor, providers } = setup([phone]);
+    await post("/ops/login/code", { identifier });
+    expect(providers.messaging.outbox.map((m) => m.to)).toEqual([phone]);
+    const verified = await post("/ops/login/verify", { identifier, code: codeFor(phone) });
+    expect(verified.status).toBe(200);
+    const cookie = (verified.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const feed = await fetch("/ops/feed", { headers: { cookie } });
+    expect(feed.status).toBe(200);
+    expect((await feed.json()).ops.operator).toBe("***0123");
+  });
+
   it("signs in with the emailed code once, into a 12 h HttpOnly Secure SameSite=Strict cookie", async () => {
     const { post, fetch, codeFor } = setup();
     await post("/ops/login/code", { identifier: "Ops@Example.com" });
