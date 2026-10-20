@@ -65,7 +65,7 @@ This policy does not change access to ops or worker routes.
 
 ## Dedicated MCP domain: live
 
-`https://mcp.eyes.pictures/mcp` is live, with ChatGPT and Claude configured there. Matching OAuth and card metadata are verified. Existing third-party connectors at `https://api.eyes.pictures/mcp` remain supported; not every client has migrated. Follow-up visual checks on the operator's test accounts were quota-blocked on 2026-10-18; this is not a general ChatGPT or Claude limitation. See [STATUS](../STATUS.md).
+`https://mcp.eyes.pictures/mcp` is live, with ChatGPT and Claude configured there. Matching OAuth and card metadata are verified. Existing third-party connectors at `https://api.eyes.pictures/mcp` remain supported; not every client has migrated. Follow-up visual checks on the operator's test accounts were quota-blocked on 2026-10-18; this is not a general ChatGPT or Claude limitation. See [STATUS](archive/hackathon/STATUS.md).
 
 Verified dedicated-host values:
 
