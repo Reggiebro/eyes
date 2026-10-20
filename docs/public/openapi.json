@@ -399,7 +399,18 @@
                     },
                     "status": {
                       "type": "string",
-                      "const": "dispatched"
+                      "enum": [
+                        "dispatched",
+                        "claimed",
+                        "submitted",
+                        "verified",
+                        "paid",
+                        "expired",
+                        "refunded",
+                        "disputed",
+                        "needs_review"
+                      ],
+                      "description": "New tasks are dispatched. A retry returns the stored task status, without another charge or policy check."
                     },
                     "workers_notified": {
                       "type": "integer",

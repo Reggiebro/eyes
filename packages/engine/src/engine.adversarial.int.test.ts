@@ -336,6 +336,7 @@ describe.skipIf(!url)("engine under races and guards", () => {
     expect(results.filter((r) => r.status === "rejected")).toEqual([]);
     const ok = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
     expect(new Set(ok.map((r) => r.task_id)).size).toBe(1);
+    for (const retry of ok) expect(retry).toEqual(ok[0]);
     expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(1);
     expect(outbox.filter((m) => m.to === w.phone && m.kind === "offer")).toHaveLength(1);
     expect(await service.getBalance(a)).toMatchObject({ balance_usd: 16.5, escrowed_usd: 3.5 });

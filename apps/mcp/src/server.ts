@@ -580,7 +580,7 @@ Example: ask_eyes({ "question": "How many people are waiting in line right now?"
 In ChatGPT, Claude and MCP Apps, this returns status "confirmation_required" and a read-only quote with the request's idempotency_key. Nothing is sent or charged until the user confirms in the card. Keep that intent key; never follow a successful card confirmation with another paid ask.
 Errors include error, message and fix, or an "Input validation error" naming invalid fields. Use them to repair the original authorized request, not to change its goal, raise spending or bypass confirmation. After an unknown dispatch outcome, retry only the same parameters and idempotency_key.
 For non-UI automation, this dispatches directly. If no worker is nearby, nothing is created or charged: status "not_sent", reason "no_workers_nearby", charged_usd 0, message and fix, and no task_id.
-Next: only if status is "dispatched", call await_answer with the returned task_id. For "confirmation_required", wait for the card confirmation. For "not_sent", show the explanation.`),
+Next: if status is "dispatched", call await_answer with the returned task_id. For "confirmation_required", wait for the card confirmation. For "not_sent", show the explanation. A retry returns the stored task status and money held; follow next_step without creating another paid task.`),
       inputSchema: TOOLS.ask_eyes.input,
       outputSchema: AskEyesToolOutput,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -607,7 +607,7 @@ Next: only if status is "dispatched", call await_answer with the returned task_i
       name: "confirm_ask",
       title: "Confirm and send this task",
       description:
-        "App-only: dispatch the request explicitly confirmed in the Eyes card. Reuse its idempotency_key and exact parameters for retries; a new explicit Ask Again uses a new key. Next: use the returned task_id with await_answer; never create another paid request for this intent.",
+        "App-only: dispatch the request explicitly confirmed in the Eyes card. Reuse its idempotency_key and exact parameters for retries; a new explicit Ask Again uses a new key. Next: follow next_step for the returned task_id and status; never create another paid request for this intent.",
       visibility: "app",
       inputSchema: TOOLS.ask_eyes.input,
       outputSchema: AskEyesToolOutput,

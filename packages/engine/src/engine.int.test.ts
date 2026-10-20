@@ -273,7 +273,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await worker(north(at, 50), false);
     await worker(north(at, 5000));
 
-    const asked = await ask(a, at);
+    const key = randomUUID();
+    const asked = await ask(a, at, { idempotency_key: key });
     expect(asked).toMatchObject({ status: "dispatched", workers_notified: 3, escrowed_usd: 3.5 });
     const offers = outbox.filter((m) => m.kind === "offer" && m.payload.task_id === asked.task_id);
     expect(offers.map((o) => o.to).sort()).toEqual([near.phone, mid.phone, far.phone].sort());
@@ -300,6 +301,12 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
     await reply(winner.phone);
     expect(outbox.at(-1)).toEqual(link);
+    expect(await ask(a, at, { idempotency_key: key })).toMatchObject({
+      task_id: asked.task_id,
+      status: "claimed",
+      escrowed_usd: 3.5,
+      next_step: expect.stringContaining("Call await_answer"),
+    });
 
     const captureUrl = String(link.payload.capture_url);
     const token = new URL(captureUrl).searchParams.get("t") ?? "";
@@ -319,6 +326,12 @@ describe.skipIf(!url)("engine on Postgres", () => {
       { bytes: new Uint8Array([255, 216, 255]), content_type: "image/jpeg" },
     );
     expect(result).toMatchObject({ status: "paid", verification: { gps_ok: true, vision_ok: true } });
+    expect(await ask(a, at, { idempotency_key: key })).toMatchObject({
+      task_id: asked.task_id,
+      status: "paid",
+      escrowed_usd: 0,
+      next_step: expect.stringContaining("Call get_task"),
+    });
 
     const awaited = await service.awaitAnswer(a, { task_id: asked.task_id, timeout_seconds: 5 });
     expect(awaited).toMatchObject({
@@ -1174,6 +1187,86 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ).rejects.toMatchObject({
       code: "idempotency_conflict",
     });
+  });
+
+  it.each([
+    { policy: { max_bounty_usd: 1 }, code: "bounty_exceeds_max" },
+    {
+      policy: { allowed_task_types: ["is_open"] as OwnerPolicyInput["allowed_task_types"] },
+      code: "task_type_not_allowed",
+    },
+    { policy: { daily_cap_usd: 1 }, code: "daily_cap_exceeded" },
+  ])("replays a paid ask after the owner tightens $code without another charge", async ({ policy, code }) => {
+    const at = somewhere();
+    const w = await worker(north(at, 100));
+    const { api_key } = await service.signupAgent({ name: "retry-agent" });
+    const a = (await service.authenticate(api_key)) as Agent;
+    const key = randomUUID();
+    const first = await ask(a, at, { idempotency_key: key });
+    await service.updateSpendPolicy(signToken(deps.config.link_secret, `p:${a.id}`), {
+      max_bounty_usd: 10,
+      daily_cap_usd: 50,
+      allowed_task_types: ["line_length"],
+      ...policy,
+    });
+    const current = (await service.authenticate(api_key)) as Agent;
+
+    expect(await ask(current, at, { idempotency_key: key })).toEqual(first);
+    await expect(ask(current, at)).rejects.toMatchObject({ code });
+    expect(await sql`select id from tasks where agent_id = ${a.id}`).toEqual([{ id: first.task_id }]);
+    expect(await ledger(first.task_id)).toEqual([expect.objectContaining({ type: "escrow", amount: 350 })]);
+    expect(await service.getBalance(current)).toMatchObject({ balance_usd: 16.5, escrowed_usd: 3.5 });
+    expect(outbox.filter((m) => m.to === w.phone && m.kind === "offer")).toHaveLength(1);
+    await expect(
+      ask(current, at, { idempotency_key: key, question: "Is it open right now?" }),
+    ).rejects.toMatchObject({ code: "idempotency_conflict" });
+  });
+
+  it("replays a paid ask without a new safety decision", async () => {
+    const at = somewhere();
+    await worker(north(at, 100));
+    const a = await agent();
+    const key = randomUUID();
+    const first = await ask(a, at, { idempotency_key: key });
+    const assess = vi.spyOn(deps, "assessTask").mockResolvedValue({
+      allowed: false,
+      category: "private_residence",
+      reason: "Policy changed",
+      fix: null,
+      layer: "rules",
+    });
+    try {
+      expect(await ask(a, at, { idempotency_key: key })).toEqual(first);
+      await expect(ask(a, at)).rejects.toMatchObject({ code: "unsafe_task" });
+      expect(await sql`select id from tasks where agent_id = ${a.id}`).toEqual([{ id: first.task_id }]);
+      expect(await service.getBalance(a)).toMatchObject({ balance_usd: 16.5, escrowed_usd: 3.5 });
+    } finally {
+      assess.mockRestore();
+    }
+  });
+
+  it("replays a cancelled ask with its refunded status and no money held", async () => {
+    const at = somewhere();
+    const w = await worker(north(at, 100));
+    const a = await agent();
+    const key = randomUUID();
+    const first = await ask(a, at, { idempotency_key: key });
+    await service.cancelTask(a, { task_id: first.task_id });
+
+    const retry = TOOLS.ask_eyes.output.parse(await ask(a, at, { idempotency_key: key }));
+    expect(retry).toMatchObject({
+      task_id: first.task_id,
+      status: "refunded",
+      escrowed_usd: 0,
+      deadline_at: first.deadline_at,
+    });
+    expect(await sql`select id from tasks where agent_id = ${a.id}`).toEqual([{ id: first.task_id }]);
+    expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+    expect(await ledger(first.task_id)).toEqual([
+      expect.objectContaining({ type: "escrow", amount: 350 }),
+      expect.objectContaining({ type: "refund", amount: 350 }),
+    ]);
+    expect(outbox.filter((m) => m.to === w.phone && m.kind === "offer")).toHaveLength(1);
   });
 
   it("refunds a cancelled task exactly once", async () => {
