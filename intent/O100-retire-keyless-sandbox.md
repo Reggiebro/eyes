@@ -13,7 +13,6 @@ files:
   - apps/mcp/src/sandbox.test.ts
   - apps/mcp/src/sandbox.int.test.ts
   - docs/DEPLOY.md
-  - docs/archive/hackathon/STATUS.md
   - intent/O100-retire-keyless-sandbox.md
   - intent/INDEX.md
 status: done
@@ -30,7 +29,7 @@ Remove the sandbox service, automatic account funding, simulated workers, and sa
 Remove the environment switch and sandbox descriptions from the server and its configuration example.
 Clarify that the unused card prototype's sandbox field belongs only to its fixtures.
 Keep the normal service, public signup, provider selection, OAuth, and authenticated MCP and REST behavior.
-Remove the sandbox entries from the MCP README and archived status table.
+Remove the sandbox entry from the MCP README; preserve archived records as written.
 Document the retirement and the deployment operator's separate duty to stop any remaining sandbox server.
 The root README and generated public docs have no keyless sandbox links and remain unchanged.
 No deployed service, DNS record, database, migration, or core contract changes.
