@@ -143,7 +143,17 @@ exports[`tool schemas > match the committed snapshot 1`] = `
           "type": "string",
         },
         "status": {
-          "const": "dispatched",
+          "enum": [
+            "dispatched",
+            "claimed",
+            "submitted",
+            "verified",
+            "paid",
+            "expired",
+            "refunded",
+            "disputed",
+            "needs_review",
+          ],
           "type": "string",
         },
         "task_id": {

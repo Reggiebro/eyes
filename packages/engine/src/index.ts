@@ -48,6 +48,7 @@ const verified = (w: Worker) => ({ phone: w.phone, email: (w.email_verified_at &
 const toAll = (to: string[], send: (to: string) => Promise<unknown>) =>
   Promise.any(to.map(send)).catch((err: AggregateError) => Promise.reject(err.errors[0]));
 type Posted = { task: Task; created: boolean; workers_notified: number };
+type Replay = { task: Task; workers_notified: number; escrowed_cents: number };
 type Payee = Worker & { stripe_account_id: string };
 type ClassifierTicket = {
   id: number | string;
@@ -241,6 +242,18 @@ const SIMULATED_PAY = "This is a test server and payouts are simulated, so no re
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const iso = (s: string) => new Date(s).toISOString();
+function askResult({ task, workers_notified, escrowed_cents }: Replay): ToolOutput<"ask_eyes"> {
+  return {
+    task_id: task.id,
+    status: task.status,
+    workers_notified,
+    escrowed_usd: centsToUsd(escrowed_cents),
+    deadline_at: iso(task.deadline_at),
+    next_step: ["dispatched", "claimed", "submitted"].includes(task.status)
+      ? `Call await_answer with task_id "${task.id}" now, and keep calling it until answered is true or the status is expired, refunded or disputed. Each call waits up to 50 seconds.`
+      : `Call get_task with task_id "${task.id}" to read its current state and any answer.`,
+  };
+}
 const errorName = (err: unknown) => (err instanceof Error ? err.name : typeof err);
 
 function logFailedOffers(taskId: string, sent: PromiseSettledResult<unknown>[]) {
@@ -998,6 +1011,25 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
 
     async askEyes(agent, input) {
       const ask = parse(TOOLS.ask_eyes.input, input);
+      const replayArgs = { p_agent_id: agent.id, p_idempotency_key: ask.idempotency_key };
+      const existing = await maybe<Replay>("eyes_task_by_key", replayArgs);
+      if (existing) {
+        const { task } = existing;
+        const place = await resolve(ask.location);
+        if (
+          task.question !== ask.question ||
+          task.task_type !== ask.task_type ||
+          task.place_label !== place.label ||
+          task.lat !== place.lat ||
+          task.lng !== place.lng ||
+          task.bounty_cents !== usdToCents(ask.bounty_usd) ||
+          task.require_photo !== ask.require_photo ||
+          Date.parse(task.deadline_at) - Date.parse(task.created_at) !== ask.deadline_minutes * 60_000
+        ) {
+          throw new EyesError("idempotency_conflict", { task_id: task.id });
+        }
+        return askResult(existing);
+      }
       const fingerprint = ask.classifier_report_id ? requestFingerprint(ask) : undefined;
       let approved = false;
       if (ask.classifier_report_id) {
@@ -1112,14 +1144,15 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           ).unref();
         }
       }
-      return {
-        task_id: task.id,
-        status: "dispatched",
-        workers_notified: notified,
-        escrowed_usd: centsToUsd(task.bounty_cents + task.fee_cents),
-        deadline_at: iso(task.deadline_at),
-        next_step: `Call await_answer with task_id "${task.id}" now, and keep calling it until answered is true or the status is expired, refunded or disputed. Each call waits up to 50 seconds.`,
-      };
+      return askResult(
+        posted.created
+          ? {
+              task,
+              workers_notified: notified,
+              escrowed_cents: task.bounty_cents + task.fee_cents,
+            }
+          : await one<Replay>("eyes_task_by_key", replayArgs),
+      );
     },
 
     async awaitAnswer(agent, input, signal) {

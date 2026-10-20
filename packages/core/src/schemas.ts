@@ -251,7 +251,9 @@ export const AskEyesInput = z.object({
 });
 export const AskEyesOutput = z.object({
   task_id: Id,
-  status: z.literal("dispatched"),
+  status: TaskStatus.describe(
+    "New tasks are dispatched. A retry returns the stored task status, without another charge or policy check.",
+  ),
   workers_notified: z.int().min(0),
   escrowed_usd: Usd,
   deadline_at: Timestamp,
@@ -286,9 +288,9 @@ export const AskEyesMcpOutput = z.object({
   ...AskEyesInput.partial().shape,
   ...QuoteTaskOutput.partial().shape,
   status: z
-    .enum(["confirmation_required", "dispatched", "not_sent"])
+    .enum(["confirmation_required", "not_sent", ...TASK_STATUSES])
     .describe(
-      '"confirmation_required": read-only draft, nothing sent or charged. "dispatched": workers were texted and escrow held. "not_sent": nobody nearby, nothing created or charged.',
+      '"confirmation_required": read-only draft, nothing sent or charged. "not_sent": nobody nearby, nothing created or charged. Otherwise, the stored task status; retries report its current status and money held.',
     ),
   task_id: AskEyesOutput.shape.task_id.optional(),
   workers_notified: AskEyesOutput.shape.workers_notified.optional(),
