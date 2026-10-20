@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an improvement to Eyes.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: "For security reports, follow [SECURITY.md](https://github.com/ayaangazali/eyes/blob/main/SECURITY.md). Do not include secrets or personal data."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe who needs this change and why. Mention documentation or question if either label fits better than enhancement.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change and alternatives
+      description: Describe the result you want and any alternatives you considered.
+    validations:
+      required: true
