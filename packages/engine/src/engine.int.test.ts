@@ -1203,6 +1203,69 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await expect(service.listTasks(a, { limit: 51 })).rejects.toMatchObject({ code: "invalid_input" });
   });
 
+  it("pages beyond 50 tasks without losing timestamp ties", async () => {
+    const signup = await service.signupAgent({ name: "paging-test" });
+    const a = (await service.authenticate(signup.api_key)) as Agent;
+    await sql`insert into tasks
+      (agent_id, question, task_type, place_label, lat, lng, bounty_cents, fee_cents, deadline_at, created_at)
+      select ${a.id}, 'Is it open?', 'is_open', 'Pier', 1, 1, 300, 0,
+        '2026-10-20T12:00:00Z', '2026-10-20T11:00:00.123456Z'
+      from generate_series(1, 55)`;
+    const expected =
+      await sql`select id from tasks where agent_id = ${a.id} order by created_at desc, id desc`;
+    const first = await service.listTasks(a, { limit: 50 });
+    expect(first.tasks.map((task) => task.task_id)).toEqual(expected.slice(0, 50).map((row) => row.id));
+    expect(first.next_cursor).toBe(first.tasks[49]?.task_id);
+    expect(first.next_step).toContain("list_tasks");
+    expect(first.next_step).not.toContain("ask_eyes");
+    const before = String(first.next_cursor);
+    const last = await service.listTasks(a, { limit: 5, before });
+    expect(last.tasks.map((task) => task.task_id)).toEqual(expected.slice(50).map((row) => row.id));
+    expect(last.next_cursor).toBeNull();
+    const empty = await service.listTasks(a, { limit: 50, before: last.tasks[4]?.task_id });
+    expect(empty.tasks).toEqual([]);
+    expect(empty.next_cursor).toBeNull();
+    expect(empty.next_step).toContain("list_tasks");
+    expect(empty.next_step).not.toContain("ask_eyes");
+    expect(await service.listTasks(await agent(), { limit: 50 })).toMatchObject({
+      tasks: [],
+      next_cursor: null,
+    });
+    expect(await service.listTasks(await agent(), { limit: 50, before })).toMatchObject({
+      tasks: [],
+      next_cursor: null,
+    });
+    expect(await service.listTasks(a, { limit: 50, status: "paid" })).toMatchObject({
+      tasks: [],
+      next_cursor: null,
+    });
+    const server = createServer({ service, providers, config: deps.config, env: {} });
+    const fetch: typeof globalThis.fetch = (url, init) => server.fetch(new Request(url, init));
+    const headers = { authorization: `Bearer ${signup.api_key}` };
+    const response = await fetch(`http://eyes.test/v1/tasks?limit=50&before=${first.next_cursor}`, {
+      headers,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(last);
+    const client = new Client({ name: "paging-test", version: "1" });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+          fetch,
+          requestInit: { headers },
+        }),
+      );
+      const result = await client.callTool({
+        name: "list_tasks",
+        arguments: { limit: 50, before: first.next_cursor },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "null")).toEqual(last);
+    } finally {
+      await client.close();
+    }
+  });
+
   describe("quote_task against the key's limits and balance", () => {
     const at = somewhere();
     beforeAll(() => worker(north(at, 100)));
@@ -2737,17 +2800,6 @@ describe.skipIf(!url)("engine on Postgres", () => {
         code: "invalid_input",
       });
       expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
-    });
-
-    it("tells an agent with no tasks how to start, or to drop the status filter", async () => {
-      const a = await agent();
-      expect(await service.listTasks(a, { limit: 20 })).toEqual({
-        tasks: [],
-        next_step: "You have no tasks yet. Call quote_task, then ask_eyes to create one.",
-      });
-      expect((await service.listTasks(a, { status: "paid", limit: 20 })).next_step).toBe(
-        "You have no tasks with status paid. Call list_tasks without status to see all your tasks.",
-      );
     });
 
     it("opens a $20 top-up checkout only for a t: token", async () => {

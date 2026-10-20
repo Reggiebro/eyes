@@ -776,7 +776,7 @@ Next: call it once await_answer returns answered true, so your user sees the ans
       title: "List your tasks",
       description: `List the tasks this API key created, newest first, with task_id, status, question, place_label, bounty_usd, created_at, deadline_at and answered. Read-only and instant. You only ever see your own tasks.
 Call it when you lost a task_id (context reset, crash, restart) and before you ask a question again, so you resume an open task instead of paying twice. Find yours by question and place_label.
-status keeps only tasks in that status, for example "dispatched" for tasks no worker has claimed yet. limit is 1 to 50 (default 20); raise it if the task you want is older.
+status keeps only tasks in that status, for example "dispatched" for tasks no worker has claimed yet. limit is 1 to 50 (default 20). Pass next_cursor as before to read older tasks with the same status filter; null means no more tasks.
 Example: list_tasks({ "status": "dispatched", "limit": 5 })
 Next: for a task with status dispatched, claimed or submitted, call await_answer with its task_id. For a task where answered is true, call get_task to read the answer. Call ask_eyes only if no listed task covers your question.`,
       inputSchema: TOOLS.list_tasks.input,
@@ -1023,10 +1023,11 @@ Next: keep bounty_usd at or below max_bounty_usd and within remaining_today_usd 
     );
   });
   server.get("/v1/tasks", async (c) => {
-    const { status, limit } = c.req.query();
+    const { status, limit, before } = c.req.query();
     const input = parse(ListTasksInput, {
       status: status || undefined,
       limit: limit ? Number(limit) : undefined,
+      before,
     });
     return c.json(await service.listTasks(c.get("agent"), input));
   });
