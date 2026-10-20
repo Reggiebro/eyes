@@ -444,6 +444,58 @@ describe("createClefVision", () => {
     }
   });
 
+  it.each(["photo", "clef"])("leaves Claude its full time after a stalled %s request", async (stage) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.includes("anthropic")) {
+        await new Promise((resolve) => setTimeout(resolve, 14_999));
+        return message([
+          {
+            type: "text",
+            text: JSON.stringify({
+              gore: false,
+              explicit_sexual: false,
+              reason: "Neither confirmed.",
+              confidence: 0.9,
+            }),
+          },
+        ]);
+      }
+      if (stage === "clef" && url === judgeInput.photo_url) {
+        await new Promise((resolve) => setTimeout(resolve, 6_000));
+        return new Response(new Uint8Array([1]));
+      }
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    try {
+      const completed = vi.fn();
+      const pending = verifySubmission(
+        input(judgeInput, createClefVision({ ...env, ANTHROPIC_API_KEY: "test" })),
+      ).then(completed);
+      await vi.advanceTimersByTimeAsync(23_000);
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vision_ok: true,
+          auto_approve: true,
+          vision_reason: "Neither confirmed.",
+        }),
+      );
+      await pending;
+    } finally {
+      vi.clearAllTimers();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps failure of both providers unavailable", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
