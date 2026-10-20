@@ -239,6 +239,22 @@ const REPLY_TEXT: Record<"no" | "released", string> = {
   no: "No problem, we will text you the next task nearby.",
   released: "Got it, the task is released. Thanks.",
 };
+const WORKER_HELP = [
+  "YES — take task",
+  "NO — pass/give back",
+  "TASK — get task link",
+  "HERE — update location",
+  "APP — open app",
+  "INSTALL — get app",
+  "SHORTCUT — background location",
+  "EMAIL — add email by text",
+  "EMAIL OFF — remove email by text",
+  "START — join/resume",
+  "STOP — pause, clear spot/email, disable location codes",
+  "HELP — support/review answer",
+  "",
+  "Text a Maps link, coordinates or email address.",
+].join("\n");
 const SIMULATED_PAY = "This is a test server and payouts are simulated, so no real money is paid.";
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -394,20 +410,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       ...(config.live_payouts ? [] : [SIMULATED_PAY]),
       `Your setup: ${meUrl(worker.id)}`,
       "",
-      "YES — take task",
-      "NO — pass/give back",
-      "TASK — get task link",
-      "HERE — update location",
-      "APP — open app",
-      "INSTALL — get app",
-      "SHORTCUT — background location",
-      "EMAIL — add email by text",
-      "EMAIL OFF — remove email by text",
-      "START — join/resume",
-      "STOP — pause, clear spot/email, disable location codes",
-      "HELP — support/review answer",
-      "",
-      "Text a Maps link, coordinates or email address.",
+      WORKER_HELP,
     ].join("\n");
   }
 
@@ -686,6 +689,23 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       p_now: nowIso(),
     });
     await sendOffers(task, more);
+  }
+
+  async function reoffer(task: Task, workerId: string) {
+    const idle = await rpc<Worker & LatLng>("eyes_reoffer", {
+      p_task_id: task.id,
+      p_released_by: workerId,
+      p_now: nowIso(),
+      p_max_age: maxAge,
+    });
+    await sendOffers(
+      task,
+      idle.map((w) => ({
+        worker_id: w.id,
+        ...verified(w),
+        distance_m: distanceMeters(task, w),
+      })),
+    );
   }
 
   type Fix = { lat: number; lng: number; accuracy_m?: number; source: string; captured_at?: string };
@@ -1476,6 +1496,10 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         const off = /^\s*e-?mail\s+off\W*$/i.test(text);
         if (off || /^\s*e-?mail\W*$/i.test(text) || textedEmail(text)) return emailByText(worker, phone, off);
       }
+      if (!worker.opted_in && intent === "help") {
+        await messaging.sendText(phone, `Eyes: you're opted out. Text START to rejoin.\n\n${WORKER_HELP}`);
+        return;
+      }
       if (!worker.opted_in && intent !== "start") return;
       // The phone is the account (one account per number), so only a text from it turns tasks on.
       if (!worker.opted_in && "email" in input) {
@@ -1500,11 +1524,12 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           await messaging.sendText(phone, (await hubReply(worker)) + note);
         },
         stop: async () => {
-          await rpc("eyes_set_worker_opt_in", { p_phone: phone, p_opted_in: false });
+          const released = await maybe<Task>("eyes_stop_worker", { p_worker_id: worker.id, p_now: nowIso() });
           appLinkSentAt.delete(worker.id); // STOP deleted every code, so the next START sends a fresh one
+          if (released) await reoffer(released, worker.id);
           await messaging.sendText(
             phone,
-            "Eyes: you're opted out and won't get task texts. Text START to rejoin.",
+            `${released ? `${REPLY_TEXT.released} ` : ""}Eyes: you're opted out and won't get task texts. Text START to rejoin.`,
           );
         },
         yes: () => claim(worker, phone),
@@ -1513,22 +1538,8 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
             p_worker_id: worker.id,
             p_now: nowIso(),
           });
+          if (released) await reoffer(released, worker.id);
           await messaging.sendText(phone, released ? REPLY_TEXT.released : REPLY_TEXT.no);
-          if (!released) return;
-          const idle = await rpc<Worker & LatLng>("eyes_reoffer", {
-            p_task_id: released.id,
-            p_released_by: worker.id,
-            p_now: nowIso(),
-            p_max_age: maxAge,
-          });
-          await sendOffers(
-            released,
-            idle.map((w) => ({
-              worker_id: w.id,
-              ...verified(w),
-              distance_m: distanceMeters(released, w),
-            })),
-          );
         },
         here: () =>
           messaging.sendText(
@@ -1545,6 +1556,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           await messaging.sendText(phone, `Get the Eyes app: ${appUrl(await mintLocationCode(worker.id))}`);
         },
         install: () => reply.app(),
+        media: () => reply.task(),
         // ADR-027: the live capture link again. Newest claim first; a claim past its deadline
         // stays 'claimed' until the sweep expires it, so the deadline is checked here.
         task: async () => {
@@ -1555,7 +1567,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
           await messaging.sendText(
             phone,
             open
-              ? `Eyes: here is the link for your task: ${captureUrl(open, worker.id)}`
+              ? `${intent === "media" ? "Eyes: photos sent by text are not submitted. Open this link to take and submit your photo" : "Eyes: here is the link for your task"}: ${captureUrl(open, worker.id)}`
               : "You have no open task right now. We'll text you when one is near.",
           );
         },

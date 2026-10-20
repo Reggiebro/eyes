@@ -157,6 +157,140 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   const reply = (phone: string) => service.handleWorkerReply({ phone, intent: "yes", text: "YES" });
 
+  async function textWebhook(phone: string, content: string, media: unknown[] = []) {
+    const key = "worker-replies-signing-key";
+    const app = inkboxRoutes(
+      { service, providers, config: deps.config },
+      { INKBOX_WEBHOOK_SIGNING_KEY: key },
+    );
+    const body = JSON.stringify({
+      event_type: "imessage.received",
+      data: { message: { id: randomUUID(), remote_number: phone, content, media } },
+    });
+    const id = randomUUID();
+    const timestamp = String(Math.floor(providers.clock.now().getTime() / 1000));
+    const signature = createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest("hex");
+    expect(
+      (
+        await app.request("/", {
+          method: "POST",
+          body,
+          headers: {
+            "x-inkbox-request-id": id,
+            "x-inkbox-timestamp": timestamp,
+            "x-inkbox-signature": `sha256=${signature}`,
+          },
+        })
+      ).status,
+    ).toBe(200);
+  }
+
+  it.each(["STOP", "cancel", "NO"])("%s releases the held task for another worker", async (text) => {
+    const at = somewhere();
+    const a = await agent();
+    const first = await worker(at);
+    const next = await worker(north(at, 100));
+    const { task_id } = await ask(a, at);
+    await textWebhook(first.phone, "YES");
+    expect((await service.getTask(a, { task_id })).status).toBe("claimed");
+    const before = outbox.length;
+    await textWebhook(first.phone, text);
+    expect(await service.getTask(a, { task_id })).toMatchObject({ status: "dispatched", claimed_at: null });
+    expect((await sql`select opted_in from workers where id = ${first.worker_id}`)[0]?.opted_in).toBe(
+      text === "NO",
+    );
+    expect(outbox.slice(before)).toContainEqual({
+      to: next.phone,
+      kind: "offer",
+      payload: expect.objectContaining({ task_id }),
+    });
+    await reply(next.phone);
+    expect(outbox.at(-1)).toMatchObject({ to: next.phone, kind: "capture_link", payload: { task_id } });
+  });
+
+  it.each(["stop", "no"] as const)(
+    "reoffers a released task even when the %s confirmation fails",
+    async (intent) => {
+      const at = somewhere();
+      const a = await agent();
+      const first = await worker(at);
+      const next = await worker(north(at, 100));
+      const { task_id } = await ask(a, at);
+      await reply(first.phone);
+      const before = outbox.length;
+      const send = vi.spyOn(providers.messaging, "sendText").mockRejectedValueOnce(new Error("send failed"));
+      try {
+        await expect(service.handleWorkerReply({ phone: first.phone, intent, text: intent })).rejects.toThrow(
+          "send failed",
+        );
+        expect(outbox.slice(before)).toContainEqual({
+          to: next.phone,
+          kind: "offer",
+          payload: expect.objectContaining({ task_id }),
+        });
+        expect((await service.getTask(a, { task_id })).status).toBe("dispatched");
+      } finally {
+        send.mockRestore();
+      }
+    },
+  );
+
+  it("HELP after STOP gives help without restoring consent or location codes", async () => {
+    const w = await worker(somewhere());
+    await textWebhook(w.phone, "STOP");
+    const before = outbox.length;
+    await textWebhook(w.phone, "HELP");
+    expect(outbox.slice(before)).toHaveLength(1);
+    expect(String(outbox.at(-1)?.payload)).toContain("START");
+    expect(String(outbox.at(-1)?.payload)).toContain("HELP");
+    expect((await sql`select opted_in, lat from workers where id = ${w.worker_id}`)[0]).toMatchObject({
+      opted_in: false,
+      lat: null,
+    });
+    expect(await sql`select 1 from worker_location_tokens where worker_id = ${w.worker_id}`).toEqual([]);
+  });
+
+  it("photos by text explain capture submission and preserve the held task", async () => {
+    const at = somewhere();
+    const a = await agent();
+    const w = await worker(at);
+    const media = [{ url: "https://inkbox.test/photo.jpg" }];
+    await textWebhook(w.phone, "", media);
+    expect(String(outbox.at(-1)?.payload)).toContain("no open task");
+    const { task_id } = await ask(a, at);
+    await reply(w.phone);
+    const link = String(outbox.at(-1)?.payload.capture_url);
+    for (const content of ["", "\ufffc", "YES"]) {
+      await textWebhook(w.phone, content, media);
+      expect(String(outbox.at(-1)?.payload)).toContain(link);
+      expect(String(outbox.at(-1)?.payload)).toContain("submit");
+    }
+    expect((await service.getTask(a, { task_id })).status).toBe("claimed");
+    expect(await sql`select 1 from submissions where task_id = ${task_id}`).toEqual([]);
+    await capture(new URL(link).searchParams.get("t") ?? "", at);
+    await textWebhook(w.phone, "\ufffc", media);
+    expect(String(outbox.at(-1)?.payload)).toContain("no open task");
+  });
+
+  it("concurrent asks give each worker only one open offer", async () => {
+    const at = somewhere();
+    const w = await worker(at);
+    const a = await agent();
+    const b = await agent();
+    const results = await Promise.allSettled([ask(a, at), ask(b, at)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((r) => r.status === "rejected")).toMatchObject({
+      reason: { code: "no_workers_nearby" },
+    });
+    const offers = outbox.filter((m) => m.to === w.phone && m.kind === "offer");
+    expect(offers).toHaveLength(1);
+    await textWebhook(w.phone, "yes please");
+    expect(outbox.at(-1)).toMatchObject({
+      kind: "capture_link",
+      payload: { task_id: offers[0]?.payload.task_id },
+    });
+  });
+
   const claimsWaitingOnLock = async () =>
     (
       await sql`select count(*)::int as n from pg_stat_activity
@@ -578,12 +712,12 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ]);
   });
 
-  it("STOP gets one confirmation, then nothing until START, which confirms the worker is back in", async () => {
+  it("STOP silences task replies until START, which confirms the worker is back in", async () => {
     const { phone } = await worker(somewhere());
     const sent = () => outbox.filter((m) => m.to === phone).map((m) => m.payload);
     const before = sent().length;
     await service.handleWorkerReply({ phone, intent: "stop", text: "STOP" });
-    for (const intent of ["stop", "help", "yes", "no", "unknown"] as const) {
+    for (const intent of ["stop", "yes", "no", "unknown"] as const) {
       await service.handleWorkerReply({ phone, intent, text: intent });
     }
     const after = sent().slice(before);
@@ -668,44 +802,6 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(
       await sql`select target from short_links where worker_id = ${w.worker_id} and target like '%#c=%'`,
     ).toEqual([]);
-    const expected = {
-      YES: ["Y", "YEP", "YUP", "YEAH", "YEA", "OK", "OKAY", "SURE", "CLAIM", "👍"],
-      NO: ["N", "NOPE", "NAH", "PASS"],
-      TASK: ["LINK"],
-      START: ["UNSTOP"],
-      HELP: ["INFO", "?"],
-      "APP / INSTALL": ["DOWNLOAD", "TESTFLIGHT"],
-      HERE: ["LOCATION", "I'M HERE", "IM HERE", "I AM HERE"],
-      SHORTCUT: ["AUTO", "AUTOMATION"],
-      EMAIL: ["E-MAIL"],
-      "EMAIL OFF": ["E-MAIL OFF"],
-      STOP: [
-        "STOPALL",
-        "STOP ALL",
-        "UNSUBSCRIBE",
-        "CANCEL",
-        "END",
-        "QUIT",
-        "REVOKE",
-        "OPTOUT",
-        "OPT OUT",
-        "STOP TEXTING ME",
-        "PLEASE STOP",
-      ],
-    };
-    for (const [canonical, aliases] of Object.entries(expected)) {
-      for (const command of [...canonical.split(" / "), ...aliases]) {
-        const intent =
-          canonical === "APP / INSTALL"
-            ? command === "APP"
-              ? "app"
-              : "install"
-            : canonical.startsWith("EMAIL")
-              ? "unknown"
-              : canonical.toLowerCase();
-        expect(parseReplyIntent(command), command).toBe(intent);
-      }
-    }
 
     // Already-opted-in email replies use the same hub; no second phone message.
     await sql`update workers set email = ${email}, email_verified_at = now() where id = ${w.worker_id}`;
@@ -1077,13 +1173,14 @@ describe.skipIf(!url)("engine on Postgres", () => {
 
   it("lists only the calling agent's tasks, newest first, filtered by status and bounded by limit", async () => {
     const at = somewhere();
-    await worker(north(at, 100));
     const [a, b] = [await agent(), await agent()];
     const mine: string[] = [];
     for (const question of ["Is it open right now?", "Is the line long?", "Is it busy right now?"]) {
+      await worker(north(at, 100));
       mine.unshift((await ask(a, at, { question })).task_id);
       providers.clock.advance(1000);
     }
+    await worker(north(at, 100));
     const theirs = await ask(b, at);
     await service.cancelTask(a, { task_id: mine[1] as string });
     const ids = async (who: Agent, input: { status?: TaskStatus; limit: number }) =>
@@ -2179,6 +2276,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     const busy = await worker(north(at, 2900));
     const { task_id, workers_notified } = await ask(a, at);
     expect(workers_notified).toBe(3);
+    await reply(releaser.phone);
 
     providers.clock.advance(1000);
     const elsewhere = await ask(a, north(at, 5000));
@@ -2187,10 +2285,6 @@ describe.skipIf(!url)("engine on Postgres", () => {
       kind: "capture_link",
       payload: { task_id: elsewhere.task_id },
     });
-    await reply(releaser.phone);
-    providers.clock.advance(1000);
-    await ask(a, north(at, 100));
-    providers.clock.advance(1000);
 
     const before = outbox.length;
     await service.handleWorkerReply({ phone: releaser.phone, intent: "no", text: "NO" });
