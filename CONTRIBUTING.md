@@ -34,7 +34,31 @@ The test user must create and drop databases.
 Run `pnpm coverage:all` for the combined coverage gate.
 [CI](.github/workflows/ci.yml) measures affected source files on pull requests and the full configured source set on full runs.
 Each included file needs 95% statement, branch, function, and line coverage, as defined in [vitest.config.ts](vitest.config.ts).
-CI skips code checks for documentation-only changes; intent and secret checks still run.
+CI skips scoped code checks for documentation-only changes.
+Intent, secret scanning, and the four quality gates below still run.
+
+### CI quality gates
+
+Each quality gate has its own job: `audit`, `sentrux`, `actionlint`, and `docker-build`.
+The audit runs `pnpm audit --prod` without installing the workspace.
+Mobile remains outside CI: its isolated `npm ci` and `npm run typecheck` fail because its tests import root-only `vitest`.
+The Docker job runs `docker build .` without a registry login, push, or deployment.
+
+The Sentrux job requires the committed `.sentrux/baseline.json` from the first run.
+It blocks a `DEGRADED` verdict or a quality drop greater than 250 points, not existing structural debt.
+Sentrux can report `DEGRADED` below 250 points, including for structural regressions; the numerical limit does not override that verdict.
+Tool failures and missing comparison results also fail the job.
+Run `node scripts/check-quality.ts` locally with Sentrux 0.5.7 installed.
+The job downloads the versioned Linux binary from the [official release](https://github.com/sentrux/sentrux/releases/tag/v0.5.7).
+This follows the binary installation used by the [Linux installer](https://github.com/sentrux/sentrux/blob/main/install.sh), but pins the version.
+CI verifies SHA-256 checksums for the Sentrux binary, grammar bundle, and actionlint archive.
+Do not replace the baseline to make a failing change pass.
+Refresh the baseline with `sentrux gate --save .` in a separate reviewed change when an exception is accepted.
+Keep Sentrux caches out of commits.
+
+Run `actionlint` 1.7.11 to check the workflows locally.
+Third-party actions use commit SHAs.
+Dependabot checks root npm dependencies and GitHub Actions weekly, with minor and patch npm updates grouped.
 
 ## Intent and architecture decisions
 
