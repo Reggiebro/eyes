@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toE164 } from "@eyes/core/phone";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCATION_HELP } from "./api.ts";
 
 // No DOM library is installed. join.ts touches the page at import, so each test loads a fresh
@@ -121,19 +122,19 @@ afterEach(() => {
 });
 
 describe("toE164", () => {
-  let toE164: (input: string) => string | null;
-
-  beforeAll(async () => {
-    await loadJoin();
-    ({ toE164 } = await import("./join.ts"));
-  });
-
   const cases: [string, string | null][] = [
     ["(415) 555-0123", "+14155550123"],
     ["415.555.0123", "+14155550123"],
     ["1 (415) 555-0123", "+14155550123"],
     ["+1 415 555 0123", "+14155550123"],
     ["  +44 20 7946 0958 ", "+442079460958"],
+    ["+44 (0) 20 7946 0958", "+442079460958"],
+    ["+44 (0)7700 900123", "+447700900123"],
+    ["  +358 (0) 40 1234567 ", "+358401234567"],
+    ["+44 020 7946 0958", "+4402079460958"],
+    ["+39 06 6982 0000", "+390669820000"],
+    ["+39 (06) 6982 0000", "+390669820000"],
+    ["0044 20 7946 0958", null],
     ["(012) 555-0123", null], // US area codes cannot start with 0 or 1
     ["555-0123", null], // seven digits, no area code
     ["+0 123", null],
@@ -223,16 +224,19 @@ describe("join form", () => {
     expect(shown()[0]).toBe("That phone number does not look right.");
   });
 
-  it("posts name, phone and location, then shows the text-to-start step", async () => {
+  it.each([
+    ["(415) 555-0123", "+14155550123"],
+    ["+44 (0) 20 7946 0958", "+442079460958"],
+  ])("posts %s as %s with name and location, then shows the text-to-start step", async (phone, expected) => {
     gpsOk();
     fetchMock.mockResolvedValue(json({ inkbox_number: "+14155550199" }));
     await fire("locate", "click");
-    await submitForm("Ada Lovelace", "(415) 555-0123");
+    await submitForm("Ada Lovelace", phone);
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url).endsWith("/w/join")).toBe(true);
     expect(JSON.parse(init.body)).toEqual({
       name: "Ada Lovelace",
-      phone: "+14155550123",
+      phone: expected,
       lat: 37.77,
       lng: -122.42,
     });

@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { type AppConfig, type Providers, signToken, verifyToken } from "@eyes/core";
+import { toE164 } from "@eyes/core/phone";
 import type { Rpc } from "@eyes/db";
 import { recipientGateDenial } from "@eyes/engine";
 import { PAGE_CSS, PAGE_HEADER } from "@eyes/ui/page";
@@ -59,12 +60,6 @@ main.ui-card { margin: 0 auto; }
 .rows > li { display: flex; justify-content: space-between; align-items: center; gap: var(--eyes-space-3); }`;
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest();
-
-function toE164(input: string): string | null {
-  const digits = input.replace(/\D/g, "");
-  const e164 = input.trim().startsWith("+") ? `+${digits}` : `+1${digits.replace(/^1(?=\d{10}$)/, "")}`;
-  return /^\+(1[2-9]\d\d[2-9]\d{6}|[2-9]\d{6,14})$/.test(e164) ? e164 : null;
-}
 
 function normalize(input: unknown): { kind: Entry["kind"]; value: string } | null {
   const text = typeof input === "string" ? input.trim() : "";
