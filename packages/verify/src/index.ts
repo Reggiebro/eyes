@@ -129,7 +129,8 @@ export function createClefVision(env: Env): Vision {
   }
   const claude = env.ANTHROPIC_API_KEY ? createClaudeVision(env) : null;
   const clef = async (i: Parameters<Vision["judge"]>[0]) => {
-    const photo = await fetch(i.photo_url, { signal: AbortSignal.timeout(10_000) });
+    const signal = AbortSignal.timeout(8_000);
+    const photo = await fetch(i.photo_url, { signal });
     if (!photo.ok) throw new Error(`photo fetch HTTP ${photo.status}`);
     const res = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/@cf/cloudflare/clef-omni`,
@@ -157,7 +158,7 @@ export function createClefVision(env: Env): Vision {
             },
           },
         }),
-        signal: AbortSignal.timeout(15_000),
+        signal,
       },
     );
     if (!res.ok) throw new Error(`clef HTTP ${res.status}`);

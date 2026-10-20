@@ -30,7 +30,7 @@ Role checks exercise SELECT, INSERT, UPDATE, and DELETE for anon, authenticated,
 They also test row-level security after table grants are restored within a rolled-back test transaction.
 All database checks use isolated databases on the local integration server.
 The concurrent-registration regression also failed before the worker eligibility check acquired a shared lock.
-After the fix, 104 integration tests, 16 focused unit tests, and 12 contract tests pass.
+After merging current main, 110 integration tests pass; 16 focused unit tests and 12 contract tests also pass.
 Lint, typecheck, and intent checks pass; lint reports only existing CSS warnings.
 Sentrux passes at 6503 against the 6501 baseline.
 A standalone local database smoke confirms the refund, device deletion, other-worker isolation, replay, and all four row-security flags.
