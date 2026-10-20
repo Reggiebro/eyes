@@ -10,6 +10,9 @@ files:
   - packages/engine/src/engine.int.test.ts
   - packages/engine/src/engine.adversarial.int.test.ts
   - docs/features/imessage-dispatch.md
+  - cli/src/ask.int.test.ts
+  - apps/mcp/src/confirmation.int.test.ts
+  - packages/engine/src/location.int.test.ts
 ---
 
 ## Why
@@ -23,7 +26,7 @@ Release a held task and opt out in one transaction for STOP.
 Send the standard command menu after an opted-out worker asks for HELP, without creating location codes.
 Send a capture link for photos received by text instead of treating attachments as location shares or submissions.
 Allow one open task offer per worker, including concurrent dispatches and repeat offers.
-ADR-038 records the internal reply and database changes.
+ADR-039 records the internal reply and database changes.
 
 ## Verification
 

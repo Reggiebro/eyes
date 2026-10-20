@@ -1,4 +1,4 @@
-# ADR-038: Worker text replies and one open offer
+# ADR-039: Worker text replies and one open offer
 
 ## Decision
 
