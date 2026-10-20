@@ -123,7 +123,7 @@ describe("verifySubmission", () => {
     });
   });
 
-  it("turns a vision failure into vision_ok false without leaking the error text", async () => {
+  it("records an unavailable verdict without leaking the error text", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const broken: Vision = {
       judge: async () => {
@@ -132,7 +132,7 @@ describe("verifySubmission", () => {
     };
     const r = await verifySubmission(input({}, broken));
     expect(r).toMatchObject({
-      vision_ok: false,
+      vision_ok: null,
       vision_reason: "Safety check unavailable; the photo needs manual review.",
       auto_approve: false,
     });
@@ -148,7 +148,7 @@ describe("verifySubmission", () => {
     const pending = verifySubmission(input({}, stalled));
     await vi.advanceTimersByTimeAsync(25_000);
     const r = await pending;
-    expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+    expect(r).toMatchObject({ vision_ok: null, auto_approve: false });
     expect(r.vision_reason).toMatch(/unavailable/);
     log.mockRestore();
     vi.useRealTimers();
@@ -401,7 +401,7 @@ describe("createClefVision", () => {
     try {
       await expect(createClefVision(env).judge(judgeInput)).rejects.toThrow();
       const r = await verifySubmission(input(judgeInput, createClefVision(env)));
-      expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+      expect(r).toMatchObject({ vision_ok: null, auto_approve: false });
       expect(r.vision_reason).toContain("unavailable");
       expect(log).toHaveBeenCalled();
     } finally {
@@ -444,6 +444,58 @@ describe("createClefVision", () => {
     }
   });
 
+  it.each(["photo", "clef"])("leaves Claude its full time after a stalled %s request", async (stage) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), ms);
+      return controller.signal;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.includes("anthropic")) {
+        await new Promise((resolve) => setTimeout(resolve, 14_999));
+        return message([
+          {
+            type: "text",
+            text: JSON.stringify({
+              gore: false,
+              explicit_sexual: false,
+              reason: "Neither confirmed.",
+              confidence: 0.9,
+            }),
+          },
+        ]);
+      }
+      if (stage === "clef" && url === judgeInput.photo_url) {
+        await new Promise((resolve) => setTimeout(resolve, 6_000));
+        return new Response(new Uint8Array([1]));
+      }
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    try {
+      const completed = vi.fn();
+      const pending = verifySubmission(
+        input(judgeInput, createClefVision({ ...env, ANTHROPIC_API_KEY: "test" })),
+      ).then(completed);
+      await vi.advanceTimersByTimeAsync(23_000);
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vision_ok: true,
+          auto_approve: true,
+          vision_reason: "Neither confirmed.",
+        }),
+      );
+      await pending;
+    } finally {
+      vi.clearAllTimers();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps failure of both providers unavailable", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
@@ -451,7 +503,7 @@ describe("createClefVision", () => {
       const r = await verifySubmission(
         input(judgeInput, createClefVision({ ...env, ANTHROPIC_API_KEY: "test" })),
       );
-      expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+      expect(r).toMatchObject({ vision_ok: null, auto_approve: false });
       expect(r.vision_reason).toContain("unavailable");
     } finally {
       log.mockRestore();
@@ -463,7 +515,7 @@ describe("verifySubmission vision failure that is not an Error", () => {
   it("logs the thrown value's type only", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await verifySubmission(input({}, { judge: () => Promise.reject("secret detail") }));
-    expect(r).toMatchObject({ vision_ok: false, auto_approve: false });
+    expect(r).toMatchObject({ vision_ok: null, auto_approve: false });
     expect(log).toHaveBeenCalledWith("verifySubmission: vision check failed", "string");
     log.mockRestore();
   });

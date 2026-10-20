@@ -33,11 +33,11 @@ jobs:
       reason: ${{ steps.scope.outputs.reason }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # ci-scope.ts imports only node: builtins, so Node alone is enough (no pnpm install).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
       - id: scope
@@ -66,7 +66,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: pnpm lint
 
@@ -75,16 +75,33 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: pnpm typecheck
+
+  mobile-typecheck:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
 
   unit:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -100,7 +117,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -127,7 +144,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -157,7 +174,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -192,9 +209,9 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -203,9 +220,9 @@ jobs:
       - name: e2e (everything)
         if: needs.scope.outputs.full == 'true'
         run: pnpm test:e2e
-      - name: e2e worker suite
+      - name: e2e web suites
         if: needs.scope.outputs.full != 'true' && needs.scope.outputs.e2e_worker == 'true'
-        run: pnpm exec playwright test --project worker
+        run: pnpm exec playwright test --project worker --project dashboard --project landing
       - name: e2e golden-path suite
         if: needs.scope.outputs.full != 'true' && needs.scope.outputs.e2e_golden == 'true'
         run: pnpm exec playwright test --project golden
@@ -215,7 +232,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -229,12 +246,12 @@ jobs:
   intent:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
       - run: node scripts/check-intent.ts
         env:
           INTENT_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
@@ -242,10 +259,10 @@ jobs:
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -254,9 +271,58 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - run: pnpm build
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - run: pnpm audit --prod
+
+  sentrux:
+    runs-on: ubuntu-latest
+    env:
+      SENTRUX_SKIP_GRAMMAR_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Install Sentrux 0.5.7
+        run: |
+          curl -fsSL https://github.com/sentrux/sentrux/releases/download/v0.5.7/sentrux-linux-x86_64 -o "$RUNNER_TEMP/sentrux"
+          echo "3237f80fe20d54aad4deefa8a143f0d60543bb5d2d6ad891eb42432f155725a6  $RUNNER_TEMP/sentrux" | sha256sum -c -
+          curl -fsSL https://github.com/sentrux/sentrux/releases/download/v0.5.7/grammars-linux-x86_64.tar.gz -o "$RUNNER_TEMP/grammars.tar.gz"
+          echo "8849f1eb07df3f6d4ea1ed422d8dee4b9b79a250682fa5646675dae466554454  $RUNNER_TEMP/grammars.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.sentrux/plugins"
+          tar -xzf "$RUNNER_TEMP/grammars.tar.gz" -C "$HOME/.sentrux/plugins"
+          chmod +x "$RUNNER_TEMP/sentrux"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: node scripts/check-quality.ts
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install actionlint 1.7.11
+        run: |
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: actionlint
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build .
 
   docs-automerge:
     # Auto-merge docs-only PRs once secrets-scan and intent pass. Same-repo, non-draft PRs only: forks and drafts cannot merge.

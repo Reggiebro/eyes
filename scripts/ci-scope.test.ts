@@ -48,6 +48,13 @@ describe("scope", () => {
     });
   });
 
+  it("ignores generated release notes and version state without hiding code changes", () => {
+    const metadata = ["CHANGELOG.md", ".release-please-manifest.json"];
+    expect(scope(metadata)).toEqual(scope([]));
+    expect(scope([...metadata, "apps/mcp/src/server.ts"])).toEqual(scope(["apps/mcp/src/server.ts"]));
+    expect(scope([...metadata, "package.json"]).full).toBe(true);
+  });
+
   it("limits coverage to the changed source files, sorted", () => {
     expect(scope(["packages/db/src/rpc.ts", "cli/src/docs.ts"])).toMatchObject({
       coverageMode: "changed",
@@ -67,6 +74,7 @@ describe("scope", () => {
         "apps/web/worker/dist/app.js",
         "apps/web/worker/.wrangler/x.js",
         "apps/web/worker/.astro/x.ts",
+        "apps/mcp/.mcp-use/build/index.js",
         "apps/web/worker/src/pages/index.astro",
         "cli/README.md",
       ]),
@@ -92,6 +100,17 @@ describe("scope", () => {
     expect(scope(["packages/ui/src/page.ts"])).toMatchObject({ e2eWorker: true, e2eGolden: true, web: true });
     expect(scope(["e2e/demo.spec.ts"])).toMatchObject({ e2eWorker: false, e2eGolden: true, web: false });
     expect(scope(["playwright.config.ts"])).toMatchObject({ e2eWorker: true, e2eGolden: true, web: false });
+  });
+
+  it("selects the web suites for dashboard and landing changes", () => {
+    for (const file of [
+      "apps/web/dashboard/src/server.ts",
+      "apps/web/dashboard/e2e/index.spec.ts",
+      "apps/web/landing/src/pages/index.astro",
+      "apps/web/landing/e2e/connect.spec.ts",
+    ]) {
+      expect(scope([file])).toMatchObject({ e2eWorker: true, web: true });
+    }
   });
 
   it("runs no e2e or web build for docs and root notes", () => {
@@ -240,7 +259,10 @@ describe("workflow docs classification", () => {
   for (const file of ["ci.yml", "claude-verifier.yml"]) {
     const shell = workflowShell(file, "scope");
     it(`${file}: accepts only non-executable documentation`, () => {
-      for (const files of ["README.md\nSTATUS.md\nLICENSE", "docs/DEPLOY.md\nintent/decisions/ADR-030.md"]) {
+      for (const files of [
+        "README.md\ndocs/archive/hackathon/STATUS.md\nLICENSE",
+        "docs/DEPLOY.md\nintent/decisions/ADR-030.md",
+      ]) {
         expect(runWorkflowShell(shell, { FILES: files }).output).toContain("docs_only=true");
       }
       for (const files of [

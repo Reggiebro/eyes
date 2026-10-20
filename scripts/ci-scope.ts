@@ -22,10 +22,11 @@ const COVERAGE_EXCLUDE = [
   "**/node_modules/**",
   "**/.wrangler/**",
   "**/.astro/**",
+  "**/.mcp-use/**",
   "scripts/**",
   "apps/mobile/ios/**",
 ];
-// Worker e2e covers the web app and the UI kit it renders.
+// Web e2e covers worker, dashboard, landing, and their shared UI kit.
 const WORKER_E2E_GLOBS = ["apps/web/**", "packages/ui/**", "playwright.config.ts"];
 // Golden-path e2e (e2e/) exercises the whole stack, so any package or the MCP server runs it.
 const GOLDEN_E2E_GLOBS = ["e2e/**", "apps/mcp/**", "packages/**", "playwright.config.ts"];
@@ -60,7 +61,9 @@ export function fullScope(reason: string): Scope {
 }
 
 export function scope(changed: string[]): Scope {
-  const files = [...new Set(changed.map((file) => file.trim()).filter(Boolean))].sort();
+  const files = [...new Set(changed.map((file) => file.trim()).filter(Boolean))]
+    .filter((file) => file !== "CHANGELOG.md" && file !== ".release-please-manifest.json")
+    .sort();
   const shared = files.find((file) => anyMatch(file, FULL_RUN_GLOBS));
   if (shared) return fullScope(`shared file changed: ${shared}`);
   const sources = files.filter(

@@ -1,11 +1,7 @@
-// OAuth 2.1 for ChatGPT and claude.ai connectors, in front of the existing API keys. Stateless: the
-// DCR client_id and the authorization code are AES-GCM sealed blobs, so nothing is stored. The
-// login page takes an existing Eyes key or creates one through the signup service, and the token
-// endpoint hands that key back as the access token, so the /mcp bearer check stays unchanged.
-// ponytail: the access token is the API key (no expiry, no refresh, revoke = rotate the key); an
-// authorization code can be redeemed again within its 5 minutes by the same client with the same
-// PKCE verifier. Short-lived tokens plus refresh need storage; add them if a host demands expiry.
+// Store only redeemed code hashes.
+// ponytail: OAuth tokens have no expiry or refresh; revoke by rotating the key. Add expiry if a host requires it.
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { Rpc } from "@eyes/db";
 import type { Context, Env, Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { html, raw } from "hono/html";
@@ -39,6 +35,7 @@ export interface OAuthDeps {
   base: string | ((c: Context) => string);
   /** EYES_OAUTH_SECRET, at least 32 characters. */
   secret: string;
+  rpc: Rpc;
   /** True when the key belongs to an agent. */
   validKey: (key: string) => Promise<boolean>;
   /** Creates an agent through the signup service (rate limit included). */
@@ -47,20 +44,21 @@ export interface OAuthDeps {
 }
 
 type Client = { t: "client"; r: string[]; n: string };
-type Code = { t: "code"; k: string; c: string; r: string; ch: string; exp: number };
+type Code = { t: "code"; k: string; c: string; r: string; ch: string; resource: string; exp: number };
+type Sealed = Client | Code | { t: "access"; k: string; resource: string };
 
 const b64url = (b: Buffer) => b.toString("base64url");
 
 export function sealer(secret: string) {
   const key = createHash("sha256").update(`eyes-oauth:${secret}`).digest();
   return {
-    seal(value: Client | Code): string {
+    seal(value: Sealed): string {
       const iv = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", key, iv);
       const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
       return b64url(Buffer.concat([iv, cipher.getAuthTag(), body]));
     },
-    open<T extends Client | Code>(token: unknown, t: T["t"]): T | null {
+    open<T extends Sealed["t"]>(token: unknown, t: T): Extract<Sealed, { t: T }> | null {
       if (typeof token !== "string" || token.length > 4096) return null;
       try {
         const raw = Buffer.from(token, "base64url");
@@ -150,8 +148,8 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
 
   // Validates the authorize parameters; returns an error message for a page, never a redirect,
   // because an unverified redirect_uri must not receive anything.
-  const check = (q: Record<string, string | undefined>) => {
-    const client = box.open<Client>(q.client_id, "client");
+  const check = (q: Record<string, string | undefined>, base: string) => {
+    const client = box.open(q.client_id, "client");
     if (!client)
       return { error: "This app is not registered with Eyes. Remove the connector and add it again." };
     if (!q.redirect_uri || !client.r.includes(q.redirect_uri))
@@ -162,6 +160,8 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       !/^[\w-]{43,128}$/.test(q.code_challenge ?? "")
     )
       return { error: "The app must use the authorization code flow with PKCE (S256)." };
+    if (q.resource !== undefined && q.resource !== `${base}/mcp`)
+      return { error: "The requested resource is not this Eyes connector." };
     return { client, redirect: q.redirect_uri, challenge: q.code_challenge as string };
   };
   const finish = (c: Context, q: Record<string, string | undefined>, key: string, challenge: string) => {
@@ -171,6 +171,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       c: q.client_id as string,
       r: q.redirect_uri as string,
       ch: challenge,
+      resource: q.resource ?? `${baseFor(c)}/mcp`,
       exp: Date.now() + CODE_TTL_MS,
     });
     const url = new URL(q.redirect_uri as string);
@@ -181,8 +182,8 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
   };
   const headers = (redirect?: string, copyKey = false) => ({
     "Referrer-Policy": "no-referrer",
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline';${copyKey ? ` script-src 'sha256-${COPY_KEY_HASH}';` : ""} form-action 'self'${redirect ? ` ${new URL(redirect).origin}` : ""}; base-uri 'none'; frame-ancestors 'none'`,
+    "Cache-Control": "no-store, no-transform",
+    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; font-src 'self';${copyKey ? ` script-src 'sha256-${COPY_KEY_HASH}';` : ""} form-action 'self'${redirect ? ` ${new URL(redirect).origin}` : ""}; base-uri 'none'; frame-ancestors 'none'`,
   });
   const FIELDS = [
     "response_type",
@@ -217,7 +218,7 @@ export function oauthRoutes<E extends Env>(app: Hono<E>, deps: OAuthDeps) {
       layout(
         "Connect Eyes",
         html`<h1>Connect ${name} to Eyes</h1>
-<p class="muted">${name} will ask nearby people to check places for you, paid from this key's balance. You can change limits or revoke the key at any time.</p>
+<p class="muted">${name} will ask nearby people to check places for you, paid from this key's balance.</p>
 ${error ? html`<p class="note error" role="alert">${error}</p>` : ""}
 <form method="post" action="/oauth/authorize" class="box">
 <h2>Use your Eyes API key</h2>
@@ -240,7 +241,7 @@ ${hidden}<input type="hidden" name="action" value="create">
 
   app.get("/oauth/authorize", (c) => {
     const q = c.req.query();
-    const ok = check(q);
+    const ok = check(q, baseFor(c));
     if ("error" in ok)
       return c.html(
         layout(
@@ -255,7 +256,7 @@ ${hidden}<input type="hidden" name="action" value="create">
 
   app.post("/oauth/authorize", async (c) => {
     const form = (await c.req.parseBody()) as Record<string, string | undefined>;
-    const ok = check(form);
+    const ok = check(form, baseFor(c));
     if ("error" in ok)
       return c.html(
         layout(
@@ -281,7 +282,7 @@ ${hidden}<input type="hidden" name="action" value="create">
         layout(
           "Your Eyes key",
           html`<h1>Your new Eyes key</h1>
-<p class="muted">Save this key if you want direct API access. Otherwise, click Continue to ${ok.client.n}—your app receives it automatically. It is shown only once.</p>
+<p class="muted">Save this key if you want direct API access. Otherwise, click Continue to ${ok.client.n}. Your app receives a token for this connector. The key is shown only once.</p>
 <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
 <p id="new-key" class="key" style="flex:1;min-width:0;margin:0;white-space:pre-wrap;user-select:all;-webkit-user-select:all">${agent.api_key}</p>
 <button id="copy-key" type="button" class="button--quiet" aria-describedby="copy-status" style="margin:0">Copy</button>
@@ -313,8 +314,14 @@ ${hidden}<input type="hidden" name="action" value="create">
       c.json({ error, error_description: description }, 400, { "Cache-Control": "no-store" });
     if (form.grant_type !== "authorization_code")
       return fail("unsupported_grant_type", "Only authorization_code is supported.");
-    const code = box.open<Code>(form.code, "code");
-    if (!code || code.exp < Date.now()) return fail("invalid_grant", "The code is invalid or expired.");
+    const code = box.open(form.code, "code");
+    if (!code || code.exp < Date.now() || !code.resource)
+      return fail("invalid_grant", "The code is invalid or expired.");
+    if (
+      code.resource !== `${baseFor(c)}/mcp` ||
+      (form.resource !== undefined && form.resource !== code.resource)
+    )
+      return fail("invalid_target", "The resource must match the authorized Eyes connector.");
     if (form.client_id !== code.c || form.redirect_uri !== code.r)
       return fail("invalid_grant", "client_id or redirect_uri does not match the authorization request.");
     const verifier = form.code_verifier ?? "";
@@ -323,9 +330,15 @@ ${hidden}<input type="hidden" name="action" value="create">
       !same(b64url(createHash("sha256").update(verifier).digest()), code.ch)
     )
       return fail("invalid_grant", "code_verifier does not match the code_challenge.");
-    return c.json({ access_token: code.k, token_type: "Bearer" }, 200, {
-      "Cache-Control": "no-store",
-      Pragma: "no-cache",
-    });
+    const hash = createHash("sha256")
+      .update(Buffer.from(form.code as string, "base64url"))
+      .digest("hex");
+    if (!(await deps.rpc("eyes_redeem_oauth_code", { p_code_hash: hash })).length)
+      return fail("invalid_grant", "The code has already been redeemed.");
+    return c.json(
+      { access_token: box.seal({ t: "access", k: code.k, resource: code.resource }), token_type: "Bearer" },
+      200,
+      { "Cache-Control": "no-store", Pragma: "no-cache" },
+    );
   });
 }

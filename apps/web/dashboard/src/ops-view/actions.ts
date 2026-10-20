@@ -161,6 +161,9 @@ export function actionArea(doc: Document, opts: ActionAreaOptions) {
   async function run(action: Action, yes: HTMLButtonElement, no: HTMLButtonElement) {
     if (busy) return;
     busy = true;
+    const dialog = root.closest("dialog");
+    const preventCancel = (event: Event) => event.preventDefault();
+    dialog?.addEventListener("cancel", preventCancel);
     yes.disabled = true;
     no.disabled = true;
     yes.textContent = `${action.verb}…`;
@@ -170,6 +173,7 @@ export function actionArea(doc: Document, opts: ActionAreaOptions) {
         message: `Failed: ${err instanceof Error ? err.message : err}`,
       }),
     );
+    dialog?.removeEventListener("cancel", preventCancel);
     row.classList.remove("is-confirming");
     row.onkeydown = null;
     if (!outcome.ok) {

@@ -91,8 +91,41 @@ describe.skipIf(!url)("ops review panel on Postgres", () => {
       },
       { bytes: new Uint8Array([255, 216, 255]), content_type: "image/jpeg" },
     );
-    return { task_id, agent };
+    return { task_id, agent, phone };
   }
+
+  it.each(["release", "refund"])(
+    "rejects %s for a task that does not belong to the ticket",
+    async (action) => {
+      const owner = await heldTask();
+      const other = await heldTask();
+      await service.handleWorkerReply({ phone: owner.phone, intent: "help", text: "HELP" });
+      const [ticket] =
+        await sql`select id from tickets where task_id = ${owner.task_id} and kind = 'manual_review'`;
+      const login = await call(`/ops/${OPS_KEY}`);
+      const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const before =
+        await sql`select task_id, type, amount_cents from ledger where task_id in (${owner.task_id}, ${other.task_id}) order by id`;
+      const response = await call(`/ops/tickets/${ticket?.id}/${action}`, {
+        method: "POST",
+        headers: { cookie, origin: OPS, "content-type": "application/json" },
+        body: JSON.stringify({ task_id: other.task_id, note: "Mismatched task must not move money." }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: "invalid_input",
+        issues: [{ path: "ticket_id", message: "Not a manual review ticket for this task." }],
+      });
+      expect(
+        await sql`select task_id, type, amount_cents from ledger where task_id in (${owner.task_id}, ${other.task_id}) order by id`,
+      ).toEqual(before);
+      expect(await sql`select status from tasks where id in (${owner.task_id}, ${other.task_id})`).toEqual([
+        { status: "needs_review" },
+        { status: "needs_review" },
+      ]);
+      expect((await sql`select status from tickets where id = ${ticket?.id}`)[0]?.status).toBe("open");
+    },
+  );
 
   it("shows a held task, releases it once, and logs who did it", async () => {
     const { task_id, agent } = await heldTask();

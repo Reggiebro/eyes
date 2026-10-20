@@ -1,4 +1,5 @@
 import type { JoinWorkerOutput } from "@eyes/core";
+import { toE164 } from "@eyes/core/phone";
 import { $, call, LOCATION_HELP, Problem, showError } from "./api.ts";
 
 const form = $<HTMLFormElement>("join");
@@ -9,12 +10,6 @@ let spot: { lat: number; lng: number } | null = null;
 
 form.hidden = !inkboxNumber;
 $("closed").hidden = Boolean(inkboxNumber);
-
-export function toE164(input: string): string | null {
-  const digits = input.replace(/\D/g, "");
-  const e164 = input.trim().startsWith("+") ? `+${digits}` : `+1${digits.replace(/^1(?=\d{10}$)/, "")}`;
-  return /^\+(1[2-9]\d\d[2-9]\d{6}|[2-9]\d{6,14})$/.test(e164) ? e164 : null;
-}
 
 function invalid(id: string, problem: Problem) {
   const field = $(id);

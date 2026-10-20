@@ -24,7 +24,7 @@ export const verifySubmission: VerifySubmission = async ({ task, submission: s, 
     captured <= received + MAX_CLOCK_SKEW_MS &&
     received - captured <= MAX_CAPTURE_AGE_MS;
 
-  let vision_ok = !task.require_photo && !s.photo_url;
+  let vision_ok: boolean | null = !task.require_photo && !s.photo_url;
   let vision_reason = vision_ok ? "No photo required" : "no photo";
   let vision_confidence = 0;
   if (s.photo_url) {
@@ -41,6 +41,7 @@ export const verifySubmission: VerifySubmission = async ({ task, submission: s, 
       vision_confidence = vision_ok ? Math.min(1, Math.max(0, v.confidence || 0)) : 0;
     } catch (err) {
       console.error("verifySubmission: vision check failed", err instanceof Error ? err.name : typeof err);
+      vision_ok = null;
       vision_reason = "Safety check unavailable; the photo needs manual review.";
     } finally {
       clearTimeout(timer);
@@ -54,7 +55,7 @@ export const verifySubmission: VerifySubmission = async ({ task, submission: s, 
     vision_reason,
     worker_distance_m,
     confidence: 0.25 * Number(gps_ok) + 0.25 * Number(fresh_ok) + 0.5 * vision_confidence,
-    auto_approve: gps_ok && fresh_ok && vision_ok,
+    auto_approve: gps_ok && fresh_ok && vision_ok === true,
   };
 };
 
@@ -129,7 +130,8 @@ export function createClefVision(env: Env): Vision {
   }
   const claude = env.ANTHROPIC_API_KEY ? createClaudeVision(env) : null;
   const clef = async (i: Parameters<Vision["judge"]>[0]) => {
-    const photo = await fetch(i.photo_url, { signal: AbortSignal.timeout(10_000) });
+    const signal = AbortSignal.timeout(8_000);
+    const photo = await fetch(i.photo_url, { signal });
     if (!photo.ok) throw new Error(`photo fetch HTTP ${photo.status}`);
     const res = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/@cf/cloudflare/clef-omni`,
@@ -157,7 +159,7 @@ export function createClefVision(env: Env): Vision {
             },
           },
         }),
-        signal: AbortSignal.timeout(15_000),
+        signal,
       },
     );
     if (!res.ok) throw new Error(`clef HTTP ${res.status}`);

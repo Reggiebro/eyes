@@ -18,6 +18,12 @@ export default defineConfig({
       testDir: "apps/web/worker/e2e",
       use: { baseURL: "http://127.0.0.1:4173", ...atTheCafe },
     },
+    { name: "dashboard", testDir: "apps/web/dashboard/e2e" },
+    {
+      name: "landing",
+      testDir: "apps/web/landing/e2e",
+      use: { baseURL: "http://127.0.0.1:4327" },
+    },
   ],
   webServer: worker
     ? [
@@ -42,6 +48,13 @@ export default defineConfig({
             VITE_EYES_API_URL: "http://127.0.0.1:3399",
             VITE_LIVE_PAYOUTS: "true",
           },
+        },
+        {
+          command:
+            "pnpm --filter @eyes/web-landing build && python3 -m http.server 4327 --bind 127.0.0.1 -d apps/web/landing/dist",
+          url: "http://127.0.0.1:4327",
+          reuseExistingServer: !process.env.CI,
+          timeout: 180_000,
         },
       ]
     : [],

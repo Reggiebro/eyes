@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a problem with Eyes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "For security reports, follow [SECURITY.md](https://github.com/ayaangazali/eyes/blob/main/SECURITY.md). Do not include secrets or personal data."
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the version or commit, environment, and a minimal example.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual results
+      description: Describe what should happen and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Choose the impact. Maintainers apply the matching label after review.
+      options:
+        - "severity: low"
+        - "severity: medium"
+        - "severity: high"
+    validations:
+      required: true

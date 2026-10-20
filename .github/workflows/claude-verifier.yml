@@ -18,7 +18,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: scope
@@ -44,11 +44,11 @@ jobs:
       - if: env.ANTHROPIC_API_KEY == ''
         run: echo "ANTHROPIC_API_KEY not set, skipping Claude verifier"
       - if: env.ANTHROPIC_API_KEY != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - if: env.ANTHROPIC_API_KEY != ''
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@db77d4d3c98f3f6380e7cd45ffba2342a3dbde3c # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
@@ -57,4 +57,4 @@ jobs:
             The intent file's `task` field names the task card in SPEC §5. Review the diff against that task card and the spec.
             Report in the verdict format from SPEC §3 (VERDICT, TASK, FINDINGS with severity, EVIDENCE) as one PR comment.
             Do not push commits. Do not approve or merge.
-          claude_args: --max-turns 20
+          claude_args: --max-turns 30

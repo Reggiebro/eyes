@@ -14,8 +14,9 @@ function setup(env: Record<string, string> = { EYES_OPS_KEY: OPS_KEY }, publicAp
     if (fn === "eyes_dashboard_feed") return [{ tasks: [], ledger: [], workers: [], totals: {} }];
     throw new Error(`unexpected rpc ${fn}`);
   }) as Rpc;
+  const service: Partial<EyesService> = { authenticate: async () => null };
   const server = createServer({
-    service: {} as EyesService,
+    service: service as EyesService,
     providers: fakeProviders(),
     config: AppConfig.parse({
       public_api_url: publicApiUrl,
