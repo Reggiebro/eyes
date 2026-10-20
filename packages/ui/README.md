@@ -2,6 +2,7 @@
 
 The Eyes design system: CSS tokens, shared components, the icon sprite, the site header, and the styles for server-rendered pages.
 It has no runtime dependencies and no build step.
+The sources and tests live in `src/`; the public import paths below do not include `src`.
 
 ## Exports
 
