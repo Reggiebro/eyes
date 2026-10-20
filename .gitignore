@@ -29,3 +29,5 @@ mcp-env.d.ts
 .trae
 .windsurf
 .eyes-commit
+.sentrux/*
+!.sentrux/baseline.json

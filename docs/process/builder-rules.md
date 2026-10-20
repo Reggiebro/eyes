@@ -11,7 +11,10 @@
 - Need a contract change? Stop. Report the exact proposed diff and why in your final message. Do not make it.
 
 ## Code
-- TypeScript strict. Libraries ship `.ts` source; relative imports use the `.ts` extension (Node 24 runs them directly). Type-only imports use `import type`.
+- TypeScript strict.
+  Libraries ship `.ts` source; relative imports use the `.ts` extension.
+  Node.js runs them directly with built-in type stripping.
+  Type-only imports use `import type`.
 - No code comments. Reasoning belongs in your intent file (Decisions, Assumptions, Known gaps).
 - Money is integer cents (ADR-001). Errors thrown to agents are `EyesError` from `@eyes/core` with a useful `fix`.
 - No secrets in code, tests, fixtures or logs. Adapters read env through their `env` parameter.
