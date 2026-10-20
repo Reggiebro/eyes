@@ -5,6 +5,8 @@ Run from the repo root. Keys go in `.env` (never committed). Names are in `.env.
 ## 1. InsForge (database and photos)
 1. `npx @insforge/cli login`, then create or link the project (`npx @insforge/cli link`), and copy `INSFORGE_BASE_URL`, `INSFORGE_ANON_KEY`, `INSFORGE_API_KEY` into `.env`.
 2. Apply our migrations through the REST migrations endpoint: `node --env-file=.env scripts/insforge-migrate.ts` (409 means already applied).
+   Use all ordered files in [`packages/db/migrations`](../packages/db/migrations), not a fixed migration range.
+   Check the target database's applied migrations separately; repository files do not prove what production has applied.
 3. Create the public photo bucket: `npx @insforge/cli storage create-bucket photos --public`.
 4. Live check that the admin key can run our functions (RLS and EXECUTE grants are unverified on InsForge):
    `curl -s -X POST "$INSFORGE_BASE_URL/api/database/rpc/eyes_agent_by_key_hash" -H "Authorization: Bearer $INSFORGE_API_KEY" -H 'content-type: application/json' -d '{"p_key_hash":"x"}'` must return `[]`, not a permission error.
@@ -23,7 +25,10 @@ The explicit-confirmation tool contract uses a new resource URI. After publishin
 
 The verified deployment sets optional `EYES_PUBLIC_MCP_URL=https://mcp.eyes.pictures/mcp`; keep `EYES_PUBLIC_API_URL=https://api.eyes.pictures`. It separates MCP/OAuth/card metadata from REST URLs. The normalized, trusted edge host selects the matching metadata: existing API-host connectors retain their API issuer and card origins. Provisioning and deployment belong to the domain owner, not this documentation change.
 
-Historical domain-owner verification (2026-10-18 11:07 UTC): **29/29 checks passed** on deployed source `d6c40a58565f49a912405870f31af148eb8b12e3`. Evidence: `/Users/xiao/tmp/mcp-domain-public-dns-runtime-evidence.json`; DNS context: `/Users/xiao/tmp/mcp-domain-dns-evidence.json`. This predates the current 13-tool registry and is not a fresh client-visual check.
+Historical domain-owner verification (2026-10-18 11:07 UTC): **29/29 checks passed** on deployed source `d6c40a58565f49a912405870f31af148eb8b12e3`.
+The operator retained local evidence in `mcp-domain-public-dns-runtime-evidence.json` and DNS context in `mcp-domain-dns-evidence.json`.
+These files are not in this repository.
+This predates the current 13-tool registry and is not a fresh client-visual check.
 
 Earlier verified readiness (same 11:07 UTC snapshot):
 
@@ -36,9 +41,17 @@ At that verification time, public DNS lookup preserved the original Host/SNI and
 
 ### Permanent operator deployment
 
-The operator loop runs with `bash /Users/xiao/tmp/eyes-deployer/deployer.sh` as service `eyes-manufact-deployer`. It is already running; do not start a second copy. Its `api-paused` sentinel was removed after successful authenticated smoke checks. It reads `origin/jerry/live-setup` into a clean archive, applies database migrations first, and deploys the API to Manufact rather than Cloudflare Containers.
+The operator's deploy script runs as service `eyes-manufact-deployer`.
+It is already running; do not start a second copy.
+Its `api-paused` sentinel was removed after successful authenticated smoke checks.
+It reads `origin/jerry/live-setup` into a clean archive, applies database migrations first, and deploys the API to Manufact rather than Cloudflare Containers.
 
-The script copies the existing `.mcp-use/cloud/link.json`, stages the source SHA in the Dockerfile, and uses pinned `mcp-use@2.10.1` with `deploy <source> --no-github --org 79796193-80be-4b65-a1c7-803b0725b39d --branch jerry/live-setup --dockerfile Dockerfile --json`. Existing server environment is preserved; it does not pass `--env-file` to deploy. It waits for the matching deployment and runtime SHA before advancing checkpoints. Static-site deployment continues through the operator loop.
+The script copies the existing `.mcp-use/cloud/link.json` and stages the source SHA in the Dockerfile.
+It uses pinned `mcp-use@2.10.1` with `deploy <source> --no-github --org <organization-id> --branch jerry/live-setup --dockerfile Dockerfile --json`.
+The operator supplies the existing Manufact organization ID.
+Existing server environment is preserved; it does not pass `--env-file` to deploy.
+It waits for the matching deployment and runtime SHA before advancing checkpoints.
+Static-site deployment continues through the operator loop.
 
 The edge-only update runs from the clean `apps/edge/api` directory: `env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID npx -y wrangler@4.151.1 deploy --containers-rollout=none --keep-vars --var ORIGIN:https://warm-spark-aocdd.run.mcp-use.com --var EYES_COMMIT:<sha>`. The deployer substitutes the current source SHA. Do not use the historical container commands below for production.
 
@@ -97,26 +110,32 @@ Current iPhone distribution is ad hoc, not TestFlight. The native app remains co
 - At that time, merges to GitHub main did not deploy. The server built from a Manufact-managed mirror (`manufacts/eyes-*`) uploaded by `npx mcp-use deploy`. The recorded command was `npx -y mcp-use@2.10.0 deploy --yes --json --dockerfile Dockerfile`; do not apply this old-server procedure to current production.
 - The id that `deploy` returns goes to `stopped` within seconds; the real build is the `webhook` deployment created right after it. Watch `npx mcp-use deployments list` for that one to reach `running`.
 - Env changes (`servers env set`) apply only on a new deployment: `npx mcp-use deployments restart <full deployment uuid>` (short ids give `deployment_not_found`; get the uuid from `deployments list --json`).
-- InsForge migrations must be applied in strictly increasing version order: the API rejects any version older than the latest applied one (`DATABASE_MIGRATION_ALREADY_EXISTS`, "Migration version must be newer than the latest applied migration"). If `007_*` merges before `006_*`, do not run `scripts/insforge-migrate.ts` until `006` is on main, or `006` can never be applied. Applied so far (2026-10-17): 001-020.
+- Apply InsForge migrations in strictly increasing version order.
+  The API rejects older versions with `DATABASE_MIGRATION_ALREADY_EXISTS`: "Migration version must be newer than the latest applied migration".
+  If `007_*` merges before `006_*`, do not run `scripts/insforge-migrate.ts` until `006` is on main.
+  Otherwise, `006` can never be applied.
+  Use the migration files and target database history described in section 1, not the old deployment snapshot.
 - Never set `EYES_FAKE_WEBHOOKS=1` on a deployed server. It exists only so local tests can send fake-signed Stripe webhooks; on a deploy with fake payments it would let anyone credit balances and mark workers onboarded (fixed in PR #56, which closes the route unless this flag is set).
 
 ## Historical rollback-to-Mac procedure
 
 The procedure below predates current Manufact hosting. It is retained as history, not the current recovery command. Restore the last verified Manufact deployment with operator approval; do not silently move the API, MCP host or webhooks to a local tunnel.
 
+For these historical commands, set `EYES_REPO_ROOT="$PWD"` from the repository root before changing directories.
+
 1. Start the server on `:3000` (first check `lsof -nP -iTCP:3000 -sTCP:LISTEN` is empty, or `kill` that PID):
    ```sh
-   cd /Users/xiao/tmp/eyes && (nohup python3 -c 'import os; os.setsid(); os.execvp("env", ["env", "-u", "ANTHROPIC_API_KEY", "node", "--env-file=.env", "apps/mcp/src/main.ts"])' >> /tmp/eyes-mcp.log 2>&1 &)
+   cd "$EYES_REPO_ROOT" && (nohup python3 -c 'import os; os.setsid(); os.execvp("env", ["env", "-u", "ANTHROPIC_API_KEY", "node", "--env-file=.env", "apps/mcp/src/main.ts"])' >> /tmp/eyes-mcp.log 2>&1 &)
    ```
    Check: `tail -12 /tmp/eyes-mcp.log` shows each `provider …: live` line and `Eyes MCP listening on http://0.0.0.0:3000/mcp`.
 2. Start the tunnel `https://eyes-dispatch.inkboxwire.com` to it:
    ```sh
-   cd /Users/xiao/tmp/eyes/packages/comms && (nohup python3 -c 'import os; os.setsid(); os.execvp("node", ["node", "--env-file=../../.env", "--input-type=module", "-e", "import { Inkbox } from \"@inkbox/sdk\"; import { connect } from \"@inkbox/sdk/tunnels/connect\"; const l = await connect(new Inkbox({ apiKey: process.env.INKBOX_API_KEY }), { name: process.env.INKBOX_AGENT_HANDLE, forwardTo: \"http://127.0.0.1:3000\" }); console.log(\"tunnel up https://eyes-dispatch.inkboxwire.com\"); await l.wait();"])' >> /tmp/eyes-tunnel.log 2>&1 &)
+   cd "$EYES_REPO_ROOT/packages/comms" && (nohup python3 -c 'import os; os.setsid(); os.execvp("node", ["node", "--env-file=../../.env", "--input-type=module", "-e", "import { Inkbox } from \"@inkbox/sdk\"; import { connect } from \"@inkbox/sdk/tunnels/connect\"; const l = await connect(new Inkbox({ apiKey: process.env.INKBOX_API_KEY }), { name: process.env.INKBOX_AGENT_HANDLE, forwardTo: \"http://127.0.0.1:3000\" }); console.log(\"tunnel up https://eyes-dispatch.inkboxwire.com\"); await l.wait();"])' >> /tmp/eyes-tunnel.log 2>&1 &)
    ```
    Check: `curl -s https://eyes-dispatch.inkboxwire.com/healthz` returns the healthz JSON.
 3. Point the Worker at the tunnel (the container keeps running but gets no traffic except via workers.dev):
    ```sh
-   cd /Users/xiao/tmp/eyes/apps/edge/api && env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID npx -y wrangler@4 deploy --var ORIGIN:https://eyes-dispatch.inkboxwire.com
+   cd "$EYES_REPO_ROOT/apps/edge/api" && env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID npx -y wrangler@4 deploy --var ORIGIN:https://eyes-dispatch.inkboxwire.com
    ```
 4. `EYES_PUBLIC_API_URL=https://api.eyes.pictures pnpm smoke:live` passes.
 
@@ -131,5 +150,7 @@ Uptime alerts run from a separate Worker, `eyes-monitor` (`apps/edge/monitor`), 
    Concurrent probes share one unfinished read to avoid filling the database connection pool.
 2. Two failed checks in a row send "Eyes API is down: <reason>". The next healthy check sends "Eyes API is back up (down N min)".
 3. Channel: Inkbox iMessage to `ALERT_PHONE`. `ALERT_PHONE`, `INKBOX_API_KEY` and `INKBOX_AGENT_HANDLE` are Worker secrets, set with `printf %s '<number>' | npx -y wrangler@4 secret put <NAME>` in `apps/edge/monitor`, and never written to files.
-4. Deploy: `cd apps/edge/monitor && CLOUDFLARE_ACCOUNT_ID=2c040ec5bc2efe34e60ab5b1b4fd2e99 npx -y wrangler@4 deploy`. The output must show `schedule: * * * * *`.
+4. Deploy: `cd apps/edge/monitor && CLOUDFLARE_ACCOUNT_ID="<account-id>" npx -y wrangler@4 deploy`.
+   Substitute the operator's existing Cloudflare account ID.
+   The output must show `schedule: * * * * *`.
 5. Reset state after a test: `npx -y wrangler@4 kv key delete state --binding EYES_MONITOR --remote` (run in `apps/edge/monitor`).

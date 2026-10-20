@@ -5,7 +5,7 @@ Report security problems through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Setup and checks
 
-Use Node.js 24.2 or later and pnpm 11.18.0.
+Use Node.js 26 and pnpm 11.18.0, matching CI and the Docker image.
 Install dependencies from the repository root:
 
 ```sh
