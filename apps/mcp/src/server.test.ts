@@ -1389,6 +1389,13 @@ describe("routes", () => {
     expect(done.headers.get("content-type")).toContain("text/html");
   });
 
+  it("does not show a forged top-up amount from the URL", async () => {
+    const { fetch } = setup();
+    const response = await fetch("http://eyes.test/topup/done?amount_cents=999999");
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain("$9999.99");
+  });
+
   it("refuses a fake-signed Stripe webhook while payments are fake unless EYES_FAKE_WEBHOOKS=1", async () => {
     const credited: unknown[] = [];
     const topup = (env: Record<string, string>) =>
