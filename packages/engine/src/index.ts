@@ -19,6 +19,7 @@ import {
   parseMapLink,
   type ReplyIntent,
   type ResolvedLocation,
+  type SafetyInput,
   SignupInput,
   type Submission,
   signToken,
@@ -580,6 +581,18 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     return place;
   }
 
+  async function assessTask(input: SafetyInput, location: LatLng | string) {
+    if (typeof location === "string" && location !== input.place_label) {
+      const typedPlace = await deps.assessTask({
+        question: "",
+        task_type: input.task_type,
+        place_label: location,
+      });
+      if (!typedPlace.allowed) return typedPlace;
+    }
+    return deps.assessTask(input);
+  }
+
   const nearby = (place: LatLng, limit: number | null) =>
     rpc<Nearby>("eyes_nearby_workers", {
       p_lat: place.lat,
@@ -902,11 +915,14 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
     async quoteTask(agent, input) {
       const { location, task_type } = parse(TOOLS.quote_task.input, input);
       const place = await resolve(location);
-      const verdict = await deps.assessTask({
-        question: "", // no question yet: rules only; ask_eyes runs the classifier on the real one
-        task_type,
-        place_label: place.label,
-      });
+      const verdict = await assessTask(
+        {
+          question: "", // no question yet: rules only; ask_eyes runs the classifier on the real one
+          task_type,
+          place_label: place.label,
+        },
+        location,
+      );
       const workers = await nearby(place, null);
       const nearest = workers[0];
       const s = await one<Summary>("eyes_agent_summary", { p_agent_id: agent.id, p_now: nowIso() });
@@ -1053,12 +1069,17 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
             },
           );
       }
-      const assess = async (place_label: string) => {
-        const verdict = await deps.assessTask({
-          question: ask.question,
-          task_type: ask.task_type,
-          place_label,
-        });
+      const assess = async (place_label: string, resolutionError?: unknown) => {
+        const verdict = await assessTask(
+          { question: ask.question, task_type: ask.task_type, place_label },
+          ask.location,
+        );
+        if (
+          resolutionError &&
+          verdict.layer === "classifier" &&
+          (!verdict.category || verdict.category === "other")
+        )
+          throw resolutionError;
         if (!verdict.allowed && !(approved && verdict.layer === "classifier")) {
           throw new EyesError(
             "unsafe_task",
@@ -1068,7 +1089,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
         }
       };
       const place = await resolve(ask.location).catch(async (err) => {
-        if (typeof ask.location === "string") await assess(ask.location);
+        if (typeof ask.location === "string") await assess(ask.location, err);
         throw err;
       });
       await assess(place.label);

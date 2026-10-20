@@ -10,7 +10,12 @@ Every task is checked before any money is held and before any worker sees it. Fa
 - Clef provider errors fall back to Claude when `ANTHROPIC_API_KEY` is set. Claude's schema has no numeric confidence: explicit named-category blocks remain authoritative, while generic `other` or an unspecified category is advisory. Native provider refusals and malformed output still block. With neither provider configured, only rules run.
 - Claude receives the task as data inside `<task>` tags; Clef receives structured task data. Explicit policy-override instructions are checked by the deterministic guard before either classifier.
 - Failing closed: if the classifier errors or times out, the task is refused as "temporarily unavailable" and nothing is charged.
-- `quote_task` checks the place and returns `allowed: false` with a `reason_if_not`. `ask_eyes` checks the question too and refuses with `unsafe_task` (HTTP 422).
+- `quote_task` and `ask_eyes` check rules against both the typed place and the resolved map label.
+  `quote_task` returns `allowed: false` with a `reason_if_not` for a blocked place.
+  `ask_eyes` also checks the question and refuses unsafe tasks with `unsafe_task` (HTTP 422).
+- A failed place lookup keeps `location_not_found` and location guidance when the fallback classifier gives no specific blocked category.
+  This includes classifier outages and native provider refusals.
+  Rule blocks and named-category classifier blocks still return `unsafe_task`; no task or charge is created.
 - Widget tool errors display the escaped human message and suggested fix, not the raw JSON response, in both MCP Apps and ChatGPT.
 - A classifier rejection can be reported from the card. Reporting creates an internal ticket; it does not charge or dispatch. After manual approval, an explicit retry uses only the original request and normal spending checks. Changing the question cannot reuse the approval; rejected or expired tickets cannot retry.
 

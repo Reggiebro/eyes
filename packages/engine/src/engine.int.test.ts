@@ -30,6 +30,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { withShortLinks } from "../../../apps/mcp/src/short-links.ts";
 import { inkboxRoutes, parseReplyIntent } from "../../comms/src/inkbox.ts";
 import { withWorkerEmail } from "../../comms/src/primitive.ts";
+import { checkRules } from "../../safety/src/rules.ts";
 import { verifySubmission } from "../../verify/src/index.ts";
 import { createEyesService } from "./index.ts";
 
@@ -1314,7 +1315,6 @@ describe.skipIf(!url)("engine on Postgres", () => {
   it("refuses an unsafe task at a place it cannot resolve as unsafe_task, checking the place text as given", async () => {
     const a = await agent();
     const nowhere = "123 Oak St, Nowhere";
-    const check = vi.spyOn(deps, "assessTask");
     safety = {
       allowed: false,
       category: "private_residence",
@@ -1336,18 +1336,65 @@ describe.skipIf(!url)("engine on Postgres", () => {
       await expect(ask(a, somewhere(), { location: nowhere })).rejects.toMatchObject({
         code: "location_not_found",
       });
-      expect(check.mock.calls.map(([input]) => input.place_label)).toEqual([
-        nowhere,
-        "Ferry Building, San Francisco",
-        nowhere,
-      ]);
     } finally {
       safety = ALLOW;
-      check.mockRestore();
     }
     expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
     expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
   });
+
+  it.each([
+    ["Main Street Apt 12, 100 Main Street, Boise, Idaho", "Main Street", false],
+    ["my ex-girlfriend's house, 1000 W Hays St, Boise, ID", "West Hays Street", false],
+    ["Main Street", "Main Street Apt 12", false],
+    ["Ferry Building, San Francisco", "Ferry Building", true],
+  ])("gives the same place decision for quote and ask: %s -> %s", async (location, label, allowed) => {
+    const a = await agent();
+    const at = somewhere();
+    await worker(at);
+    const geocode = vi.spyOn(providers.geo, "geocode").mockResolvedValue({ ...at, label });
+    const check = vi.spyOn(deps, "assessTask").mockImplementation(async (input) => checkRules(input));
+    try {
+      const quote = await service.quoteTask(a, { location, task_type: "line_length" });
+      expect(quote.allowed).toBe(allowed);
+      if (allowed) {
+        await expect(ask(a, at, { location })).resolves.toMatchObject({ status: "dispatched" });
+      } else {
+        await expect(ask(a, at, { location })).rejects.toMatchObject({
+          code: "unsafe_task",
+          context: { category: "private_residence", layer: "rules" },
+        });
+        expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+        expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
+      }
+    } finally {
+      geocode.mockRestore();
+      check.mockRestore();
+    }
+  });
+
+  it.each(["other", null] as const)(
+    "keeps location_not_found when an unresolved place gets an inconclusive safety category: %s",
+    async (category) => {
+      const a = await agent();
+      const location = "Nowhere Street 1, Atlantis";
+      safety = {
+        allowed: false,
+        category,
+        reason: "The safety review is temporarily unavailable.",
+        fix: "Rephrase the task.",
+        layer: "classifier",
+      };
+      try {
+        const expected = { code: "location_not_found", fix: ERRORS.location_not_found.fix };
+        await expect(ask(a, somewhere(), { location })).rejects.toMatchObject(expected);
+        expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+        expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
+      } finally {
+        safety = ALLOW;
+      }
+    },
+  );
 
   it("enforces the daily cap with the remaining amount, and refunds free the cap again", async () => {
     const at = somewhere();
