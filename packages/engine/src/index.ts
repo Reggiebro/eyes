@@ -4,6 +4,7 @@ import {
   type Agent,
   type Answer,
   agentEmailAddress,
+  assertWholeCents,
   CaptureFields,
   centsToUsd,
   type DisputeOutcome,
@@ -28,7 +29,6 @@ import {
   TOOLS,
   type ToolInput,
   type ToolOutput,
-  assertWholeCents,
   usdToCents,
   verifyToken,
   type Worker,
@@ -1405,7 +1405,7 @@ export function createEyesService(deps: EngineDeps, notice: Notice = () => {}): 
       const s = await maybe<Summary>("eyes_update_spend_policy", {
         p_agent_id: agentId,
         p_max_bounty_cents: usdToCents(assertWholeCents(policy.max_bounty_usd, "max_bounty_usd")),
-        p_daily_cap_cents: usdToCents(assertWholeCents(policy.daily_cap_usd, 'policy.daily_cap_usd')),
+        p_daily_cap_cents: usdToCents(assertWholeCents(policy.daily_cap_usd, "policy.daily_cap_usd")),
         p_allowed_task_types: [...new Set(policy.allowed_task_types)],
         p_now: nowIso(),
       });

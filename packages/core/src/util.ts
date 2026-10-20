@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { EyesError } from "./errors.ts";
 import type { LatLng } from "./schemas.ts";
 
 export const usdToCents = (usd: number): number => Math.round(usd * 100);
@@ -13,10 +14,17 @@ export const usdToCents = (usd: number): number => Math.round(usd * 100);
  *
  * Accepts a string or a number. Returns the value unchanged so it can be used inline.
  */
-export function assertWholeCents(value: string | number, name = "amount"): string | number {
+export function assertWholeCents<T extends string | number>(value: T, name = "amount"): T {
   const raw = typeof value === "number" ? String(value) : value.trim();
   if (!/^\s*-?\d+(?:\.\d{1,2})?\s*$/.test(raw)) {
-    throw new TypeError(`${name} must be a USD amount with at most 2 decimals: ${raw}`);
+    throw new EyesError(
+      "invalid_input",
+      {},
+      {
+        message: `${name} must be a USD amount with at most 2 decimals: ${raw}`,
+        fix: `Send ${name} as a USD amount with at most 2 decimal places.`,
+      },
+    );
   }
   return value;
 }

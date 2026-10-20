@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EyesError } from "./errors.ts";
 import { assertWholeCents, centsToUsd, usdToCents } from "./util.ts";
 
 describe("assertWholeCents (eyes#117)", () => {
@@ -12,6 +13,13 @@ describe("assertWholeCents (eyes#117)", () => {
     for (const bad of [10.004, 10.006, 3.333, 0.001, 1.005, "10.004"]) {
       expect(() => assertWholeCents(bad)).toThrow(/at most 2 decimals/);
     }
+  });
+
+  it("reports invalid amounts as a documented 400 error", () => {
+    expect(() => assertWholeCents(10.004, "bounty_usd")).toThrow(
+      expect.objectContaining({ code: "invalid_input", status: 400 }),
+    );
+    expect(() => assertWholeCents(10.004)).toThrow(EyesError);
   });
 
   it("rejects non-numeric input", () => {
