@@ -134,4 +134,32 @@ describe.skipIf(!url)("eyes ask against the real server and Postgres", () => {
       ["Is the cafe open right now?", 1, 1],
     ]);
   });
+
+  it("pages tasks through the CLI over HTTP", async () => {
+    const signup = await service.signupAgent({ name: "cli-paging" });
+    await sql`insert into tasks
+      (agent_id, question, task_type, place_label, lat, lng, bounty_cents, fee_cents, deadline_at, created_at)
+      select ${signup.agent_id}, 'Is it open?', 'is_open', 'Pier', 1, 1, 300, 0,
+        '2026-10-20T12:00:00Z', '2026-10-20T11:00:00.123456Z'
+      from generate_series(1, 55)`;
+    const expected =
+      await sql`select id from tasks where agent_id = ${signup.agent_id} order by created_at desc, id desc`;
+    const output: string[] = [];
+    const paging = deps({
+      env: { EYES_API_URL: api, EYES_API_KEY: signup.api_key },
+      out: (line) => output.push(line),
+    });
+    const args = ["tasks", "--status", "dispatched", "--limit", "50", "--json"];
+    expect(await run(args, paging)).toBe(0);
+    const first = JSON.parse(output[0] ?? "null");
+    expect(first.tasks.map((task: { task_id: string }) => task.task_id)).toEqual(
+      expected.slice(0, 50).map((row) => row.id),
+    );
+    expect(await run([...args, "--before", first.next_cursor], paging)).toBe(0);
+    const last = JSON.parse(output[1] ?? "null");
+    expect(last.tasks.map((task: { task_id: string }) => task.task_id)).toEqual(
+      expected.slice(50).map((row) => row.id),
+    );
+    expect(last.next_cursor).toBeNull();
+  });
 });

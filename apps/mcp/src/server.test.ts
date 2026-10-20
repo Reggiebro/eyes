@@ -1155,7 +1155,7 @@ describe("REST mirror", () => {
     const { fetch } = setup({
       listTasks: async (_agent, input) => {
         inputs.push(input);
-        return { tasks: [], next_step: "Call ask_eyes." };
+        return { tasks: [], next_cursor: null, next_step: "Call ask_eyes." };
       },
     });
     const get = (query: string) =>
@@ -1163,7 +1163,7 @@ describe("REST mirror", () => {
     expect((await get("?status=dispatched&limit=5")).status).toBe(200);
     expect((await get("")).status).toBe(200);
     expect((await get("?status=&limit=")).status).toBe(200);
-    for (const bad of ["?limit=51", "?limit=abc", "?status=lost"]) {
+    for (const bad of ["?limit=51", "?limit=abc", "?status=lost", "?before=bad", "?before="]) {
       const res = await get(bad);
       expect(res.status, bad).toBe(400);
       expect(await res.json(), bad).toMatchObject({ error: "invalid_input" });
