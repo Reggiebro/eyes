@@ -48,6 +48,13 @@ describe("scope", () => {
     });
   });
 
+  it("ignores generated release notes and version state without hiding code changes", () => {
+    const metadata = ["CHANGELOG.md", ".release-please-manifest.json"];
+    expect(scope(metadata)).toEqual(scope([]));
+    expect(scope([...metadata, "apps/mcp/src/server.ts"])).toEqual(scope(["apps/mcp/src/server.ts"]));
+    expect(scope([...metadata, "package.json"]).full).toBe(true);
+  });
+
   it("limits coverage to the changed source files, sorted", () => {
     expect(scope(["packages/db/src/rpc.ts", "cli/src/docs.ts"])).toMatchObject({
       coverageMode: "changed",

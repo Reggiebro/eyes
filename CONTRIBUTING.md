@@ -87,3 +87,21 @@ pnpm --filter @eyes/cli gen:docs
 Commit the resulting `docs/public/` changes rather than editing generated files by hand.
 Use conventional commit and pull request titles, such as `fix(engine): preserve retry results` or `docs: add project policies`.
 Keep each pull request focused, link its issue, and state which checks passed.
+
+## Releases
+
+The release-please workflow runs on pushes to `main`.
+It opens or updates a release pull request from conventional commits.
+Merge that pull request to create a GitHub release and a `v0.x.y` tag.
+The root package starts from the recorded version `0.1.0`; fixes advance the patch version.
+Features and breaking changes advance the minor version while the major version is zero.
+Release-please updates the root package version and the existing `CHANGELOG.md`.
+It does not deploy, publish npm packages, or push Docker images.
+
+The workflow uses `GITHUB_TOKEN` with only contents and pull-request write permissions.
+The repository must allow GitHub Actions to create pull requests.
+Events from this token do not start other workflows, including CI on the generated release pull request.
+Required pull-request checks can block these generated pull requests because the token does not start CI.
+CI still runs after a person merges the release pull request into `main`.
+When CI runs on a pull request, generated release notes and version state do not select code checks.
+Changes to `package.json` still select the full checks; release pull requests have no author-based exemption.
