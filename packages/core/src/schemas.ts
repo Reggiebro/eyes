@@ -111,7 +111,7 @@ export const Submission = z.object({
   captured_at: Timestamp,
   gps_ok: z.boolean(),
   fresh_ok: z.boolean(),
-  vision_ok: z.boolean(),
+  vision_ok: z.boolean().nullable(),
   vision_reason: z.string(),
   confidence: z.number().min(0).max(1),
   source: z.enum(["capture", "email"]),

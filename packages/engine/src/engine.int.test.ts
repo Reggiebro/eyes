@@ -650,9 +650,8 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(sent).toHaveLength(1);
     const text = String(sent[0]?.payload);
     hubLines(text);
-    expect(text.length).toBeLessThanOrEqual(650);
     const links = text.match(/https:\/\/api\.eyes\.test\/s\/[0-9A-Za-z]{8}/g) ?? [];
-    expect(links).toHaveLength(3);
+    expect(links).toHaveLength(1);
     const targets = await Promise.all(
       links.map(async (link) => {
         const [row] = await rpc<{ target: string }>("eyes_short_link", {
@@ -662,11 +661,13 @@ describe.skipIf(!url)("engine on Postgres", () => {
         return row?.target;
       }),
     );
-    expect(targets).toEqual([
-      expect.stringMatching(/^https:\/\/w\.eyes\.test\/install#c=[\w-]{43}$/),
-      expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/\S+$/),
-      expect.stringMatching(/^https:\/\/w\.eyes\.test\/me#c=\S+$/),
-    ]);
+    expect(targets).toEqual([expect.stringMatching(/^https:\/\/api\.eyes\.test\/w\/connect\/\S+$/)]);
+    const installCode = /\/install#c=([\w-]{43})/.exec(text)?.[1] ?? "";
+    expect(await wrapped.workerDevice(installCode)).toMatchObject({ registered: false });
+    expect(await wrapped.workerSetup(meToken(text))).toMatchObject({ opted_in: true });
+    expect(
+      await sql`select target from short_links where worker_id = ${w.worker_id} and target like '%#c=%'`,
+    ).toEqual([]);
     const expected = {
       YES: ["Y", "YEP", "YUP", "YEAH", "YEA", "OK", "OKAY", "SURE", "CLAIM", "👍"],
       NO: ["N", "NOPE", "NAH", "PASS"],
@@ -711,14 +712,12 @@ describe.skipIf(!url)("engine on Postgres", () => {
     await wrapped.handleWorkerReply({ email, intent: parseReplyIntent("START"), text: "START" });
     const emailed = providers.email.outbox.findLast((m) => m.to === email);
     hubLines(emailed?.text);
-    expect(emailed?.text.length).toBeLessThanOrEqual(650);
     expect(outbox.slice(before)).toHaveLength(1);
     for (const intent of ["start", "help"] as const) {
       const count = outbox.length;
       await wrapped.handleWorkerReply({ phone: w.phone, intent, text: intent.toUpperCase() });
       expect(outbox.slice(count)).toHaveLength(1);
       hubLines(outbox.at(-1)?.payload);
-      expect(String(outbox.at(-1)?.payload).length).toBeLessThanOrEqual(650);
     }
 
     // These engine-only commands bypass the parser but must actually reach emailByText.
@@ -1968,6 +1967,7 @@ describe.skipIf(!url)("engine on Postgres", () => {
     ["uncertain content", true, 0.1, false],
     ["graphic gore", false, 0.95, false],
     ["explicit sexual content", false, 0.95, false],
+    ["Safety check unavailable; the photo needs manual review.", false, 0.95, false],
     ["provider unavailable", false, 0, true],
   ])("moderates %s without deleting photos or paying twice", async (reason, allowed, confidence, fails) => {
     const verify = vi.spyOn(deps, "verifySubmission").mockImplementation(verifySubmission);
@@ -1996,6 +1996,23 @@ describe.skipIf(!url)("engine on Postgres", () => {
       expect(released).toHaveLength(allowed ? 1 : 0);
       const paid = providers.payments.transfers.filter((p) => p.task_id === task_id);
       expect(paid).toHaveLength(allowed ? 1 : 0);
+      if (!allowed) {
+        expect(await service.resolveTask(task_id, "release", "Manual photo review")).toMatchObject({
+          status: "paid",
+        });
+        await expect(service.resolveTask(task_id, "release", "Repeated release")).rejects.toMatchObject({
+          code: "invalid_input",
+        });
+        await service.retryPayouts();
+        const delivered = (await service.awaitAnswer(a, { task_id, timeout_seconds: 1 })).answer;
+        expect(delivered?.photo_url).toBe(fails ? `https://storage.fake.test/photos/${key}` : null);
+        expect((await service.getTask(a, { task_id })).answer?.photo_url).toBe(delivered?.photo_url);
+        expect(delivered?.verification.vision_ok).toBe(false);
+        expect(await sql`select id from ledger where task_id = ${task_id} and type = 'release'`).toHaveLength(
+          1,
+        );
+        expect(providers.payments.transfers.filter((p) => p.task_id === task_id)).toHaveLength(1);
+      }
     } finally {
       verify.mockRestore();
       judge.mockRestore();

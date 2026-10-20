@@ -61,7 +61,7 @@ export type VerifyInput = {
 export type VerificationResult = {
   gps_ok: boolean;
   fresh_ok: boolean;
-  vision_ok: boolean;
+  vision_ok: boolean | null;
   vision_reason: string;
   worker_distance_m: number;
   confidence: number;
