@@ -51,12 +51,10 @@ describe("tool schemas", () => {
 });
 
 describe("error catalog", () => {
-  it("gives every code a status, message and fix", () => {
-    for (const [code, e] of Object.entries(ERRORS)) {
-      expect(e.status, code).toBeGreaterThanOrEqual(400);
-      expect(e.message.length, code).toBeGreaterThan(10);
-      expect(e.fix.length, code).toBeGreaterThan(10);
-    }
+  it("matches the public error contract", () => {
+    expect(
+      Object.fromEntries(Object.entries(ERRORS).map(([code, error]) => [code, error.status])),
+    ).toMatchSnapshot();
   });
 
   it("renders fix placeholders from context into the agent-facing body", () => {

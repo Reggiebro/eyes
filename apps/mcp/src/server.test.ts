@@ -540,7 +540,7 @@ describe("worker setup page (ADR-028)", () => {
     ]);
     const refused = await install("POST", {});
     expect([refused.status, await refused.json()]).toEqual([401, REFUSED]);
-    expect((await install("GET")).status).toBe(404);
+    expect((await install("GET")).status).toBe(405);
     await fetch("http://eyes.test/w/me", { headers: { authorization: "Bearer good" } });
     expect(seen).toEqual(["install good", "install ", "setup good"]);
   });
@@ -1676,8 +1676,39 @@ describe("routes", () => {
     const res = await setup().fetch("http://eyes.test/nope");
     expect(res.status).toBe(404);
     const body = await res.json();
-    expect(body).toMatchObject({ error: "invalid_input", message: "Unknown route.", path: "/nope" });
+    expect(body).toMatchObject({ error: "not_found", message: "Unknown route.", path: "/nope" });
     expect(body.fix).toContain("/openapi.json");
+  });
+
+  it.each([
+    ["GET", "/v1/nope", 404, null],
+    ["PUT", "/v1/tasks", 405, "GET, HEAD, POST"],
+    ["DELETE", `/v1/tasks/${TASK_ID}`, 405, "GET, HEAD"],
+    ["POST", "/v1/balance", 405, "GET, HEAD"],
+    ["GET", "/v1/quote", 405, "POST"],
+    ["POST", "/mcp/nope", 404, null],
+    ["PUT", "/mcp", 405, "GET, POST, DELETE"],
+  ])("returns the route error for %s %s", async (method, path, status, allow) => {
+    const response = await setup().fetch(`http://eyes.test${path}`, {
+      method,
+      headers: { authorization: `Bearer ${KEY}` },
+    });
+    expect(response.status).toBe(status);
+    expect(response.headers.get("allow")?.split(", ").sort() ?? null).toEqual(
+      allow?.split(", ").sort() ?? null,
+    );
+    expect(await response.json()).toMatchObject({
+      error: status === 405 ? "method_not_allowed" : "not_found",
+      path,
+    });
+  });
+
+  it.each(["GET", "DELETE"])("preserves the supported MCP %s transport method", async (method) => {
+    const response = await setup().fetch("http://eyes.test/mcp", {
+      method,
+      headers: { authorization: `Bearer ${KEY}`, accept: "application/json, text/event-stream" },
+    });
+    expect(response.status).toBe(204);
   });
 });
 

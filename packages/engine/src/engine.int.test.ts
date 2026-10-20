@@ -25,11 +25,14 @@ import {
   WorkerTasks,
 } from "@eyes/core";
 import { createRpc, migrate } from "@eyes/db";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createServer } from "../../../apps/mcp/src/server.ts";
 import { withShortLinks } from "../../../apps/mcp/src/short-links.ts";
 import { inkboxRoutes, parseReplyIntent } from "../../comms/src/inkbox.ts";
 import { withWorkerEmail } from "../../comms/src/primitive.ts";
+import { UNAVAILABLE } from "../../safety/src/index.ts";
 import { checkRules } from "../../safety/src/rules.ts";
 import { verifySubmission } from "../../verify/src/index.ts";
 import { createEyesService } from "./index.ts";
@@ -1406,6 +1409,53 @@ describe.skipIf(!url)("engine on Postgres", () => {
     }
     expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
     expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
+  });
+
+  it("returns a retryable safety outage over REST and MCP without charging", async () => {
+    const signup = await service.signupAgent({ name: "outage-test" });
+    const a = (await service.authenticate(signup.api_key)) as Agent;
+    const server = createServer({ service, providers, config: deps.config, env: {} });
+    const fetch = (url: string | URL, init?: RequestInit) => server.fetch(new Request(url, init));
+    const client = new Client({ name: "outage-test", version: "1" });
+    const input = {
+      question: "Is the cafe open?",
+      location: somewhere(),
+      task_type: "is_open",
+      idempotency_key: randomUUID(),
+    };
+    safety = UNAVAILABLE;
+    try {
+      const headers = { authorization: `Bearer ${signup.api_key}` };
+      await expect(
+        service.quoteTask(a, { location: input.location, task_type: "is_open" }),
+      ).rejects.toMatchObject({ code: "service_unavailable" });
+      const response = await fetch("http://eyes.test/v1/tasks", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(input),
+      });
+      expect(response.status).toBe(503);
+      const body = await response.json();
+      expect(body).toMatchObject({ error: "service_unavailable", fix: expect.stringContaining("Retry") });
+      expect(body.fix).not.toContain("Rephrase");
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+          fetch,
+          requestInit: { headers },
+        }),
+      );
+      const result = await client.callTool({ name: "ask_eyes", arguments: input });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "null")).toEqual(body);
+      expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+      expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
+      await expect(ask(a, somewhere(), { location: "Nowhere Street 1, Atlantis" })).rejects.toMatchObject({
+        code: "location_not_found",
+      });
+    } finally {
+      safety = ALLOW;
+      await client.close();
+    }
   });
 
   it("refuses an unsafe task at a place it cannot resolve as unsafe_task, checking the place text as given", async () => {

@@ -362,6 +362,10 @@ Every error is JSON: {"error": "<code>", "message": "...", "fix": "...", ...cont
 
 - unauthorized (HTTP 401): Missing or invalid API key. Fix: Send the header Authorization: Bearer <api_key>. No key yet? POST /v1/signup (or run `eyes signup`) to create one.
 - invalid_input (HTTP 400): The request did not match the expected schema. Fix: Correct the fields listed in `issues` and retry. Each tool's input schema documents every field.
+- not_found (HTTP 404): Unknown route. Fix: See /openapi.json for the REST routes, or call tools/list on /mcp for the MCP tools.
+- method_not_allowed (HTTP 405): This route does not support that HTTP method. Fix: Use a method listed in the Allow response header. See /openapi.json for the REST routes.
+- payload_too_large (HTTP 413): The request body is too large. Fix: Send a smaller request. No Eyes call needs a body over 1 MB.
+- service_unavailable (HTTP 503): The safety review is temporarily unavailable. No task was sent and nothing was charged. Fix: Retry the same request with the same idempotency_key in a few seconds. If it keeps failing, wait a minute and retry.
 - insufficient_balance (HTTP 402): Your balance is too low to escrow this task. Fix: Ask your user to top up at {top_up_url}, or lower bounty_usd to {max_affordable_bounty_usd} or less.
 - bounty_exceeds_max (HTTP 403): bounty_usd is above this API key's max_bounty limit. Fix: Lower bounty_usd to {max_bounty_usd} or less, or ask your user to raise the limit.
 - daily_cap_exceeded (HTTP 403): This task would exceed the API key's daily spend cap. Fix: You have {remaining_today_usd} USD left today. Lower bounty_usd, wait until tomorrow (UTC), or ask your user to raise daily_cap_usd.
@@ -370,7 +374,7 @@ Every error is JSON: {"error": "<code>", "message": "...", "fix": "...", ...cont
 - location_not_found (HTTP 422): Could not resolve that location. Fix: Pass the coordinates as numbers, e.g. {"lat": 37.7955, "lng": -122.3937}; coordinates always resolve. Or pass "place name, city", e.g. "Ferry Building, San Francisco".
 - no_workers_nearby (HTTP 409): No available workers are near that location right now. Nothing was charged. Fix: Call quote_task to check coverage, try a nearby busier location, or try again later.
 - task_not_found (HTTP 404): No task with that task_id belongs to this API key. Fix: Use the task_id returned by ask_eyes. Lost it? Call list_tasks to see your tasks and their task_ids. Tasks from other API keys are not visible.
-- task_not_cancellable (HTTP 409): Only unclaimed (dispatched) tasks can be cancelled. Fix: A worker is already on it. Call await_answer to get the result, or dispute_answer if the answer is wrong.
+- task_not_cancellable (HTTP 409): Only unclaimed (dispatched) tasks can be cancelled. Fix: Call get_task to check the status. For claimed or submitted tasks, call await_answer. For expired or refunded tasks, stop waiting; nothing remains to cancel.
 - task_not_disputable (HTTP 409): Only answered tasks (verified, paid or needs_review) can be disputed. Fix: Call get_task to see the current status. Unanswered tasks can be cancelled instead.
 - task_not_acceptable (HTTP 409): Only answered tasks with status verified or paid can be accepted. Fix: Call get_task to see the answer and current status. Acceptance records feedback only; it does not verify a photo or pay a worker.
 - email_taken (HTTP 409): Another Eyes account already uses this email. Fix: Use a different email, or text HELP to the Eyes number if it is yours.

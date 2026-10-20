@@ -485,9 +485,31 @@ export function createServer(
     return c.json(e.toBody(), e.status as ContentfulStatusCode);
   });
 
+  const mcpMethods = ["GET", "POST", "DELETE"];
+  const allowedMethods = (path: string) => {
+    const methods = [...new Set(server.app.routes.map((route) => route.method))].filter(
+      (method) =>
+        method !== "ALL" &&
+        server.app.router.match(method, path)[0].some(([[, route]]) => route.method === method),
+    );
+    if (methods.includes("GET") && !methods.includes("HEAD")) methods.push("HEAD");
+    return methods;
+  };
+
   server.use("*", async (c, next) => {
     await next();
+    if (c.req.path === "/mcp" && c.res.status === 405 && !mcpMethods.includes(c.req.method)) {
+      const error = new EyesError("method_not_allowed", { path: c.req.path });
+      c.res = c.json(error.toBody(), 405, { Allow: c.res.headers.get("allow") ?? mcpMethods.join(", ") });
+      return;
+    }
     if (c.res.status !== 404 || !c.res.headers.get("content-type")?.startsWith("text/plain")) return;
+    const methods = allowedMethods(c.req.path);
+    if (methods.length && !methods.includes(c.req.method)) {
+      const error = new EyesError("method_not_allowed", { path: c.req.path });
+      c.res = c.json(error.toBody(), 405, { Allow: methods.join(", ") });
+      return;
+    }
     // Browsers get a page with a way out; API clients keep the JSON error below.
     if (c.req.header("accept")?.includes("text/html")) {
       c.res = await c.html(
@@ -500,14 +522,7 @@ export function createServer(
       );
       return;
     }
-    const unknown = new EyesError(
-      "invalid_input",
-      { path: c.req.path },
-      {
-        message: "Unknown route.",
-        fix: "See /openapi.json for the REST routes, or call tools/list on /mcp for the MCP tools.",
-      },
-    );
+    const unknown = new EyesError("not_found", { path: c.req.path });
     c.res = c.json(unknown.toBody(), 404);
   });
 
@@ -753,7 +768,7 @@ Next: for a task with status dispatched, claimed or submitted, call await_answer
       title: "Cancel a task",
       description: `Cancel a task that no worker has claimed yet; the full escrow (bounty plus fee) goes back to your balance. Only works while status is dispatched; once a worker has claimed it you get task_not_cancellable.
 Example: cancel_task({ "task_id": "3f0e8c1a-5b7d-4e2f-9a6b-1c2d3e4f5a6b" })
-Next: call get_balance to see the refund, or keep calling await_answer if the task was already claimed.`,
+Next: call get_balance to see the refund. If cancellation fails, call get_task; call await_answer only for claimed or submitted tasks.`,
       inputSchema: TOOLS.cancel_task.input,
       outputSchema: TOOLS.cancel_task.output,
       annotations: {

@@ -148,6 +148,12 @@ Uptime alerts run from a separate Worker, `eyes-monitor` (`apps/edge/monitor`), 
 1. Every minute it checks `https://api.eyes.pictures/healthz`. Healthy = HTTP 200, `ok` true, every provider `live`, `db` `insforge`.
    HTTP 503 with `{"ok":false}` means the database read failed or exceeded two seconds.
    Concurrent probes share one unfinished read to avoid filling the database connection pool.
+   In parallel, the same cron calls InsForge `eyes_expire_overdue` directly to refund overdue tasks even when the API is down.
+   It reuses the monitor's existing `INSFORGE_BASE_URL` and `INSFORGE_API_KEY`; no new environment variable or secret is required.
+   Both values must be set for expiry; this does not depend on `RELEASE_DISPATCH_TOKEN`.
+   The database transaction lock and unique refund entries make concurrent server and cron sweeps safe.
+   Failed requests log `expiry trigger` and retry on the next minute; a database outage still delays refunds.
+   Deploy the updated Worker to enable this trigger; a code change alone does not update the running monitor.
 2. Two failed checks in a row send "Eyes API is down: <reason>". The next healthy check sends "Eyes API is back up (down N min)".
 3. Channel: Inkbox iMessage to `ALERT_PHONE`. `ALERT_PHONE`, `INKBOX_API_KEY` and `INKBOX_AGENT_HANDLE` are Worker secrets, set with `printf %s '<number>' | npx -y wrangler@4 secret put <NAME>` in `apps/edge/monitor`, and never written to files.
 4. Deploy: `cd apps/edge/monitor && CLOUDFLARE_ACCOUNT_ID="<account-id>" npx -y wrangler@4 deploy`.
