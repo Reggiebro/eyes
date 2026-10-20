@@ -17,6 +17,11 @@ Current production: the MCP/API application runs on **Manufact Cloud**, server `
 
 Cloudflare's `eyes-api` Worker forwards `mcp.eyes.pictures`, `api.eyes.pictures` and `internal.eyes.pictures` to the same Manufact `ORIGIN`. The optional Manufact gateway is a separate proxy, not the application host. Landing and worker pages remain on Cloudflare.
 
+The keyless sandbox is retired, following the default in [issue #180](https://github.com/ayaangazali/eyes/issues/180).
+Protected MCP and REST calls require authentication; `POST /v1/signup` remains public.
+The old `EYES_SANDBOX` flag no longer changes server behavior.
+The deployment operator must shut down any remaining sandbox server; removing this code does not stop deployed services.
+
 ### Dedicated MCP domain: live
 
 `https://mcp.eyes.pictures/mcp` is **live, with ChatGPT and Claude configured there**. The current registry has 13 model-visible tools plus app-only `confirm_ask`. The shared card resource is `ui://eyes/confirmation-card.html`; the legacy React-view build is removed. Not every third-party connector has migrated; existing API-host and gateway configurations remain supported.
