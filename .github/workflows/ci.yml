@@ -33,11 +33,11 @@ jobs:
       reason: ${{ steps.scope.outputs.reason }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       # ci-scope.ts imports only node: builtins, so Node alone is enough (no pnpm install).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
       - id: scope
@@ -66,7 +66,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup
       - run: pnpm lint
 
@@ -75,7 +75,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup
       - run: pnpm typecheck
 
@@ -84,7 +84,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -100,7 +100,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -127,7 +127,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -157,7 +157,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -192,9 +192,9 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:eyes@127.0.0.1:5432/eyes
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -215,7 +215,7 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -229,10 +229,10 @@ jobs:
   intent:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 26
       - run: node scripts/check-intent.ts
@@ -242,10 +242,10 @@ jobs:
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -254,9 +254,58 @@ jobs:
     if: needs.scope.outputs.docs_only != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.web == 'true')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: ./.github/actions/setup
       - run: pnpm build
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - run: pnpm audit --prod
+
+  sentrux:
+    runs-on: ubuntu-latest
+    env:
+      SENTRUX_SKIP_GRAMMAR_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+      - name: Install Sentrux 0.5.7
+        run: |
+          curl -fsSL https://github.com/sentrux/sentrux/releases/download/v0.5.7/sentrux-linux-x86_64 -o "$RUNNER_TEMP/sentrux"
+          echo "3237f80fe20d54aad4deefa8a143f0d60543bb5d2d6ad891eb42432f155725a6  $RUNNER_TEMP/sentrux" | sha256sum -c -
+          curl -fsSL https://github.com/sentrux/sentrux/releases/download/v0.5.7/grammars-linux-x86_64.tar.gz -o "$RUNNER_TEMP/grammars.tar.gz"
+          echo "8849f1eb07df3f6d4ea1ed422d8dee4b9b79a250682fa5646675dae466554454  $RUNNER_TEMP/grammars.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.sentrux/plugins"
+          tar -xzf "$RUNNER_TEMP/grammars.tar.gz" -C "$HOME/.sentrux/plugins"
+          chmod +x "$RUNNER_TEMP/sentrux"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: node scripts/check-quality.ts
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install actionlint 1.7.11
+        run: |
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.11/actionlint_1.7.11_linux_amd64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: actionlint
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: docker build .
 
   docs-automerge:
     # Auto-merge docs-only PRs once secrets-scan and intent pass. Same-repo, non-draft PRs only: forks and drafts cannot merge.
