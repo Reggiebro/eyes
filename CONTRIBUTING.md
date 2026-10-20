@@ -63,6 +63,11 @@ Dependabot checks root npm dependencies and GitHub Actions weekly, with minor an
 ## Intent and architecture decisions
 
 For changes under `apps/`, `packages/`, `cli/`, `scripts/`, or `db/`, add or update an `intent/*.md` file.
+A dependency-only diff needs no intent file.
+It must only modify package manifests and lockfiles, with manifest edits limited to existing dependency versions.
+Versions may use exact, caret, or tilde ranges.
+This exemption does not depend on the author.
+Other changes under the governed paths still need intent coverage, including dependency additions, removals, source changes, scripts, and code.
 List the changed paths under `files`, set `task`, and include `## Why` and `## Verification` sections.
 See [this intent example](intent/S6-https-security-headers.md) and [the checker](scripts/check-intent.ts).
 

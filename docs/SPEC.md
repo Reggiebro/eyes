@@ -159,6 +159,9 @@ status: verified | needs-follow-up
 ```
 
 Enforcement (`scripts/check-intent.ts`, CI job `intent`): every changed file under `apps/`, `packages/`, `cli/`, `scripts/`, `db/` must be listed (globs allowed) in the `files` of an intent file changed in the same diff, with non-empty Why and Verification. Modifying (not adding) a file under `packages/core/src/` or `packages/db/migrations/` also needs an ADR in the same diff. `intent/INDEX.md` must be fresh.
+Dependency-only diffs are exempt when they only modify package manifests and lockfiles.
+Manifest edits must only change existing dependency versions, using exact, caret, or tilde ranges.
+The exemption does not depend on the author.
 
 ## §8 CI
 
