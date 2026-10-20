@@ -245,6 +245,15 @@ it("re-running an ask reuses its key while the task is open, gets a new key once
   expect(calls[5]?.body?.idempotency_key).toBe("mine");
 });
 
+it("rejects invalid text and coordinate strings before sending an ask", async () => {
+  for (const value of ["Cafe\u0000", "Cafe\ud800", "Cafe\udfff", "95,200"]) {
+    const { deps, calls, err } = setup([]);
+    expect(await run(["ask", "Is it open?", "--at", value, "--type", "is_open"], deps)).toBe(1);
+    expect(calls).toEqual([]);
+    expect(err.join("\n")).toContain("--at");
+  }
+});
+
 it("tasks sends --status and --limit as query parameters and checks the limit before calling", async () => {
   const listed = { tasks: [], next_step: "Call ask_eyes." };
   const { deps, calls } = setup([

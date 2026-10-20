@@ -1411,6 +1411,114 @@ describe.skipIf(!url)("engine on Postgres", () => {
     expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
   });
 
+  it("returns the resolved place over REST and MCP, including retries", async () => {
+    const at = somewhere();
+    await worker(at);
+    const place = { ...at, label: "Public Cafe, Paris, France" };
+    const scoped = { ...providers, geo: { geocode: async () => place } };
+    const svc = createEyesService({ ...deps, providers: scoped });
+    const signup = await svc.signupAgent({ name: "resolved-place" });
+    const server = createServer({ service: svc, providers: scoped, config: deps.config, env: {} });
+    const fetch = (url: string | URL, init?: RequestInit) => server.fetch(new Request(url, init));
+    const headers = { authorization: `Bearer ${signup.api_key}` };
+    const input = {
+      question: "Is the cafe open?",
+      location: "Public Cafe, London, UK",
+      task_type: "is_open",
+      idempotency_key: randomUUID(),
+    };
+    const response = await fetch("http://eyes.test/v1/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(input),
+    });
+    expect(response.status).toBe(200);
+    const posted = await response.json();
+    expect(posted.resolved_location).toEqual(place);
+    const client = new Client({ name: "resolved-place", version: "1" });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+          fetch,
+          requestInit: { headers },
+        }),
+      );
+      const result = await client.callTool({ name: "ask_eyes", arguments: input });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        task_id: posted.task_id,
+        resolved_location: place,
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each([
+    { lat: 91, lng: 0 },
+    { lat: 0, lng: -181 },
+    { lat: Number.NaN, lng: 2 },
+  ])("reports invalid geocoder coordinates as location_not_found: %j", async (point) => {
+    const svc = createEyesService({
+      ...deps,
+      providers: { ...providers, geo: { geocode: async () => ({ ...point, label: "Public Cafe" }) } },
+    });
+    await expect(
+      svc.quoteTask(await agent(), { location: "Public Cafe", task_type: "is_open" }),
+    ).rejects.toMatchObject({ code: "location_not_found" });
+  });
+
+  it("rejects bad characters and coordinates over REST and MCP before charging", async () => {
+    const signup = await service.signupAgent({ name: "invalid-input" });
+    const a = (await service.authenticate(signup.api_key)) as Agent;
+    const server = createServer({ service, providers, config: deps.config, env: {} });
+    const fetch = (url: string | URL, init?: RequestInit) => server.fetch(new Request(url, init));
+    const headers = { authorization: `Bearer ${signup.api_key}` };
+    const client = new Client({ name: "invalid-input", version: "1" });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("http://eyes.test/mcp"), {
+          fetch,
+          requestInit: { headers },
+        }),
+      );
+      for (const patch of [
+        ...["\u0000", "\ud800", "\udfff"].flatMap((bad) =>
+          ["question", "location", "idempotency_key"].map((field) => ({ [field]: `Cafe ${bad}` })),
+        ),
+        { location: { lat: 91, lng: 0 } },
+        { location: { lat: 0, lng: -181 } },
+        { location: "95,200" },
+        { location: "-91, 0" },
+        { location: "0, -181" },
+      ]) {
+        const input = {
+          question: "Is the cafe open?",
+          location: somewhere(),
+          task_type: "is_open",
+          idempotency_key: randomUUID(),
+          ...patch,
+        };
+        const response = await fetch("http://eyes.test/v1/tasks", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(input),
+        });
+        expect(response.status).toBe(400);
+        const body = await response.json();
+        expect(body.error).toBe("invalid_input");
+        expect(body.issues[0].path).toContain(Object.keys(patch)[0]);
+        const result = await client.callTool({ name: "ask_eyes", arguments: input });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain(Object.keys(patch)[0]);
+      }
+      expect(await service.getBalance(a)).toMatchObject({ balance_usd: 20, escrowed_usd: 0 });
+      expect(await sql`select id from tasks where agent_id = ${a.id}`).toHaveLength(0);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("returns a retryable safety outage over REST and MCP without charging", async () => {
     const signup = await service.signupAgent({ name: "outage-test" });
     const a = (await service.authenticate(signup.api_key)) as Agent;
