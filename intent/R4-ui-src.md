@@ -16,8 +16,8 @@ This closes issue #230 without changing public imports or rendered pages.
 
 Move the eight source and test files with `git mv`.
 Keep `package.json` and `README.md` at the package root.
-Update the export targets, dashboard file reads, mobile source reference, and existing intent paths.
-Regenerate the intent index so the moved files retain their original intent links.
+Update the export targets, dashboard file reads, and mobile source reference.
+Keep historical intent records unchanged and regenerate the index with the new source paths.
 The package-wide CI filters already cover `src/`; Astro imports, CSS imports, and CODEOWNERS need no changes.
 No deploy configuration, migrations, or core contracts change.
 
